@@ -8,7 +8,7 @@ let pp_line ppf x =
    | `Cipher x -> v ppf "cipher %S" x
    | `Client -> v ppf "client"
    | `Comp_lzo -> v ppf "comp-lzo"
-   | `Dev name -> v ppf "dev %S" name
+   | `Dev _name -> v ppf "dev _"
    | `Ifconfig_nowarn -> v ppf "ifconfig-nowarn"
    | `Auth_retry _ -> v ppf "auth-retry"
    | `Connect_retry _ -> v ppf "connect-retry"
@@ -17,10 +17,15 @@ let pp_line ppf x =
    | `Mssfix i -> v ppf "mssfix %d" i
    | `Passtos -> v ppf "passtos"
    | `Persist_key -> v ppf "persist-key"
+   | `Pkcs12 _path -> v ppf "pkcs12 _"
    | `Remote_random -> v ppf "remote-random"
    | `Proto _ -> v ppf "proto"
+   | `Proto_force _ -> v ppf "proto-force"
    | `Resolv_retry _ -> v ppf "resolv-retry"
+   | `Socks_proxy _ -> v ppf "socks-proxy"
    | `Nobind -> v ppf "nobind"
+   | `Bind -> v ppf "bind"
+   | `Float -> v ppf "float"
    | `Tls_client -> v ppf "tls-client"
    | `Tls_auth _ -> v ppf "tls-auth _"
    | `TLS_min _ -> v ppf "tls-min _"
@@ -34,7 +39,11 @@ let pp_line ppf x =
   )
 
 let a_comment : unit t =
-  (char '#' *> skip_many (skip @@ function '\n' -> false | _ -> true))
+  (* TODO validate against openvpn behavior,
+     - can a finished line like 'dev tun0' have a comment at the end?
+     - can comments be prefixed by whitespace? *)
+  ((char '#' <|> char ';') *>
+   skip_many (skip @@ function '\n' -> false | _ -> true))
 
 let a_whitespace_unit : unit t =
   skip (function | ' '| '\t' -> true
@@ -63,11 +72,11 @@ let a_client = string "client" *> a_ign_whitespace *> return `Client
 
 let a_dev =
   let a_device_name =
-    (peek_char_fail >>= function
-      | 'a'..'z' | 'A'..'Z' -> return ()
-      | _ -> fail "device names must start with [a-zA-Z]"
-    ) *>
-    take_while (function 'a'..'z' | '0'..'9' -> true | _ -> false)
+    choice [
+      (string "tun" *> a_number_range 0 128 >>| fun x -> `Tun x) ;
+      (string "tap" *> a_number_range 0 128 >>| fun x -> `Tap x) ;
+      string "null" *> return `Null ;
+    ]
   in
   string "dev" *> a_whitespace *> a_device_name
 
@@ -76,6 +85,13 @@ let a_proto =
     string "tcp" *> return `Tcp ;
     string "udp" *> return `Udp
   ] >>| fun prot -> `Proto prot
+
+let a_proto_force =
+  string "proto-force" *> a_whitespace *> choice [
+    string "tcp" *> return `Tcp ;
+    string "udp" *> return `Udp
+  ] >>| fun prot -> `Proto_force prot
+
 
 let a_resolv_retry =
   string "resolv-retry" *> a_whitespace *>
@@ -96,6 +112,9 @@ let a_option_with_single_path name =
 let a_ca =
   a_option_with_single_path "ca"  >>| fun path -> `Ca path
 
+let a_pkcs12 =
+  a_option_with_single_path "pkcs12" >>| fun path -> `Pkcs12 path
+
 let a_tls_auth =
   a_option_with_single_path "tls-auth"  >>| fun path -> `Tls_auth path
 
@@ -108,9 +127,22 @@ let a_auth_retry =
   choice [ string "nointeract" *> return `Nointeract ] >>| fun x ->
   `Auth_retry x
 
+let a_socks_proxy =
+  string "socks-proxy" *> a_whitespace *>
+  take_till (function '\n'|'\t'|' ' -> false | _ -> true) >>= fun server ->
+  ( (a_whitespace *> a_number_range 0 65535 >>= fun port ->
+     ( (a_whitespace *> a_filepath >>| fun path -> (server, port, path))
+       <|> return (server, port, `Path "stdin")
+     )
+    )
+    <|> return (server, 1080, `Path "stdin")
+  ) >>| fun x -> `Socks_proxy x
+
 let a_flag =
   choice [
+    string "bind" *> return `Bind ;
     string "nobind" *> return `Nobind ;
+    string "float" *> return `Float ;
     string "remote-random" *> return `Remote_random ;
     string "tls-client" *> return `Tls_client ;
     string "persist-key" *> return `Persist_key ;
@@ -174,12 +206,21 @@ let a_inline =
 
 
 
+(* TODO entries can sometimes be nested, like in <connection> blocks:
+The following OpenVPN options may be used inside of  a  <connec‐
+tion> block:
+
+bind,  connect-retry,  connect-retry-max,  connect-timeout,  ex‐
+plicit-exit-notify, float, fragment, http-proxy,  http-proxy-op‐
+tion,  link-mtu,  local,  lport, mssfix, mtu-disc, nobind, port,
+proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
+
 let a_config_entry : 'a t =
   a_ign_whitespace_no_comment *>
   Angstrom.choice [
     a_client ;
     (a_dev >>| fun name -> `Dev name) ;
-    (a_proto >>| fun proto -> `Proto proto) ;
+    a_proto ;
     (a_resolv_retry >>| fun x -> `Resolv_retry x) ;
     a_tls_auth ;
     a_remote_cert_tls ;
@@ -191,9 +232,11 @@ let a_config_entry : 'a t =
     a_inline ;
     a_tls_version_min ;
     a_keepalive ;
+    a_socks_proxy ;
     a_auth_user_pass ;
     a_tun_mtu ;
     a_cipher ;
+    a_pkcs12 ;
     a_flag ;
     a_ca ;
     a_whitespace *> return `Blank ;
