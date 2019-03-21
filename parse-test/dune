@@ -1,0 +1,6 @@
+(executables
+  (names read_file)
+   (public_names openvpn)
+   (modules read_file)
+   (libraries alcotest logs.fmt rresult openvpn)
+)
