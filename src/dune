@@ -1,0 +1,5 @@
+(library
+  (name openvpn)
+  (public_name openvpn)
+  (libraries fmt logs rresult cstruct)
+)
