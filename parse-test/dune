@@ -1,6 +1,6 @@
-(executables
-  (names read_file)
-   (public_names openvpn)
-   (modules read_file)
-   (libraries alcotest logs.fmt rresult openvpn)
+(executable
+  (name read_file)
+  (public_name openvpn-parse-config)
+  (modules read_file)
+  (libraries alcotest logs.fmt rresult openvpn.config)
 )

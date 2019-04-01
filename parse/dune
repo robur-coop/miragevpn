@@ -1,5 +1,5 @@
 (library
   (name openvpn_config)
-  (public_name openvpn)
+  (public_name openvpn.config)
   (libraries angstrom fmt ipaddr logs rresult)
 )

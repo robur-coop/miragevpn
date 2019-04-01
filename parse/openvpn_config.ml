@@ -3,7 +3,7 @@ open Angstrom
 let pp_line ppf x =
   let v = Fmt.pf in
   (match x with
-      `Blank -> v ppf "#"
+   | `Blank -> v ppf "#"
    | `Ca _ -> v ppf "ca"
    | `Cipher x -> v ppf "cipher %S" x
    | `Client -> v ppf "client"
@@ -34,8 +34,10 @@ let pp_line ppf x =
    | `Mute_replay_warnings -> v ppf "mute-replay-warnings"
    | `Tun_mtu mtu -> v ppf "tun-mtu %d" mtu
    | `Verb n -> v ppf "verb %d" n
-    | `Inline (tag,content) -> v ppf "<%s>:%S" tag content
-    | _ -> v ppf "x"
+   | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
+   | `Replay_window (_size, _duration) -> v ppf "replay-window _"
+   | `Remote (_name, _port) -> v ppf "remote _"
+   | _ -> v ppf "x"
   )
 
 let a_comment : unit t =
@@ -70,6 +72,8 @@ let a_number_range min' max' =
 
 let a_client = string "client" *> a_ign_whitespace *> return `Client
 
+(* TODO: "dev tun" is also valid, according to the manpage:
+   "tunX - X can be omitted for a dynamic device" *)
 let a_dev =
   let a_device_name =
     choice [
@@ -157,10 +161,16 @@ let a_remote_cert_tls =
   choice [ string "server" *> return `Server
          ] >>| fun purpose -> `Remote_cert_tls purpose
 
+let a_hex =
+  let is_hex = function '0'..'9' | 'a'..'f' | 'A'..'F' -> true | _ -> false in
+  (string "0x" *> take_while1 is_hex) >>= fun str ->
+  match int_of_string ("0x" ^ str) with
+  | i -> return i
+  | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
+
 let a_remote_cert_key_usage =
-  string "remote-cert-ku" *> a_whitespace *>
-  choice [ string "0x00a0" *> return 0x00a0 (* TODO parse hex stuff properly *)
-         ] >>| fun purpose -> `Remote_cert_key_usage purpose
+  string "remote-cert-ku" *> a_whitespace *> a_hex >>| fun purpose ->
+  `Remote_cert_key_usage purpose
 
 let a_tls_version_min =
   string "tls-version-min" *> a_whitespace *>
@@ -192,27 +202,39 @@ let a_verb =
 
 let a_cipher =
   string "cipher" *> a_whitespace *>
-  take_while1 (function ' '|'\n'|'\t' -> false | _ -> true)
+  take_while1 (function ' '| '\n' | '\t' -> false | _ -> true)
   >>| fun v -> `Cipher v
+
+let a_replay_window =
+  let replay_window a b = `Replay_window (a, b) in
+  lift2 replay_window
+    (string "replay-window" *> a_whitespace *> a_number)
+    (option 15 (a_whitespace *> a_number))
+
+(* TODO finish "remote [port] [proto]" by adding proto (tcp/udp/tcp4/tcp6/udp4/udp6)
+   what are the semantics if proto and remote proto is provided? *)
+let a_remote =
+  let remote a b = `Remote (a, b) in
+  lift2 remote
+    (string "remote" *> a_whitespace *>
+     take_while1 (function ' '| '\n' | '\t' -> false | _ -> true))
+    (option 1194 (a_whitespace *> a_number))
 
 let a_inline =
   (* TODO strip trailing newlines inside block ?*)
-  char '<' *> take_while1 (function 'a'..'z'|'-' ->true
-                                            | _  ->false)
+  char '<' *> take_while1 (function 'a'..'z' |'-' -> true
+                                             | _  -> false)
   <* char '>' <* char '\n' >>= fun tag ->
   take_till (function '<' -> true | _ -> false) >>= fun x ->
   return (`Inline (tag, x))
   <* char '<' <* char '/' <* string tag <* char '>'
 
-
-
 (* TODO entries can sometimes be nested, like in <connection> blocks:
-The following OpenVPN options may be used inside of  a  <connec‐
-tion> block:
+The following OpenVPN options may be used inside of  a  <connection> block:
 
-bind,  connect-retry,  connect-retry-max,  connect-timeout,  ex‐
-plicit-exit-notify, float, fragment, http-proxy,  http-proxy-op‐
-tion,  link-mtu,  local,  lport, mssfix, mtu-disc, nobind, port,
+bind,  connect-retry,  connect-retry-max,  connect-timeout,
+explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
+link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
 proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
 
 let a_config_entry : 'a t =
@@ -236,6 +258,8 @@ let a_config_entry : 'a t =
     a_auth_user_pass ;
     a_tun_mtu ;
     a_cipher ;
+    a_replay_window ;
+    a_remote ;
     a_pkcs12 ;
     a_flag ;
     a_ca ;
@@ -244,7 +268,7 @@ let a_config_entry : 'a t =
 
 
 let into_lines config_str =
-  let a_ign_ws = skip_many (skip @@ function '\n'|' ' | '\t' -> true
+  let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string
   @@ fix (fun recurse ->
