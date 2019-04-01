@@ -26,8 +26,9 @@ type operation =
   | Data_v2
 
 let operation_to_int, int_to_operation =
-  let ops = [ (Soft_reset, 3) ; (Control, 4) ; (Ack, 5) ; (Data_v1, 6) ;
-              (Hard_reset_client, 7) ; (Hard_reset_server, 8) ; (Data_v2, 9) ]
+  let ops =
+    [ (Soft_reset, 3) ; (Control, 4) ; (Ack, 5) ; (Data_v1, 6) ;
+      (Hard_reset_client, 7) ; (Hard_reset_server, 8) ; (Data_v2, 9) ]
   in
   let rev_ops = List.map (fun (a, b) -> (b, a)) ops in
   (fun k -> List.assoc k ops),
@@ -138,39 +139,42 @@ let decode_data buf = Ok buf
 let encode_data data = data, Cstruct.len data
 
 let decode buf =
-  guard (Cstruct.len buf >= 3) `Partial >>= fun () ->
+  guard (Cstruct.len buf >= 2) `Partial >>= fun () ->
   let plen = Cstruct.BE.get_uint16 buf 0 in
-  let op = Cstruct.get_uint8 buf 2 in
-  guard (Cstruct.len buf >= plen + 3) `Partial >>= fun () ->
-  guard (Cstruct.len buf = plen + 3) (`Leftover (plen + 3)) >>= fun () ->
+  let opkey = Cstruct.get_uint8 buf 2 in
+  guard (Cstruct.len buf - 2 >= plen) `Partial >>= fun () ->
+  guard (Cstruct.len buf - 2 = plen) (`Leftover (plen + 2)) >>= fun () ->
   let payload = Cstruct.sub buf 0 plen in
-  int_to_operation op >>| fun operation ->
-  match operation with
-  | Ack -> decode_header payload >>| fun (ack, _) -> `Ack ack
-  | Data_v1 | Data_v2 -> decode_data payload >>| fun data -> `Data (operation, data)
-  | _ -> decode_control payload >>| fun control -> `Control (operation, control)
+  let op, key = opkey lsr 3, opkey land 0x07 in
+  int_to_operation op >>= fun operation ->
+  (match operation with
+   | Ack -> decode_header payload >>| fun (ack, _) -> `Ack ack
+   | Data_v1 | Data_v2 -> decode_data payload >>| fun data -> `Data (operation, data)
+   | _ -> decode_control payload >>| fun control -> `Control (operation, control)) >>| fun res ->
+  (key, res)
 
-let encode p =
+let encode (key, p) =
   let (payload, len), operation = match p with
     | `Ack ack -> encode_header ack, Ack
     | `Control (operation, control) -> encode_control control, operation
     | `Data (operation, d) -> encode_data d, operation
   in
   let buf = Cstruct.create 3 in
-  Cstruct.BE.set_uint16 buf 0 len ;
-  Cstruct.set_uint8 buf (operation_to_int operation) 2 ;
+  Cstruct.BE.set_uint16 buf 0 (succ len) ;
+  let op = operation_to_int operation in
+  Cstruct.set_uint8 buf 2 (op lsl 3 lor key) ;
   Cstruct.append buf payload
 
-type t = [
+type t = int * [
   | `Ack of header
   | `Control of operation * control
   | `Data of operation * Cstruct.t
 ]
 
-let pp ppf = function
-  | `Ack a -> Fmt.pf ppf "ack %a" pp_header a
-  | `Control (op, c) -> Fmt.pf ppf "control %a: %a" pp_operation op pp_control c
-  | `Data (op, d) -> Fmt.pf ppf "data %a: %a" pp_operation op Cstruct.hexdump_pp d
+let pp ppf (key, p) = match p with
+  | `Ack a -> Fmt.pf ppf "key %x ack %a" key pp_header a
+  | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c
+  | `Data (op, d) -> Fmt.pf ppf "key %x data %a: %a" key pp_operation op Cstruct.hexdump_pp d
 
 type tls_control = { (* v2 only! *)
   (* 4 zero bytes *)
