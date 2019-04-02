@@ -15,15 +15,17 @@ let read_from_fd fd =
   Logs.debug (fun m -> m "read %d bytes@.%a" count Cstruct.hexdump_pp cs) ;
   cs
 
+let now () = Ptime_clock.now ()
+
 let jump _ ip port =
   Lwt_main.run (
-    let state, out = Openvpn.Engine.client () in
+    let state, out = Openvpn.Engine.client now () in
     let s = ref state in
     let fd = Lwt_unix.(socket PF_INET SOCK_STREAM 0) in
     Lwt_unix.connect fd (Lwt_unix.ADDR_INET (Ipaddr_unix.V4.to_inet_addr ip, port)) >>= fun () ->
     write_to_fd fd out >>= fun () ->
     read_from_fd fd >|= fun data ->
-    Openvpn.Engine.handle !s data) ;
+    Openvpn.Engine.handle !s now data) ;
   `Ok ()
 
 

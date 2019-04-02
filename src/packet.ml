@@ -60,14 +60,14 @@ type header = {
   packet_id : packet_id ;
   timestamp : int32 ;
   (* uint8 array length *)
-  ack_packet_ids : packet_id list ;
+  ack_message_ids : packet_id list ;
   remote_session : int64 option ; (* if above is non-empty *)
 }
 
 let pp_header ppf hdr =
   Fmt.pf ppf "local %Lu packet_id %ld timestamp %ld hmac %a ack %a remote %a"
     hdr.local_session hdr.packet_id hdr.timestamp Cstruct.hexdump_pp hdr.hmac
-    Fmt.(list ~sep:(unit ", ") int32) hdr.ack_packet_ids
+    Fmt.(list ~sep:(unit ", ") int32) hdr.ack_message_ids
     Fmt.(option ~none:(unit " ") int64) hdr.remote_session
 
 let decode_header buf =
@@ -79,34 +79,34 @@ let decode_header buf =
   and arr_len = Cstruct.get_uint8 buf (hmac_len + 16)
   in
   guard (Cstruct.len buf >= hdr_len + packet_id_len * arr_len + 8) `Partial >>| fun () ->
-  let rec ack_packet_id = function
+  let rec ack_message_id = function
     | 0 -> []
     | n ->
       let id = Cstruct.BE.get_uint32 buf (hdr_len + packet_id_len * n) in
-      id :: (ack_packet_id (pred n))
+      id :: (ack_message_id (pred n))
   in
-  let ack_packet_ids = ack_packet_id arr_len in
+  let ack_message_ids = ack_message_id arr_len in
   let remote_session =
     if arr_len > 0 then
       Some (Cstruct.BE.get_uint64 buf (hdr_len + packet_id_len * arr_len))
     else
       None
   in
-  { local_session ; hmac ; packet_id ; timestamp ; ack_packet_ids ; remote_session },
+  { local_session ; hmac ; packet_id ; timestamp ; ack_message_ids ; remote_session },
   (hdr_len + packet_id_len * arr_len + 8)
 
 let encode_header hdr =
-  let id_arr_len = packet_id_len * List.length hdr.ack_packet_ids in
+  let id_arr_len = packet_id_len * List.length hdr.ack_message_ids in
   let rsid = if id_arr_len = 0 then 0 else 8 in
   let buf = Cstruct.create (hdr_len + rsid + id_arr_len) in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session ;
   Cstruct.blit hdr.hmac 0 buf 8 hmac_len ;
   Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id ;
   Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp ;
-  Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_packet_ids);
+  Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_message_ids);
   List.iteri
     (fun i v -> Cstruct.BE.set_uint32 buf (hmac_len + 17 + i * packet_id_len) v)
-    hdr.ack_packet_ids ;
+    hdr.ack_message_ids ;
   (match hdr.remote_session with
    | None -> ()
    | Some v ->
