@@ -1,6 +1,6 @@
 (library
   (name openvpn)
   (public_name openvpn)
-  (libraries fmt logs rresult cstruct ptime)
+  (libraries fmt logs rresult cstruct ptime astring openvpn.config nocrypto)
   (wrapped true)
 )

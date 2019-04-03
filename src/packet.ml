@@ -134,17 +134,46 @@ let encode_control (header, packet_id, payload) =
   Cstruct.concat [ hdr_buf ; packet_id_buf ; payload ],
   len + Cstruct.len payload + 4
 
+let to_be_signed_control op (header, packet_id, _payload) =
+  (* TODO verify that this is indeed the thing to sign! *)
+  (* packet_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ msg_id *)
+  (* rly? not length, not content!? *)
+  let acks = match header.ack_message_ids with
+    | [] -> 0
+    | x -> List.length x * packet_id_len
+  and rses = match header.remote_session with
+    | None -> 0
+    | Some _ -> 8
+  in
+  let buf = Cstruct.create (packet_id_len + 4 + 1 + 8 + 1 + acks + rses + packet_id_len) in
+  Cstruct.BE.set_uint32 buf 0 header.packet_id ;
+  Cstruct.BE.set_uint32 buf 4 header.timestamp ;
+  Cstruct.set_uint8 buf 8 op ;
+  Cstruct.BE.set_uint64 buf 9 header.local_session ;
+  Cstruct.set_uint8 buf 17 (List.length header.ack_message_ids) ;
+  let rec enc_ack off = function
+    | [] -> ()
+    | hd::tl -> Cstruct.BE.set_uint32 buf off hd ; enc_ack (off + 4) tl
+  in
+  enc_ack 18 header.ack_message_ids ;
+  (match header.remote_session with
+   | None -> ()
+   | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x) ;
+  Cstruct.BE.set_uint32 buf (18 + acks + rses) packet_id ;
+  buf
+
 let decode_data buf = Ok buf
 
 let encode_data data = data, Cstruct.len data
 
 let decode buf =
-  guard (Cstruct.len buf >= 2) `Partial >>= fun () ->
+  guard (Cstruct.len buf >= 3) `Partial >>= fun () ->
   let plen = Cstruct.BE.get_uint16 buf 0 in
   let opkey = Cstruct.get_uint8 buf 2 in
   guard (Cstruct.len buf - 2 >= plen) `Partial >>= fun () ->
   guard (Cstruct.len buf - 2 = plen) (`Leftover (plen + 2)) >>= fun () ->
-  let payload = Cstruct.sub buf 0 plen in
+  let payload = Cstruct.sub buf 3 (pred plen) in
+  Cstruct.hexdump payload ;
   let op, key = opkey lsr 3, opkey land 0x07 in
   int_to_operation op >>= fun operation ->
   (match operation with
@@ -153,17 +182,33 @@ let decode buf =
    | _ -> decode_control payload >>| fun control -> `Control (operation, control)) >>| fun res ->
   (key, res)
 
+let operation = function
+  | `Ack _ -> Ack
+  | `Control (op, _) -> op
+  | `Data (op, _) -> op
+
+let op_key op key =
+  let op = operation_to_int op in
+  op lsl 3 lor key
+
 let encode (key, p) =
-  let (payload, len), operation = match p with
-    | `Ack ack -> encode_header ack, Ack
-    | `Control (operation, control) -> encode_control control, operation
-    | `Data (operation, d) -> encode_data d, operation
+  let (payload, len)= match p with
+    | `Ack ack -> encode_header ack
+    | `Control (_, control) -> encode_control control
+    | `Data (_, d) -> encode_data d
   in
   let buf = Cstruct.create 3 in
   Cstruct.BE.set_uint16 buf 0 (succ len) ;
-  let op = operation_to_int operation in
-  Cstruct.set_uint8 buf 2 (op lsl 3 lor key) ;
+  let op = op_key (operation p) key in
+  Cstruct.set_uint8 buf 2 op ;
   Cstruct.append buf payload
+
+let to_be_signed key p =
+  let op = op_key (operation p) key in
+  match p with
+  | `Ack _ -> assert false
+  | `Data _ -> assert false
+  | `Control (_, c) -> to_be_signed_control op c
 
 type t = int * [
   | `Ack of header

@@ -31,21 +31,31 @@ let ptime_to_ts_exn now =
   | None -> assert false
   | Some x -> Int32.of_int x
 
-let client now () =
-  let state = { key = 0 ; state = Client_reset ;
-               my_session_id = 0xF00DBEEFL ;
-               my_packet_id = 0l ;
-               my_message_id = 0l ;
-               their_session_id = 0L ;
-               their_packet_id = 0l ;
-               their_last_acked_message_id = 0l ;
-               their_message_id = 0l ;
-             }
-  in
+let client config now () =
+  let open Rresult.R.Infix in
+  hmac_keys config >>| fun (_a, my_hmac, _c, _d) ->
+  let state = {
+    config ; key = 0 ; state = Client_reset ;
+    my_hmac ;
+    my_session_id = 0xF00DBEEFL ;
+    my_packet_id = 1l ;
+    my_message_id = 0l ;
+    their_hmac = my_hmac ;
+    their_session_id = 0L ;
+    their_packet_id = 1l ;
+    their_message_id = 0l ;
+    their_last_acked_message_id = 0l ;
+  } in
   let timestamp = ptime_to_ts_exn now in
   let header, state = header timestamp state in
   let m_id, state = next_message_id state in
-  state, Packet.encode (state.key, `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)))
+  let p =
+    let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
+    let tbs = Packet.to_be_signed state.key p in
+    let hmac = Nocrypto.Hash.SHA1.hmac ~key:my_hmac tbs in
+    `Control (Packet.Hard_reset_client, ({ header with hmac }, m_id, Cstruct.empty))
+  in
+  state, Packet.encode (state.key, p)
 
 let handle state _now buf =
   match Packet.decode buf with
