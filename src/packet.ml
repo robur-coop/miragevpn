@@ -216,6 +216,11 @@ type t = int * [
   | `Data of operation * Cstruct.t
 ]
 
+let header = function
+  | `Ack hdr -> hdr
+  | `Control (_, (hdr, _, _)) -> hdr
+  | `Data (_, _) -> assert false
+
 let pp ppf (key, p) = match p with
   | `Ack a -> Fmt.pf ppf "key %x ack %a" key pp_header a
   | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c

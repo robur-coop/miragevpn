@@ -1,7 +1,5 @@
 open State
 
-
-
 let next_message_id state =
   state.my_message_id, { state with my_message_id = Int32.succ state.my_message_id }
 
@@ -57,9 +55,30 @@ let client config now () =
   in
   state, Packet.encode (state.key, p)
 
+let handle_inner state data =
+  match state.state, data with
+  | Client_reset, `Control (Packet.Hard_reset_server, _) ->
+    (* we reply with ACK + TLS client hello! *)
+    Logs.info (fun m -> m "wanted to send something, but NYI")
+  | _ ->
+    Logs.err (fun m -> m "handle_inner: no transition for state %a and packet %a"
+                 pp_client_state state.state Packet.pp (0, data))
+
 let handle state _now buf =
   match Packet.decode buf with
   | Error e ->
     Logs.err (fun m -> m "decoding failed %a@.%a" Packet.pp_error e Cstruct.hexdump_pp buf)
-  | Ok data ->
-    Logs.info (fun m -> m "state %a, received %a" State.pp state Packet.pp data)
+  | Ok (key, data) ->
+    (* verify mac *)
+    let mac_good =
+      let tbs = Packet.to_be_signed key data in
+      let hmac' = Nocrypto.Hash.SHA1.hmac ~key:state.their_hmac tbs in
+      Cstruct.equal hmac' Packet.((header data).hmac)
+    in
+    if mac_good then begin
+      Logs.info (fun m -> m "mac good (state %a, received %a)"
+                    State.pp state Packet.pp (key, data)) ;
+      handle_inner state data
+    end else
+      Logs.err (fun m -> m "mac isn't good (state %a, received %a)"
+                   State.pp state Packet.pp (key, data))
