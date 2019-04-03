@@ -1,6 +1,43 @@
 open Angstrom
 
-let pp_line ppf x =
+type line = [
+  | `Auth_retry of [ `Nointeract ]
+  | `Auth_user_pass of [ `Inline | `Path of string ]
+  | `Bind
+  | `Blank
+  | `Ca of [ `Inline | `Path of string ]
+  | `Cipher of string
+  | `Client
+  | `Comp_lzo
+  | `Connect_retry of int * int
+  | `Dev of [ `Null | `Tap of int | `Tun of int ]
+  | `Float
+  | `Ifconfig_nowarn
+  | `Inline of string * string
+  | `Keepalive of int * int
+  | `Mssfix of int
+  | `Mute_replay_warnings
+  | `Nobind
+  | `Passtos
+  | `Persist_key
+  | `Pkcs12 of [ `Inline | `Path of string ]
+  | `Proto of [ `Tcp | `Udp ]
+  | `Proto_force of [ `Tcp | `Udp ]
+  | `Remote of string * int
+  | `Remote_cert_key_usage of int
+  | `Remote_cert_tls of [ `Server ]
+  | `Remote_random
+  | `Replay_window of int * int
+  | `Resolv_retry of [ `Infinite ]
+  | `Socks_proxy of string * int * [ `Inline | `Path of string ]
+  | `TLS_min of [ `v1_1 | `v1_2 | `v1_3 ]
+  | `Tls_auth of [ `Inline | `Path of string ]
+  | `Tls_client
+  | `Tun_mtu of int
+  | `Verb of int
+]
+
+let pp_line ppf (x : line) =
   let v = Fmt.pf in
   (match x with
    | `Blank -> v ppf "#"
@@ -37,7 +74,6 @@ let pp_line ppf x =
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
    | `Replay_window (_size, _duration) -> v ppf "replay-window _"
    | `Remote (_name, _port) -> v ppf "remote _"
-   | _ -> v ppf "x"
   )
 
 let a_comment : unit t =
@@ -243,6 +279,7 @@ let a_config_entry : 'a t =
     a_client ;
     (a_dev >>| fun name -> `Dev name) ;
     a_proto ;
+    a_proto_force ;
     (a_resolv_retry >>| fun x -> `Resolv_retry x) ;
     a_tls_auth ;
     a_remote_cert_tls ;
@@ -267,7 +304,7 @@ let a_config_entry : 'a t =
   ]
 
 
-let into_lines config_str =
+let parse config_str =
   let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string

@@ -8,7 +8,7 @@ let () =
   let fd = Unix.openfile fn [O_RDONLY] 0 in
   ignore @@ Unix.read fd buf 0 st_size ;
   let str = Bytes.to_string buf in
-  match Openvpn_config.into_lines str with
+  match Openvpn_config.parse str with
   | Ok rules ->
     List.iteri (fun i line ->
         Fmt.pr "Entry %d: @[<v>%a@]@." (i+1)
