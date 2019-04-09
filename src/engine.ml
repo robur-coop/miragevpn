@@ -34,7 +34,7 @@ let ptime_to_ts_exn now =
   | None -> assert false
   | Some x -> Int32.of_int x
 
-let compute_hmac p key hmac_key =
+let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
@@ -58,7 +58,7 @@ let client config now () =
   let state, m_id = next_message_id state in
   let p =
     let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
-    let hmac = compute_hmac p state.key my_hmac in
+    let hmac = compute_hmac state.key p my_hmac in
     Packet.with_header { header with Packet.hmac } p
   in
   state, Packet.encode (state.key, p)
@@ -70,7 +70,7 @@ let handle_inner state now data =
     let state, out = header state (ptime_to_ts_exn now) in
     let p =
       let p = `Ack out in
-      let hmac = compute_hmac p state.key state.my_hmac in
+      let hmac = compute_hmac state.key p state.my_hmac in
       Packet.with_header { out with Packet.hmac } p
     in
     Ok (state, Some (Packet.encode (state.key, p)))
@@ -125,9 +125,7 @@ let handle state now buf =
   Packet.decode buf >>= fun (key, data) ->
   (* verify mac *)
   let computed_mac, packet_mac =
-    let tbs = Packet.to_be_signed key data in
-    let hmac' = Nocrypto.Hash.SHA1.hmac ~key:state.their_hmac tbs in
-    hmac', Packet.((header data).hmac)
+    compute_hmac key data state.their_hmac, Packet.((header data).hmac)
   in
   guard (Cstruct.equal computed_mac packet_mac)
     (`Bad_mac (state, computed_mac, (key, data))) >>= fun () ->
