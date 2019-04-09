@@ -114,10 +114,37 @@ let encode_header hdr =
      Cstruct.BE.set_uint64 buf (hdr_len + id_arr_len) v) ;
   buf, hdr_len + rsid + id_arr_len
 
+let to_be_signed_header ?(more = 0) op header =
+  (* TODO verify that this is indeed the thing to sign! *)
+  (* packet_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ msg_id *)
+  let acks = match header.ack_message_ids with
+    | [] -> 0
+    | x -> List.length x * packet_id_len
+  and rses = match header.remote_session with
+    | None -> 0
+    | Some _ -> 8
+  in
+  let buflen = packet_id_len + 4 + 1 + 8 + 1 + acks + rses + more in
+  let buf = Cstruct.create buflen in
+  Cstruct.BE.set_uint32 buf 0 header.packet_id ;
+  Cstruct.BE.set_uint32 buf 4 header.timestamp ;
+  Cstruct.set_uint8 buf 8 op ;
+  Cstruct.BE.set_uint64 buf 9 header.local_session ;
+  Cstruct.set_uint8 buf 17 (List.length header.ack_message_ids) ;
+  let rec enc_ack off = function
+    | [] -> ()
+    | hd::tl -> Cstruct.BE.set_uint32 buf off hd ; enc_ack (off + 4) tl
+  in
+  enc_ack 18 header.ack_message_ids ;
+  (match header.remote_session with
+   | None -> ()
+   | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x) ;
+  buf, 18 + acks + rses
+
 type control = header * packet_id * Cstruct.t
 
 let pp_control ppf (hdr, id, payload) =
-  Fmt.pf ppf "%a id %lu %a" pp_header hdr id Cstruct.hexdump_pp payload
+  Fmt.pf ppf "%a id %lu payload %a" pp_header hdr id Cstruct.hexdump_pp payload
 
 let decode_control buf =
   decode_header buf >>= fun (header, off) ->
@@ -135,31 +162,9 @@ let encode_control (header, packet_id, payload) =
   len + Cstruct.len payload + 4
 
 let to_be_signed_control op (header, packet_id, _payload) =
-  (* TODO verify that this is indeed the thing to sign! *)
-  (* packet_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ msg_id *)
   (* rly? not length, not content!? *)
-  let acks = match header.ack_message_ids with
-    | [] -> 0
-    | x -> List.length x * packet_id_len
-  and rses = match header.remote_session with
-    | None -> 0
-    | Some _ -> 8
-  in
-  let buf = Cstruct.create (packet_id_len + 4 + 1 + 8 + 1 + acks + rses + packet_id_len) in
-  Cstruct.BE.set_uint32 buf 0 header.packet_id ;
-  Cstruct.BE.set_uint32 buf 4 header.timestamp ;
-  Cstruct.set_uint8 buf 8 op ;
-  Cstruct.BE.set_uint64 buf 9 header.local_session ;
-  Cstruct.set_uint8 buf 17 (List.length header.ack_message_ids) ;
-  let rec enc_ack off = function
-    | [] -> ()
-    | hd::tl -> Cstruct.BE.set_uint32 buf off hd ; enc_ack (off + 4) tl
-  in
-  enc_ack 18 header.ack_message_ids ;
-  (match header.remote_session with
-   | None -> ()
-   | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x) ;
-  Cstruct.BE.set_uint32 buf (18 + acks + rses) packet_id ;
+  let buf, off = to_be_signed_header ~more:packet_id_len op header in
+  Cstruct.BE.set_uint32 buf off packet_id ;
   buf
 
 let decode_data buf = Ok buf
@@ -206,7 +211,7 @@ let encode (key, p) =
 let to_be_signed key p =
   let op = op_key (operation p) key in
   match p with
-  | `Ack _ -> assert false
+  | `Ack hdr -> fst (to_be_signed_header op hdr)
   | `Data _ -> assert false
   | `Control (_, c) -> to_be_signed_control op c
 
@@ -221,11 +226,22 @@ let header = function
   | `Control (_, (hdr, _, _)) -> hdr
   | `Data (_, _) -> assert false
 
+let with_header hdr = function
+  | `Ack _ -> `Ack hdr
+  | `Control (op, (_, id, data)) -> `Control (op, (hdr, id, data))
+  | `Data (op, data) -> `Data (op, data)
+
+let message_id = function
+  | `Ack _ -> None
+  | `Control (_, (_, msg_id, _)) -> Some msg_id
+  | `Data (_, _) -> assert false
+
 let pp ppf (key, p) = match p with
   | `Ack a -> Fmt.pf ppf "key %x ack %a" key pp_header a
   | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c
   | `Data (op, d) -> Fmt.pf ppf "key %x data %a: %a" key pp_operation op Cstruct.hexdump_pp d
 
+(*
 type tls_control = { (* v2 only! *)
   (* 4 zero bytes *)
   key_method_type : int ; (* uint8 *)
@@ -248,3 +264,4 @@ type tls_data = {
   packet_id : packet_id ; (* disabled by --no-replay *)
   payload : Cstruct.t
 }
+  *)

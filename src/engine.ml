@@ -1,9 +1,13 @@
 open State
 
-let next_message_id state =
-  state.my_message_id, { state with my_message_id = Int32.succ state.my_message_id }
+let guard p e = if p then Ok () else Error e
+let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
 
-let header timestamp state =
+let next_message_id state =
+  { state with my_message_id = Int32.succ state.my_message_id },
+  state.my_message_id
+
+let header state timestamp =
   let rec acked_message_ids id =
     if state.their_message_id = id then
       []
@@ -12,15 +16,16 @@ let header timestamp state =
   in
   let ack_message_ids = acked_message_ids state.their_last_acked_message_id in
   let remote_session = match ack_message_ids with [] -> None | _ -> Some state.their_session_id in
+  let packet_id = state.my_packet_id
+  and their_last_acked_message_id = state.their_message_id
+  in
+  { state with their_last_acked_message_id ; my_packet_id = Int32.succ packet_id },
   { Packet.local_session = state.my_session_id ;
     hmac = Cstruct.create_unsafe Packet.hmac_len ;
-    packet_id = state.my_packet_id ;
+    packet_id = packet_id ;
     timestamp ;
     ack_message_ids ;
     remote_session
-  }, {
-    state with their_last_acked_message_id = state.their_message_id ;
-               my_packet_id = Int32.succ state.my_packet_id
   }
 
 let ptime_to_ts_exn now =
@@ -28,6 +33,10 @@ let ptime_to_ts_exn now =
   match Ptime.(Span.to_int_s (to_span now)) with
   | None -> assert false
   | Some x -> Int32.of_int x
+
+let compute_hmac p key hmac_key =
+  let tbs = Packet.to_be_signed key p in
+  Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
 let client config now () =
   let open Rresult.R.Infix in
@@ -45,40 +54,85 @@ let client config now () =
     their_last_acked_message_id = 0l ;
   } in
   let timestamp = ptime_to_ts_exn now in
-  let header, state = header timestamp state in
-  let m_id, state = next_message_id state in
+  let state, header = header state timestamp in
+  let state, m_id = next_message_id state in
   let p =
     let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
-    let tbs = Packet.to_be_signed state.key p in
-    let hmac = Nocrypto.Hash.SHA1.hmac ~key:my_hmac tbs in
-    `Control (Packet.Hard_reset_client, ({ header with hmac }, m_id, Cstruct.empty))
+    let hmac = compute_hmac p state.key my_hmac in
+    Packet.with_header { header with Packet.hmac } p
   in
   state, Packet.encode (state.key, p)
 
-let handle_inner state data =
+let handle_inner state now data =
   match state.state, data with
   | Client_reset, `Control (Packet.Hard_reset_server, _) ->
     (* we reply with ACK + TLS client hello! *)
-    Logs.info (fun m -> m "wanted to send something, but NYI")
-  | _ ->
-    Logs.err (fun m -> m "handle_inner: no transition for state %a and packet %a"
-                 pp_client_state state.state Packet.pp (0, data))
-
-let handle state _now buf =
-  match Packet.decode buf with
-  | Error e ->
-    Logs.err (fun m -> m "decoding failed %a@.%a" Packet.pp_error e Cstruct.hexdump_pp buf)
-  | Ok (key, data) ->
-    (* verify mac *)
-    let mac_good =
-      let tbs = Packet.to_be_signed key data in
-      let hmac' = Nocrypto.Hash.SHA1.hmac ~key:state.their_hmac tbs in
-      Cstruct.equal hmac' Packet.((header data).hmac)
+    let state, out = header state (ptime_to_ts_exn now) in
+    let p =
+      let p = `Ack out in
+      let hmac = compute_hmac p state.key state.my_hmac in
+      Packet.with_header { out with Packet.hmac } p
     in
-    if mac_good then begin
-      Logs.info (fun m -> m "mac good (state %a, received %a)"
-                    State.pp state Packet.pp (key, data)) ;
-      handle_inner state data
-    end else
-      Logs.err (fun m -> m "mac isn't good (state %a, received %a)"
-                   State.pp state Packet.pp (key, data))
+    Ok (state, Some (Packet.encode (state.key, p)))
+  | _ ->
+    Error (`No_transition (state, (state.key, data)))
+
+let expected_packet state data =
+  let open Rresult.R.Infix in
+  (* expects monotonic packet + message id, session ids matching *)
+  (* TODO track ack'ed message ids from them (only really important for UDP) *)
+  let hdr = Packet.header data
+  and msg_id = Packet.message_id data
+  in
+  guard (Int32.equal state.their_packet_id hdr.Packet.packet_id)
+    (`Non_monotonic_packet_id (state, hdr)) >>= fun () ->
+  opt_guard (Int32.equal state.their_message_id) msg_id
+    (`Non_monotonic_message_id (state, hdr)) >>= fun () ->
+  guard (Int64.equal state.their_session_id 0L ||
+         Int64.equal state.their_session_id hdr.Packet.local_session)
+    (`Mismatch_their_session_id (state, hdr)) >>= fun () ->
+  opt_guard (Int64.equal state.my_session_id) hdr.Packet.remote_session
+    (`Mismatch_my_session_id (state, hdr)) >>| fun () ->
+  (* TODO do sth with timestamp? *)
+  let their_message_id = match msg_id with None -> state.their_message_id | Some x -> Int32.succ x in
+  { state with their_session_id = hdr.Packet.local_session ;
+               their_packet_id = Int32.succ hdr.Packet.packet_id ;
+               their_message_id }
+
+let pp_error ppf = function
+  | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
+  | `Non_monotonic_packet_id (state, hdr) ->
+    Fmt.pf ppf "non monotonic packet id in %a@ (state %a)"
+      Packet.pp_header hdr pp state
+  | `Non_monotonic_message_id (state, hdr) ->
+    Fmt.pf ppf "non monotonic message id in %a@ (state %a)"
+      Packet.pp_header hdr pp state
+  | `Mismatch_their_session_id (state, hdr) ->
+    Fmt.pf ppf "mismatched their session id in %a@ (state %a)"
+      Packet.pp_header hdr pp state
+  | `Mismatch_my_session_id (state, hdr) ->
+    Fmt.pf ppf "mismatched my session id in %a@ (state %a)"
+      Packet.pp_header hdr pp state
+  | `Bad_mac (state, computed, data) ->
+    Fmt.pf ppf "bad mac: computed %a, data %a@ (state %a)"
+      Cstruct.hexdump_pp computed Packet.pp data pp state
+  | `No_transition (state, data) ->
+    Fmt.pf ppf "no transition found for data %a@ (state %a)"
+      Packet.pp data pp state
+
+let handle state now buf =
+  let open Rresult.R.Infix in
+  Packet.decode buf >>= fun (key, data) ->
+  (* verify mac *)
+  let computed_mac, packet_mac =
+    let tbs = Packet.to_be_signed key data in
+    let hmac' = Nocrypto.Hash.SHA1.hmac ~key:state.their_hmac tbs in
+    hmac', Packet.((header data).hmac)
+  in
+  guard (Cstruct.equal computed_mac packet_mac)
+    (`Bad_mac (state, computed_mac, (key, data))) >>= fun () ->
+  Logs.info (fun m -> m "mac good@.(state %a@.received %a)"
+                State.pp state Packet.pp (key, data)) ;
+  (* _first_ update state with last_received_message_id and packet_id *)
+  expected_packet state data >>= fun state' ->
+  handle_inner state' now data

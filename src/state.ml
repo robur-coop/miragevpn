@@ -13,12 +13,12 @@ type t = {
   state : client_state ;
   my_hmac : Cstruct.t ;
   my_session_id : int64 ;
-  my_packet_id : int32 ;
-  my_message_id : int32 ;
+  my_packet_id : int32 ; (* this starts from 1l, indicates the next to-be-send *)
+  my_message_id : int32 ; (* this starts from 0l, indicates the next to-be-send *)
   their_hmac : Cstruct.t ;
   their_session_id : int64 ;
-  their_packet_id : int32 ;
-  their_message_id : int32 ;
+  their_packet_id : int32 ; (* the first should be 1l, indicates the next to-be-received *)
+  their_message_id : int32 ; (* the first should be 0l, indicates the next to-be-received *)
   their_last_acked_message_id : int32 ;
 }
 
