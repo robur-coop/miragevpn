@@ -1,11 +1,52 @@
 open Angstrom
 
+type inline_or_path = [ `Inline | `Path of string ]
+
+module Conf_map = struct
+  (*type server
+  type client
+    type any*)
+  type flag = unit
+
+  type 'a k =
+    | Auth_retry : [`Nointeract] k
+    | Auth_user_pass : inline_or_path k
+    | Bind     : bool k
+    | Cipher   : string k
+    | Client   : flag k
+    | Comp_lzo : flag k
+    | Float    : flag k
+    | Keepalive : (int * int) k
+    | Mssfix   : int k
+    | Mute_replay_warnings : flag k
+    | Passtos  : flag k
+    | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
+    | Remote_random : flag k
+    | Replay_window : (int * int) k
+    | Tls_client    : flag k
+    | Tls_auth_payload : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Tun_mtu : int k
+    | Verb : int k
+
+  module K = struct
+    type 'a t = 'a k
+    let pp ppf (_v: _ t) _a = Fmt.pf ppf "hello"
+    let compare : type a b. a t -> b t -> (a,b) Gmap.Order.t = fun a b ->
+      match Hashtbl.(compare (hash a) (hash b) ) with
+      | 0 -> Obj.magic Gmap.Order.Eq (* GADT equality :-/ *)
+      | x when x < 0 -> Lt
+      | _ -> Gt
+  end
+
+  include Gmap.Make(K)
+end
+
 type line = [
   | `Auth_retry of [ `Nointeract ]
-  | `Auth_user_pass of [ `Inline | `Path of string ]
+  | `Auth_user_pass of inline_or_path
   | `Bind
   | `Blank
-  | `Ca of [ `Inline | `Path of string ]
+  | `Ca of inline_or_path
   | `Cipher of string
   | `Client
   | `Comp_lzo
@@ -17,13 +58,13 @@ type line = [
   | `Keepalive of int * int
   | `Mssfix of int
   | `Mute_replay_warnings
-  | `Nobind
+  | `Nobind (* negation of `Bind *)
   | `Passtos
   | `Persist_key
   | `Pkcs12 of [ `Inline | `Path of string ]
   | `Proto of [ `Tcp | `Udp ]
   | `Proto_force of [ `Tcp | `Udp ]
-  | `Remote of string * int
+  | `Remote of [`IP of Ipaddr.t | `Domain of Domain_name.t] * int
   | `Remote_cert_key_usage of int
   | `Remote_cert_tls of [ `Server ]
   | `Remote_random
@@ -158,6 +199,27 @@ let a_pkcs12 =
 let a_tls_auth =
   a_option_with_single_path "tls-auth"  >>| fun path -> `Tls_auth path
 
+let a_tls_auth_payload =
+  let abort s = fail ("Invalid TLS AUTH HMAC key: " ^ s) in
+  (string "-----BEGIN OpenVPN Static key V1-----\n"
+   <|> abort "Missing Static key V1 -----BEGIN mark") *>
+  many_till ( take_while (function | 'a'..'f'|'A'..'F'|'0'..'9' -> true
+                                   | _ -> false)
+              <* (end_of_line <|> abort "Invalid hex character") >>= fun hex ->
+      try return (Cstruct.of_hex hex) with
+      | Invalid_argument msg -> abort msg)
+    (string "-----END OpenVPN Static key V1-----\n" <|>abort "Missing END mark")
+  <* (end_of_input <|> abort "Data after -----END mark")
+  >>= (fun lst ->
+      let sz = Cstruct.lenv lst in
+      if 256 = sz then return lst else
+        abort @@ "Wrong size ("^(string_of_int sz)^"); need exactly 256 bytes")
+  >>| Cstruct.concat >>| fun cs ->
+  Cstruct.(sub cs 0        64,
+           sub cs 64       64,
+           sub cs 128      64,
+           sub cs (128+64) 64)
+
 let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" >>| fun path ->
   `Auth_user_pass path
@@ -247,13 +309,37 @@ let a_replay_window =
     (string "replay-window" *> a_whitespace *> a_number)
     (option 15 (a_whitespace *> a_number))
 
+let a_ipv4_dotted_quad =
+  take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
+  match Ipaddr.V4.of_string ip with
+    | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %s: %S" x ip)
+    | Ok ip -> return ip
+
+let a_ipv6_coloned_hex =
+  take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
+                                 | _ -> false) >>= fun ip ->
+  match Ipaddr.V6.of_string ip with
+  | Error `Msg x -> fail (Fmt.strf "Invalid IPv6: %s: %S" x ip)
+  | Ok ip -> return ip
+
+let a_domain_name =
+  take_till (function '\x00'..'\x1f' | ' ' | '"' | '\'' -> true | _ -> false)
+  >>= fun str -> match Domain_name.of_string str with
+  | Error `Msg x -> fail (Fmt.strf "Invalid domain name: %s: %S" x str)
+  | Ok x -> return x
+
 (* TODO finish "remote [port] [proto]" by adding proto (tcp/udp/tcp4/tcp6/udp4/udp6)
    what are the semantics if proto and remote proto is provided? *)
 let a_remote =
   let remote a b = `Remote (a, b) in
   lift2 remote
     (string "remote" *> a_whitespace *>
-     take_while1 (function ' '| '\n' | '\t' -> false | _ -> true))
+     choice [
+       (a_ipv4_dotted_quad >>| fun i -> `IP (Ipaddr.V4 i)) ;
+       (a_ipv6_coloned_hex >>| fun i -> `IP (Ipaddr.V6 i)) ;
+       (a_domain_name >>| fun dns -> `Domain dns)
+     ]
+    )
     (option 1194 (a_whitespace *> a_number))
 
 let a_inline =
@@ -304,7 +390,7 @@ let a_config_entry : 'a t =
   ]
 
 
-let parse config_str =
+let parse config_str : (line list, 'x) result=
   let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string
@@ -321,3 +407,46 @@ let parse config_str =
         fail (Printf.sprintf "Error at byte offset %d: %S" pos context)
       )
     )
+
+let parse_gadt : line list -> (Conf_map.t, 'err) result =
+  (Ok Conf_map.empty) |> List.fold_left
+    (fun acc line -> Rresult.R.bind acc (fun (acc:Conf_map.t) ->
+         let ok k v = Ok (Conf_map.add k v acc) in
+         let ok_add k v = Ok (Conf_map.update k (function
+             | None -> Some [v]
+             | Some old -> Some (v::old)
+           ) acc)
+         in
+         let unit k = ok k () in
+         match line with
+         | `Auth_retry kind     -> ok Auth_retry kind
+         | `Auth_user_pass kind -> ok Auth_user_pass kind
+         | `Bind   -> ok Bind true
+         | `Nobind -> ok Bind false
+         | `Cipher str -> ok Cipher str
+         | `Client     -> unit Client
+         | `Comp_lzo   -> unit Comp_lzo
+         | `Float      -> unit Float
+         | `Keepalive low_high -> ok Keepalive low_high
+         | `Mssfix int -> ok Mssfix int
+         | `Mute_replay_warnings -> unit Mute_replay_warnings
+         | `Passtos    -> unit Passtos
+         | `Remote host_port -> ok_add Remote host_port
+         | `Remote_random -> unit Remote_random
+         | `Replay_window low_high -> ok Replay_window low_high
+         | `Tls_client -> unit Tls_client
+         | `Tun_mtu i  -> ok Tun_mtu i
+         | `Verb    i  -> ok Verb i
+         | `Inline ("tls-auth", x) ->
+           begin match Angstrom.parse_string a_tls_auth_payload x with
+             | Ok subs -> ok Tls_auth_payload subs
+             | Error err -> Error err
+           end
+         | `Blank
+         | _ -> Ok acc
+       )
+    )
+
+let is_valid_client_config t =
+  Conf_map.mem Remote t (* has a Remote *)
+  && Conf_map.mem Client t
