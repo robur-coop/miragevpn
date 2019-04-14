@@ -2,11 +2,18 @@ open Rresult
 
 let read_config_file fn =
   Printf.printf "Reading %S\n" fn;
-  let {Unix.st_size; _} = Unix.stat fn in
-  let buf = Bytes.create st_size in
-  let fd = Unix.openfile fn [O_RDONLY] 0 in
-  ignore @@ Unix.read fd buf 0 st_size ;
-  let str = Bytes.to_string buf in
+  let str =
+    let fd = Unix.openfile fn [O_RDONLY] 0 in
+    let {Unix.st_size; _} = Unix.fstat fd in
+    let buf = Bytes.create st_size in
+    let rec loop remaining =
+      let remaining =
+        let read = Unix.read fd buf (st_size - remaining) remaining in
+        remaining - read in
+      if remaining = 0 then Unix.close fd else loop remaining
+    in loop st_size ;
+    Bytes.to_string buf
+  in
   Openvpn_config.parse str
 
 let () =
