@@ -47,6 +47,7 @@ module Conf_map : sig
     | Auth_retry : [`Nointeract] k
     | Auth_user_pass : inline_or_path k
     | Bind     : bool k
+    | Ca       : X509.t k
     | Cipher   : string k
     | Comp_lzo : flag k
     | Float    : flag k

@@ -12,6 +12,7 @@ module Conf_map = struct
     | Auth_retry : [`Nointeract] k
     | Auth_user_pass : inline_or_path k
     | Bind     : bool k
+    | Ca       : X509.t k
     | Cipher   : string k
     | Comp_lzo : flag k
     | Float    : flag k
@@ -444,6 +445,15 @@ let parse_gadt : line list -> (Conf_map.t, 'err) result =
          | `Inline ("connection", str) ->
            Rresult.R.(Angstrom.parse_string a_remote str
                       >>= fun (`Remote peer) -> ok_add Remote peer)
+         | `Inline ("ca", str) ->
+           begin match X509.Encoding.Pem.parse (Cstruct.of_string str) with
+             | ("CERTIFICATE", x)::[] ->
+               begin match X509.Encoding.parse x with
+               | Some cert -> ret Ca cert
+               | None -> Error "Error parsing certificate"
+               end
+             | _ -> Error "error parsing PEM-encoded structure"
+           end
          | `Blank
          | _ -> Ok acc
        )
