@@ -70,10 +70,13 @@ let jump _ filename =
       begin match Engine.client cfg now () with
       | Error () -> Lwt.fail_with "couldn't init client"
       | Ok (state, out) ->
-        let s = ref state in
-        let fd = Lwt_unix.(socket PF_INET SOCK_STREAM 0) in
-        Lwt_unix.connect fd @@ Lwt_unix.ADDR_INET
-          (Ipaddr_unix.to_inet_addr ip, port) >>= fun () ->
+        let s = ref state
+        and dom =
+          Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
+        and ip = Ipaddr_unix.to_inet_addr ip
+        in
+        let fd = Lwt_unix.(socket dom SOCK_STREAM 0) in
+        Lwt_unix.(connect fd (ADDR_INET (ip, port))) >>= fun () ->
         let open Lwt_result in
         write_to_fd fd out >>= fun () ->
         read_from_fd fd >>= fun data ->

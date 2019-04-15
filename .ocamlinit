@@ -1,8 +1,0 @@
-#require "fmt";;
-#require "angstrom";;
-#require "cstruct";;
-#require "rresult";;
-open Rresult;;
-
-#mod_use "parse/openvpn_config.ml";;
-#mod_use "parse-test/read_file.ml";;
