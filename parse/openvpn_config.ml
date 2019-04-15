@@ -13,13 +13,13 @@ module Conf_map = struct
     | Auth_user_pass : inline_or_path k
     | Bind     : bool k
     | Cipher   : string k
-    | Client   : flag k
     | Comp_lzo : flag k
     | Float    : flag k
     | Keepalive : (int * int) k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
+    | Pull     : flag k
     | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_random : flag k
     | Replay_window : (int * int) k
@@ -411,37 +411,39 @@ let parse config_str : (line list, 'x) result=
 let parse_gadt : line list -> (Conf_map.t, 'err) result =
   (Ok Conf_map.empty) |> List.fold_left
     (fun acc line -> Rresult.R.bind acc (fun (acc:Conf_map.t) ->
-         let ok k v = Ok (Conf_map.add k v acc) in
+         let ret k v = Ok (Conf_map.add k v acc) in
          let ok_add k v = Ok (Conf_map.update k (function
              | None -> Some [v]
              | Some old -> Some (v::old)
            ) acc)
          in
-         let unit k = ok k () in
+         let unit k = ret k () in
          match line with
-         | `Auth_retry kind     -> ok Auth_retry kind
-         | `Auth_user_pass kind -> ok Auth_user_pass kind
-         | `Bind   -> ok Bind true
-         | `Nobind -> ok Bind false
-         | `Cipher str -> ok Cipher str
-         | `Client     -> unit Client
+         | `Auth_retry kind     -> ret Auth_retry kind
+         | `Auth_user_pass kind -> ret Auth_user_pass kind
+         | `Bind   -> ret Bind true
+         | `Nobind -> ret Bind false
+         | `Cipher str -> ret Cipher str
+         | `Client     -> (* alias for --tls-client --pull *)
+           Rresult.(unit Tls_client >>| Conf_map.add Pull ())
          | `Comp_lzo   -> unit Comp_lzo
          | `Float      -> unit Float
-         | `Keepalive low_high -> ok Keepalive low_high
-         | `Mssfix int -> ok Mssfix int
+         | `Keepalive low_high -> ret Keepalive low_high
+         | `Mssfix int -> ret Mssfix int
          | `Mute_replay_warnings -> unit Mute_replay_warnings
          | `Passtos    -> unit Passtos
          | `Remote host_port -> ok_add Remote host_port
          | `Remote_random -> unit Remote_random
-         | `Replay_window low_high -> ok Replay_window low_high
+         | `Replay_window low_high -> ret Replay_window low_high
          | `Tls_client -> unit Tls_client
-         | `Tun_mtu i  -> ok Tun_mtu i
-         | `Verb    i  -> ok Verb i
+         | `Tun_mtu i  -> ret Tun_mtu i
+         | `Verb    i  -> ret Verb i
          | `Inline ("tls-auth", x) ->
-           begin match Angstrom.parse_string a_tls_auth_payload x with
-             | Ok subs -> ok Tls_auth_payload subs
-             | Error err -> Error err
-           end
+           Rresult.R.(Angstrom.parse_string a_tls_auth_payload x
+                      >>= ret Tls_auth_payload)
+         | `Inline ("connection", str) ->
+           Rresult.R.(Angstrom.parse_string a_remote str
+                      >>= fun (`Remote peer) -> ok_add Remote peer)
          | `Blank
          | _ -> Ok acc
        )
@@ -449,4 +451,4 @@ let parse_gadt : line list -> (Conf_map.t, 'err) result =
 
 let is_valid_client_config t =
   Conf_map.mem Remote t (* has a Remote *)
-  && Conf_map.mem Client t
+  && Conf_map.mem Tls_client t

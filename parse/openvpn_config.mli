@@ -48,13 +48,13 @@ module Conf_map : sig
     | Auth_user_pass : inline_or_path k
     | Bind     : bool k
     | Cipher   : string k
-    | Client   : flag k
     | Comp_lzo : flag k
     | Float    : flag k
     | Keepalive: (int * int) k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
+    | Pull     : flag k
     | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_random : flag k
     | Replay_window : (int * int) k
