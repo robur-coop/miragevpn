@@ -40,7 +40,7 @@ let compute_hmac key p hmac_key =
 
 let client config now () =
   match Openvpn_config.Conf_map.(find Tls_auth_payload config) with
-  | None -> Logs.err (fun m -> m "no tls auth payload in config"); Error ()
+  | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let state = {

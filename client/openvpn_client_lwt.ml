@@ -72,7 +72,7 @@ let jump _ filename =
       end >>= fun (ip,port) ->
       Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
       begin match Engine.client config now () with
-      | Error () -> Lwt.fail_with "couldn't init client"
+      | Error (`Msg msg) -> Lwt.fail_with ("couldn't init client: " ^ msg)
       | Ok (state, out) ->
         let s = ref state
         and dom =
