@@ -49,7 +49,8 @@ let client config now () =
   | Some (_, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let state = {
-      config ; key = 0 ; state = Expect_server_reset ;
+      linger = Cstruct.empty ;
+      config ; key = 0 ; client_state = Expect_server_reset ;
       my_hmac ;
       my_session_id = 0xF00DBEEFL ;
       my_packet_id = 1l ;
@@ -74,18 +75,18 @@ let pp_tls_error ppf = function
 
 let handle_inner state now data =
   let open Rresult.R.Infix in
-  match state.state, data with
+  match state.client_state, data with
   | Expect_server_reset, `Control (Packet.Hard_reset_server, _) ->
     (* we reply with ACK + TLS client hello! *)
     let state, header = header state (ptime_to_ts_exn now) in
     let state, m_id = next_message_id state in
     let authenticator = X509.Authenticator.null in
     let tls, ch = Tls.(Engine.client (Config.client ~authenticator ())) in
-    let state = { state with state = TLS_handshake tls }
+    let state = { state with client_state = TLS_handshake tls }
     and p = `Control (Packet.Control, (header, m_id, ch))
     in
     let out = hmac_and_out state.key state.my_hmac header p in
-    Ok (state, Some out)
+    Ok (state, [out])
   | TLS_handshake tls, `Control (Packet.Control, (_, _, data)) ->
     (* we reply with ACK + maybe TLS response *)
     let state, header = header state (ptime_to_ts_exn now) in
@@ -94,12 +95,12 @@ let handle_inner state now data =
      | `Ok (r, `Response out, `Data d) ->
        match r with
        | `Eof | `Alert _ as e ->
-         Logs.err (fun m -> m "response %a, data %a"
+         Logs.err (fun m -> m "response %a, TLS payload %a"
                       Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
                       Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
          Error (`Tls e)
        | `Ok tls' -> Ok (tls', out, d)) >>= fun (tls', tls_response, d) ->
-    Logs.info (fun m -> m "data is %a"
+    Logs.info (fun m -> m "TLS payload is %a"
                   Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
     let state, p =
       match tls_response with
@@ -108,14 +109,20 @@ let handle_inner state now data =
         let state, m_id = next_message_id state in
         state, `Control (Packet.Control, (header, m_id, payload))
     in
-    let state = { state with state = TLS_handshake tls' } in
+    let client_state =
+      if Tls.Engine.can_handle_appdata tls' then
+        TLS_established tls' (* it's likely we need to send data *)
+      else
+        TLS_handshake tls' (* continue *)
+    in
+    let state = { state with client_state } in
+    Logs.debug (fun m -> m "out state is %a" State.pp state);
     let out = hmac_and_out state.key state.my_hmac header p in
-    Ok (state, Some out)
+    Ok (state, [out])
   | TLS_handshake _, `Ack _ ->
     Logs.warn (fun m -> m "TODO: ignoring ACK");
-    Ok (state, None)
-  | _ ->
-    Error (`No_transition (state, (state.key, data)))
+    Ok (state, [])
+  | _ -> Error (`No_transition (state, (state.key, data)))
 
 let expected_packet state data =
   let open Rresult.R.Infix in
@@ -163,15 +170,21 @@ let pp_error ppf = function
 
 let handle state now buf =
   let open Rresult.R.Infix in
-  Packet.decode buf >>= fun (key, data) ->
-  (* verify mac *)
-  let computed_mac, packet_mac =
-    compute_hmac key data state.their_hmac, Packet.((header data).hmac)
+  let rec handle_multi state buf out = match Packet.decode buf with
+    | Error `Unknown_operation x -> Error (`Unknown_operation x)
+    | Error `Partial -> Ok ({ state with linger = buf }, out)
+    | Ok (key, data, linger) ->
+      (* verify mac *)
+      let computed_mac, packet_mac =
+        compute_hmac key data state.their_hmac, Packet.((header data).hmac)
+      in
+      guard (Cstruct.equal computed_mac packet_mac)
+        (`Bad_mac (state, computed_mac, (key, data))) >>= fun () ->
+      Logs.info (fun m -> m "mac good@.(state %a@.received %a)"
+                    State.pp state Packet.pp (key, data)) ;
+      (* _first_ update state with last_received_message_id and packet_id *)
+      expected_packet state data >>= fun state' ->
+      handle_inner state' now data >>= fun (state', outs) ->
+      handle_multi state' linger (out@outs)
   in
-  guard (Cstruct.equal computed_mac packet_mac)
-    (`Bad_mac (state, computed_mac, (key, data))) >>= fun () ->
-  Logs.info (fun m -> m "mac good@.(state %a@.received %a)"
-                State.pp state Packet.pp (key, data)) ;
-  (* _first_ update state with last_received_message_id and packet_id *)
-  expected_packet state data >>= fun state' ->
-  handle_inner state' now data
+  handle_multi state (Cstruct.append state.linger buf) []

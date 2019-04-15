@@ -7,13 +7,11 @@ open Rresult.R.Infix
 
 type error = [
   | `Partial
-  | `Leftover of int
   | `Unknown_operation of int
 ]
 
 let pp_error ppf = function
   | `Partial -> Fmt.string ppf "partial"
-  | `Leftover off -> Fmt.pf ppf "leftover at %d" off
   | `Unknown_operation op -> Fmt.pf ppf "unknown operation %d" op
 
 type operation =
@@ -178,7 +176,6 @@ let decode buf =
   let plen = Cstruct.BE.get_uint16 buf 0 in
   let opkey = Cstruct.get_uint8 buf 2 in
   guard (Cstruct.len buf - 2 >= plen) `Partial >>= fun () ->
-  guard (Cstruct.len buf - 2 = plen) (`Leftover (plen + 2)) >>= fun () ->
   let payload = Cstruct.sub buf 3 (pred plen) in
   let op, key = opkey lsr 3, opkey land 0x07 in
   int_to_operation op >>= fun operation ->
@@ -186,7 +183,7 @@ let decode buf =
    | Ack -> decode_header payload >>| fun (ack, _) -> `Ack ack
    | Data_v1 | Data_v2 -> decode_data payload >>| fun data -> `Data (operation, data)
    | _ -> decode_control payload >>| fun control -> `Control (operation, control)) >>| fun res ->
-  (key, res)
+  (key, res, Cstruct.shift buf (plen + 2))
 
 let operation = function
   | `Ack _ -> Ack

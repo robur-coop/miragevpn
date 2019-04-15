@@ -13,17 +13,23 @@ let rec write_to_fd fd data =
          Lwt_result.lift
            (Rresult.R.error_msgf "write error %s" (Printexc.to_string e)))
 
-let maybe_write_to_fd fd = function
-  | None -> Lwt_result.return ()
-  | Some x -> write_to_fd fd x
+let write_multiple_to_fd fd bufs =
+  Lwt_list.fold_left_s (fun r buf ->
+      match r with
+      | Ok () -> write_to_fd fd buf
+      | Error e -> Lwt.return (Error e))
+    (Ok ()) bufs
 
 let read_from_fd fd =
   Lwt_result.catch (
       let buf = Bytes.create 2048 in
-      Lwt_unix.read fd buf 0 2048 >|= fun count ->
-      let cs = Cstruct.of_bytes ~len:count buf in
-      Logs.debug (fun m -> m "read %d bytes@.%a" count Cstruct.hexdump_pp cs) ;
-      cs)
+      Lwt_unix.read fd buf 0 2048 >>= fun count ->
+      if count = 0 then
+        Lwt.fail_with "end of file from server"
+      else
+        let cs = Cstruct.of_bytes ~len:count buf in
+        Logs.debug (fun m -> m "read %d bytes@.%a" count Cstruct.hexdump_pp cs) ;
+        Lwt.return cs)
   |> Lwt_result.map_err (fun e ->
       Rresult.R.msgf "read error %s" (Printexc.to_string e))
 
@@ -88,7 +94,7 @@ let jump _ filename =
           read_from_fd fd >>= fun b ->
           match Engine.(Rresult.R.error_to_msg ~pp_error (handle !s now b)) with
           | Error e -> fail e
-          | Ok (s', out) -> s := s' ; maybe_write_to_fd fd out >>= loop
+          | Ok (s', outs) -> s := s' ; write_multiple_to_fd fd outs >>= loop
         in
         loop ()
       end
