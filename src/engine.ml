@@ -38,6 +38,11 @@ let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
+let hmac_and_out key hmac_key header p =
+  let hmac = compute_hmac key p hmac_key in
+  let p' = Packet.with_header { header with Packet.hmac } p in
+  Packet.encode (key, p')
+
 let client config now () =
   match Openvpn_config.Conf_map.(find Tls_auth_payload config) with
   | None -> Error (`Msg "no tls auth payload in config")
@@ -58,24 +63,18 @@ let client config now () =
     let timestamp = ptime_to_ts_exn now in
     let state, header = header state timestamp in
     let state, m_id = next_message_id state in
-    let p =
-      let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
-      let hmac = compute_hmac state.key p my_hmac in
-      Packet.with_header { header with Packet.hmac } p
-    in
-    Ok (state, Packet.encode (state.key, p))
+    let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
+    let out = hmac_and_out state.key my_hmac header p in
+    Ok (state, out)
 
 let handle_inner state now data =
   match state.state, data with
   | Expect_server_reset, `Control (Packet.Hard_reset_server, _) ->
     (* we reply with ACK + TLS client hello! *)
-    let state, out = header state (ptime_to_ts_exn now) in
-    let p =
-      let p = `Ack out in
-      let hmac = compute_hmac state.key p state.my_hmac in
-      Packet.with_header { out with Packet.hmac } p
-    in
-    Ok (state, Some (Packet.encode (state.key, p)))
+    let state, header = header state (ptime_to_ts_exn now) in
+    let p = `Ack header in
+    let out = hmac_and_out state.key state.my_hmac header p in
+    Ok (state, Some out)
   | _ ->
     Error (`No_transition (state, (state.key, data)))
 
