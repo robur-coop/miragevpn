@@ -79,11 +79,13 @@ let jump _ filename =
         Lwt_unix.(connect fd (ADDR_INET (ip, port))) >>= fun () ->
         let open Lwt_result in
         write_to_fd fd out >>= fun () ->
-        read_from_fd fd >>= fun data ->
-        match Engine.handle !s now data with
-        | Error e -> Lwt_result.fail
-                       (`Msg (Fmt.strf "error %a" Engine.pp_error e))
-        | Ok (s', out) -> s := s' ; maybe_write_to_fd fd out
+        let rec loop () =
+          read_from_fd fd >>= fun b ->
+          match Engine.(Rresult.R.error_to_msg ~pp_error (handle !s now b)) with
+          | Error e -> fail e
+          | Ok (s', out) -> s := s' ; maybe_write_to_fd fd out >>= loop
+        in
+        loop ()
       end
   ) (* <- Lwt_main.run *)
 
