@@ -46,6 +46,7 @@ let read_file filename =
 
 let jump _ filename =
   Lwt_main.run (
+    Nocrypto_entropy_lwt.initialize () >>= fun () ->
     read_file filename >>= fun str ->
     match
       let open Rresult.R.Infix in

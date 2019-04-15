@@ -67,14 +67,53 @@ let client config now () =
     let out = hmac_and_out state.key my_hmac header p in
     Ok (state, out)
 
+let pp_tls_error ppf = function
+  | `Eof -> Fmt.string ppf "EOF from other side"
+  | `Alert typ -> Fmt.pf ppf "alert from other side %s" (Tls.Packet.alert_type_to_string typ)
+  | `Fail f -> Fmt.pf ppf "failure from our side %s" (Tls.Engine.string_of_failure f)
+
 let handle_inner state now data =
+  let open Rresult.R.Infix in
   match state.state, data with
   | Expect_server_reset, `Control (Packet.Hard_reset_server, _) ->
     (* we reply with ACK + TLS client hello! *)
     let state, header = header state (ptime_to_ts_exn now) in
-    let p = `Ack header in
+    let state, m_id = next_message_id state in
+    let authenticator = X509.Authenticator.null in
+    let tls, ch = Tls.(Engine.client (Config.client ~authenticator ())) in
+    let state = { state with state = TLS_handshake tls }
+    and p = `Control (Packet.Control, (header, m_id, ch))
+    in
     let out = hmac_and_out state.key state.my_hmac header p in
     Ok (state, Some out)
+  | TLS_handshake tls, `Control (Packet.Control, (_, _, data)) ->
+    (* we reply with ACK + maybe TLS response *)
+    let state, header = header state (ptime_to_ts_exn now) in
+    (match Tls.Engine.handle_tls tls data with
+     | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
+     | `Ok (r, `Response out, `Data d) ->
+       match r with
+       | `Eof | `Alert _ as e ->
+         Logs.err (fun m -> m "response %a, data %a"
+                      Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
+                      Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+         Error (`Tls e)
+       | `Ok tls' -> Ok (tls', out, d)) >>= fun (tls', tls_response, d) ->
+    Logs.info (fun m -> m "data is %a"
+                  Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+    let state, p =
+      match tls_response with
+      | None -> state, `Ack header
+      | Some payload ->
+        let state, m_id = next_message_id state in
+        state, `Control (Packet.Control, (header, m_id, payload))
+    in
+    let state = { state with state = TLS_handshake tls' } in
+    let out = hmac_and_out state.key state.my_hmac header p in
+    Ok (state, Some out)
+  | TLS_handshake _, `Ack _ ->
+    Logs.warn (fun m -> m "TODO: ignoring ACK");
+    Ok (state, None)
   | _ ->
     Error (`No_transition (state, (state.key, data)))
 
@@ -120,6 +159,7 @@ let pp_error ppf = function
   | `No_transition (state, data) ->
     Fmt.pf ppf "no transition found for data %a@ (state %a)"
       Packet.pp data pp state
+  | `Tls tls_e -> pp_tls_error ppf tls_e
 
 let handle state now buf =
   let open Rresult.R.Infix in

@@ -78,12 +78,14 @@ let decode_header buf =
   and timestamp = Cstruct.BE.get_uint32 buf (hmac_len + 12)
   and arr_len = Cstruct.get_uint8 buf (hmac_len + 16)
   in
-  guard (Cstruct.len buf >= hdr_len + packet_id_len * arr_len + 8) `Partial >>| fun () ->
+  let rs = if arr_len = 0 then 0 else 8 in
+  guard (Cstruct.len buf >= hdr_len + packet_id_len * arr_len + rs) `Partial >>| fun () ->
   let rec ack_message_id = function
     | 0 -> []
     | n ->
-      let id = Cstruct.BE.get_uint32 buf (hdr_len + packet_id_len * n) in
-      id :: (ack_message_id (pred n))
+      let idx = pred n in
+      let id = Cstruct.BE.get_uint32 buf (hdr_len + packet_id_len * idx) in
+      id :: ack_message_id idx
   in
   let ack_message_ids = ack_message_id arr_len in
   let remote_session =
@@ -93,7 +95,7 @@ let decode_header buf =
       None
   in
   { local_session ; hmac ; packet_id ; timestamp ; ack_message_ids ; remote_session },
-  (hdr_len + packet_id_len * arr_len + 8)
+  (hdr_len + packet_id_len * arr_len + rs)
 
 let encode_header hdr =
   let id_arr_len = packet_id_len * List.length hdr.ack_message_ids in
@@ -144,15 +146,15 @@ let to_be_signed_header ?(more = 0) op header =
 type control = header * packet_id * Cstruct.t
 
 let pp_control ppf (hdr, id, payload) =
-  Fmt.pf ppf "%a id %lu payload %a" pp_header hdr id Cstruct.hexdump_pp payload
+  Fmt.pf ppf "%a message-id %lu payload %a" pp_header hdr id Cstruct.hexdump_pp payload
 
 let decode_control buf =
   decode_header buf >>= fun (header, off) ->
   guard (Cstruct.len buf >= off + 4) `Partial >>| fun () ->
-  let packet_id = Cstruct.BE.get_uint32 buf off
-  and payload = Cstruct.shift buf 4
+  let message_id = Cstruct.BE.get_uint32 buf off
+  and payload = Cstruct.shift buf (off + 4)
   in
-  (header, packet_id, payload)
+  (header, message_id, payload)
 
 let encode_control (header, packet_id, payload) =
   let hdr_buf, len = encode_header header in
@@ -161,11 +163,11 @@ let encode_control (header, packet_id, payload) =
   Cstruct.concat [ hdr_buf ; packet_id_buf ; payload ],
   len + Cstruct.len payload + 4
 
-let to_be_signed_control op (header, packet_id, _payload) =
-  (* rly? not length, not content!? *)
+let to_be_signed_control op (header, packet_id, payload) =
+  (* rly? not length!? *)
   let buf, off = to_be_signed_header ~more:packet_id_len op header in
   Cstruct.BE.set_uint32 buf off packet_id ;
-  buf
+  Cstruct.append buf payload
 
 let decode_data buf = Ok buf
 
@@ -178,7 +180,6 @@ let decode buf =
   guard (Cstruct.len buf - 2 >= plen) `Partial >>= fun () ->
   guard (Cstruct.len buf - 2 = plen) (`Leftover (plen + 2)) >>= fun () ->
   let payload = Cstruct.sub buf 3 (pred plen) in
-  Cstruct.hexdump payload ;
   let op, key = opkey lsr 3, opkey land 0x07 in
   int_to_operation op >>= fun operation ->
   (match operation with

@@ -1,13 +1,13 @@
 
 type client_state =
   | Expect_server_reset
-  | TLS_handshake
-  | TLS_established
+  | TLS_handshake of Tls.Engine.state
+  | TLS_established of Tls.Engine.state
 
 let pp_client_state ppf = function
   | Expect_server_reset -> Fmt.string ppf "expecting server reset"
-  | TLS_handshake -> Fmt.string ppf "TLS handshake in process"
-  | TLS_established -> Fmt.string ppf "TLS handshake established"
+  | TLS_handshake _ -> Fmt.string ppf "TLS handshake in process"
+  | TLS_established _ -> Fmt.string ppf "TLS handshake established"
 
 type t = {
   config : Openvpn_config.Conf_map.t ;
