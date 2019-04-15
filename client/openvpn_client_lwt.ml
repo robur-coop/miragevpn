@@ -47,27 +47,31 @@ let read_file filename =
 let jump _ filename =
   Lwt_main.run (
     read_file filename >>= fun str ->
-    match Openvpn_config.parse str with
-    | Error s ->
-      Logs.err (fun m -> m "error: %s" s) ;
-      Lwt.fail_with "config parser"
-    | Ok cfg ->
-      begin match State.retrieve_host cfg with
-      | Error () ->
-        Logs.err (fun m -> m "couldn't find remote in config %s" str) ;
-        Lwt.fail_with "couldn't find remote in config"
-      | Ok (`IP ip, port) -> Lwt.return (ip, port)
-      | Ok (`Domain name, port) ->
-        let res = Udns_client_lwt.create () in
-        Udns_client_lwt.gethostbyname res name >>= function
-        | Error `Msg x ->
-          Logs.err (fun m -> m "gethostbyname for %a returned an error: %s"
-                       Domain_name.pp name x) ;
-          Lwt.fail_with "resolver error"
-        | Ok ip -> Lwt.return (Ipaddr.V4 ip,port)
+    match
+      let open Rresult.R.Infix in
+      Openvpn_config.parse str >>= fun lines ->
+      Openvpn_config.parse_gadt lines >>= fun config ->
+      if Openvpn_config.is_valid_client_config config
+      then Ok config else Error "invalid config"
+    with
+    | Error s -> Lwt.fail_with ("config parser: " ^ s)
+    | Ok config ->
+      begin match Openvpn_config.Conf_map.(get Remote config) with
+        | (`IP ip, port) :: _ -> Lwt.return (ip, port)
+        | (`Domain name, port) :: _ ->
+          begin
+            let res = Udns_client_lwt.create () in
+            Udns_client_lwt.gethostbyname res name >>= function
+            | Error `Msg x ->
+              Logs.err (fun m -> m "gethostbyname for %a returned an error: %s"
+                           Domain_name.pp name x) ;
+              Lwt.fail_with "resolver error"
+            | Ok ip -> Lwt.return (Ipaddr.V4 ip,port)
+          end
+        | [] -> Lwt.fail_with "no remote"
       end >>= fun (ip,port) ->
       Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
-      begin match Engine.client cfg now () with
+      begin match Engine.client config now () with
       | Error () -> Lwt.fail_with "couldn't init client"
       | Ok (state, out) ->
         let s = ref state

@@ -39,33 +39,35 @@ let compute_hmac key p hmac_key =
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
 let client config now () =
-  let open Rresult.R.Infix in
-  hmac_keys config >>| fun (_a, my_hmac, _c, _d) ->
-  let state = {
-    config ; key = 0 ; state = Client_reset ;
-    my_hmac ;
-    my_session_id = 0xF00DBEEFL ;
-    my_packet_id = 1l ;
-    my_message_id = 0l ;
-    their_hmac = my_hmac ;
-    their_session_id = 0L ;
-    their_packet_id = 1l ;
-    their_message_id = 0l ;
-    their_last_acked_message_id = 0l ;
-  } in
-  let timestamp = ptime_to_ts_exn now in
-  let state, header = header state timestamp in
-  let state, m_id = next_message_id state in
-  let p =
-    let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
-    let hmac = compute_hmac state.key p my_hmac in
-    Packet.with_header { header with Packet.hmac } p
-  in
-  state, Packet.encode (state.key, p)
+  match Openvpn_config.Conf_map.(find Tls_auth_payload config) with
+  | None -> Logs.err (fun m -> m "no tls auth payload in config"); Error ()
+  | Some (_, my_hmac, _, _) ->
+    let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
+    let state = {
+      config ; key = 0 ; state = Expect_server_reset ;
+      my_hmac ;
+      my_session_id = 0xF00DBEEFL ;
+      my_packet_id = 1l ;
+      my_message_id = 0l ;
+      their_hmac = my_hmac ;
+      their_session_id = 0L ;
+      their_packet_id = 1l ;
+      their_message_id = 0l ;
+      their_last_acked_message_id = 0l ;
+    } in
+    let timestamp = ptime_to_ts_exn now in
+    let state, header = header state timestamp in
+    let state, m_id = next_message_id state in
+    let p =
+      let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
+      let hmac = compute_hmac state.key p my_hmac in
+      Packet.with_header { header with Packet.hmac } p
+    in
+    Ok (state, Packet.encode (state.key, p))
 
 let handle_inner state now data =
   match state.state, data with
-  | Client_reset, `Control (Packet.Hard_reset_server, _) ->
+  | Expect_server_reset, `Control (Packet.Hard_reset_server, _) ->
     (* we reply with ACK + TLS client hello! *)
     let state, out = header state (ptime_to_ts_exn now) in
     let p =
