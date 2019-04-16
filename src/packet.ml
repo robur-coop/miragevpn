@@ -8,11 +8,13 @@ open Rresult.R.Infix
 type error = [
   | `Partial
   | `Unknown_operation of int
+  | `Malformed of string
 ]
 
 let pp_error ppf = function
   | `Partial -> Fmt.string ppf "partial"
   | `Unknown_operation op -> Fmt.pf ppf "unknown operation %d" op
+  | `Malformed msg -> Fmt.pf ppf "malformed %s" msg
 
 type operation =
   | Soft_reset
@@ -239,19 +241,76 @@ let pp ppf (key, p) = match p with
   | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c
   | `Data (op, d) -> Fmt.pf ppf "key %x data %a: %a" key pp_operation op Cstruct.hexdump_pp d
 
-(*
-type tls_control = { (* v2 only! *)
+type tls_control = { (* key method v2 only! *)
   (* 4 zero bytes *)
-  key_method_type : int ; (* uint8 *)
-  key_source : Cstruct.t ; (* pre_master only defined for client -> server *)
+  (* key_method_type : int ; (* uint8 *) *)
+  pre_master : Cstruct.t ; (* only in client -> server, 48 bytes *)
+  random1 : Cstruct.t ; (* 32 bytes *)
+  random2 : Cstruct.t ; (* 32 bytes *)
   (* 16 bit len *)
-  options : string ; (* n bytes, null terminated -- record may end after options! *)
+  options : string ; (* null terminated -- record may end after options! *)
+  (* 16 bit len, user (0 terminated), 16 bit len, password (0 terminated) *)
+  user_pass : (string * string) option ;
   (* 16 bit len *)
-  user : string option ;
-  (* 16 bit len *)
-  password : string option ;
 }
 
+(* TODO produce this from config *)
+let options =
+  "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,comp-lzo,keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-client"
+
+let key_method = int_of_char '2' (* RLY? *)
+
+let encode_tls_data t =
+  let prefix = Cstruct.create 5 in
+  Cstruct.set_uint8 prefix 4 key_method;
+  let key_source = Cstruct.concat [ t.pre_master ; t.random1 ; t.random2 ] in
+  let opt_len = Cstruct.create 2 in
+  let null = Cstruct.create 1 in
+  Cstruct.BE.set_uint16 opt_len 0 (succ (String.length t.options));
+  let u_p = match t.user_pass with
+    | None -> Cstruct.empty
+    | Some (u, p) ->
+      let u_l = Cstruct.create 2 and p_l = Cstruct.create 2 in
+      Cstruct.BE.set_uint16 u_l 0 (succ (String.length u));
+      Cstruct.BE.set_uint16 p_l 0 (succ (String.length p));
+      Cstruct.concat [ u_l ; Cstruct.of_string u ; null ;
+                       p_l ; Cstruct.of_string p ; null ]
+  in
+  Cstruct.concat [ prefix ; key_source ; opt_len ; Cstruct.of_string t.options ; null ; u_p ]
+
+let decode_tls_data buf =
+  guard (Cstruct.len buf >= 7 + 64) `Partial >>= fun () ->
+  guard (Cstruct.BE.get_uint32 buf 0 = 0l)
+    (`Malformed "tls data must start with 32 bit 0") >>= fun () ->
+  guard (Cstruct.get_uint8 buf 4 = key_method)
+    (`Malformed "tls data key_method wrong") >>= fun () ->
+  (* skip pre_master *)
+  let random1 = Cstruct.sub buf 5 32
+  and random2 = Cstruct.sub buf (32 + 5) 32
+  in
+  let opt_len = Cstruct.BE.get_uint16 buf (64 + 5) in
+  guard (Cstruct.len buf >= 7 + 64 + opt_len) `Partial >>= fun () ->
+  let options = Cstruct.(to_string (sub buf (7 + 64) (pred opt_len))) in
+  guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len)) = 0)
+    (`Malformed "tls data option not null-terminated") >>= fun () ->
+  (if Cstruct.len buf = 7 + 64 + opt_len then
+     Ok None
+   else
+     guard (Cstruct.len buf >= 7 + 64 + opt_len + 4) `Partial >>= fun () ->
+     let u_len = Cstruct.BE.get_uint16 buf (7 + 64 + opt_len) in
+     guard (Cstruct.len buf >= 7 + 64 + opt_len + 4 + u_len) `Partial >>= fun () ->
+     let u = Cstruct.(to_string (sub buf (7 + 64 + opt_len + 2) (pred u_len))) in
+     guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len + 2 + u_len)) = 0)
+       (`Malformed "tls data username not null-terminated") >>= fun () ->
+     let p_len = Cstruct.BE.get_uint16 buf (7 + 64 + opt_len) in
+     guard (Cstruct.len buf >= 7 + 64 + opt_len + 4 + u_len + p_len) `Partial >>= fun () ->
+     let p = Cstruct.(to_string (sub buf (7 + 64 + opt_len + 4 + u_len) (pred p_len))) in
+     guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len + 4 + u_len + p_len)) = 0)
+       (`Malformed "tls data password not null-terminated") >>| fun () ->
+     Some (u, p)) >>| fun user_pass ->
+    { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
+
+(*
 type data = {
   hmac : Cstruct.t ; (* of cipertext IV + ciphertext if not disabled by --auth none *)
   ciphertext_iv : Cstruct.t ; (* size is cipher-dependent, if not disabled by --no-iv *)
