@@ -450,9 +450,10 @@ let parse_gadt : line list -> (Conf_map.t, 'err) result =
              | ("CERTIFICATE", x)::[] ->
                begin match X509.Encoding.parse x with
                | Some cert -> ret Ca cert
-               | None -> Error "Error parsing certificate"
+               | None -> Error "CA: invalid certificate"
                end
-             | _ -> Error "error parsing PEM-encoded structure"
+             | exception Invalid_argument _ -> Error "CA: Error parsing PEM container"
+             | _ -> Error "CA: PEM does not consist of a single certificate"
            end
          | `Blank
          | _ -> Ok acc
