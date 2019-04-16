@@ -11,7 +11,7 @@ let pp_client_state ppf = function
 
 type t = {
   linger : Cstruct.t ;
-  config : Openvpn_config.Conf_map.t ;
+  authenticator : X509.Authenticator.a ;
   key : int ;
   client_state : client_state ;
   my_hmac : Cstruct.t ;

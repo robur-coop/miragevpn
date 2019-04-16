@@ -47,10 +47,18 @@ let client config now () =
   match Openvpn_config.Conf_map.(find Tls_auth_payload config) with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
+    let authenticator = match Openvpn_config.Conf_map.(find Ca config) with
+      | None ->
+        Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
+        X509.Authenticator.null
+      | Some ca ->
+        Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
+        X509.Authenticator.chain_of_trust ~time:(now ()) [ ca ]
+    in
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let state = {
       linger = Cstruct.empty ;
-      config ; key = 0 ; client_state = Expect_server_reset ;
+      authenticator ; key = 0 ; client_state = Expect_server_reset ;
       my_hmac ;
       my_session_id = 0xF00DBEEFL ;
       my_packet_id = 1l ;
@@ -80,8 +88,10 @@ let handle_inner state now data =
     (* we reply with ACK + TLS client hello! *)
     let state, header = header state (ptime_to_ts_exn now) in
     let state, m_id = next_message_id state in
-    let authenticator = X509.Authenticator.null in
-    let tls, ch = Tls.(Engine.client (Config.client ~authenticator ())) in
+    let tls, ch =
+      let authenticator = state.authenticator in
+      Tls.(Engine.client (Config.client ~authenticator ()))
+    in
     let state = { state with client_state = TLS_handshake tls }
     and p = `Control (Packet.Control, (header, m_id, ch))
     in
