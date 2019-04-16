@@ -78,7 +78,7 @@ let jump _ filename =
         | [] -> Lwt.fail_with "no remote"
       end >>= fun (ip,port) ->
       Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
-      begin match Engine.client config now () with
+      begin match Engine.client config now Nocrypto.Rng.generate () with
       | Error (`Msg msg) -> Lwt.fail_with ("couldn't init client: " ^ msg)
       | Ok (state, out) ->
         let s = ref state

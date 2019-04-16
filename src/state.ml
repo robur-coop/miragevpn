@@ -12,6 +12,7 @@ let pp_client_state ppf = function
 type t = {
   linger : Cstruct.t ;
   authenticator : X509.Authenticator.a ;
+  rng : int -> Cstruct.t ;
   key : int ;
   client_state : client_state ;
   my_hmac : Cstruct.t ;

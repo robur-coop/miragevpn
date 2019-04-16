@@ -43,7 +43,7 @@ let hmac_and_out key hmac_key header p =
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode (key, p')
 
-let client config now () =
+let client config now rng () =
   match Openvpn_config.Conf_map.(find Tls_auth_payload config) with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
@@ -57,6 +57,7 @@ let client config now () =
     in
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let state = {
+      rng ;
       linger = Cstruct.empty ;
       authenticator ; key = 0 ; client_state = Expect_server_reset ;
       my_hmac ;
@@ -113,25 +114,58 @@ let handle_inner state now data =
     Logs.info (fun m -> m "TLS payload is %a"
                   Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
     let state, p =
-      match tls_response with
+      let client_state, payload =
+        if Tls.Engine.can_handle_appdata tls' then (* this only true after server send finished, i.e. tls_response == None *)
+          match tls_response with
+          | None ->
+            let tls_data = Packet.{ pre_master = state.rng 48 ; random1 = state.rng 32 ; random2 = state.rng 32 ;
+                                    options = Packet.options ; user_pass = None } (* TODO: from config *)
+            in
+            begin match Tls.Engine.send_application_data tls' [Packet.encode_tls_data tls_data] with
+              | None -> Logs.err (fun m -> m "send application data failed"); assert false
+              | Some (tls'', payload) -> TLS_established tls'', Some payload
+            end
+          | Some _ ->
+            Logs.err (fun m -> m "can handle appdata, but client wants to send something as well");
+            assert false
+        else
+          TLS_handshake tls', tls_response
+      in
+      let state = { state with client_state } in
+      match payload with
       | None -> state, `Ack header
       | Some payload ->
         let state, m_id = next_message_id state in
         state, `Control (Packet.Control, (header, m_id, payload))
     in
-    let client_state =
-      if Tls.Engine.can_handle_appdata tls' then
-        TLS_established tls' (* it's likely we need to send data *)
-      else
-        TLS_handshake tls' (* continue *)
-    in
-    let state = { state with client_state } in
     Logs.debug (fun m -> m "out state is %a" State.pp state);
     let out = hmac_and_out state.key state.my_hmac header p in
     Ok (state, [out])
   | TLS_handshake _, `Ack _ ->
     Logs.warn (fun m -> m "TODO: ignoring ACK");
     Ok (state, [])
+  | TLS_established tls, `Control (Packet.Control, (_, _, payload)) ->
+    (match Tls.Engine.handle_tls tls payload with
+     | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
+     | `Ok (r, `Response out, `Data d) ->
+       match r with
+       | `Eof | `Alert _ as e ->
+         Logs.err (fun m -> m "response %a, TLS payload %a"
+                      Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
+                      Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+         Error (`Tls e)
+       | `Ok tls' -> Ok (tls', out, d)) >>= fun (tls', tls_response, d) ->
+    let state = { state with client_state = TLS_established tls' } in
+    (match tls_response with
+     | None -> ()
+     | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
+    (match d with
+     | None -> Logs.err (fun m -> m "TLS established, no data"); Ok (state, [])
+     | Some data ->
+       Logs.info (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
+       Packet.decode_tls_data data >>= fun tls_data ->
+       Logs.info (fun m -> m "received tls data %a" Packet.pp_tls_data tls_data);
+       Ok (state, []))
   | _ -> Error (`No_transition (state, (state.key, data)))
 
 let expected_packet state data =

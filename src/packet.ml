@@ -241,7 +241,7 @@ let pp ppf (key, p) = match p with
   | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c
   | `Data (op, d) -> Fmt.pf ppf "key %x data %a: %a" key pp_operation op Cstruct.hexdump_pp d
 
-type tls_control = { (* key method v2 only! *)
+type tls_data = { (* key method v2 only! *)
   (* 4 zero bytes *)
   (* key_method_type : int ; (* uint8 *) *)
   pre_master : Cstruct.t ; (* only in client -> server, 48 bytes *)
@@ -254,11 +254,19 @@ type tls_control = { (* key method v2 only! *)
   (* 16 bit len *)
 }
 
+let pp_tls_data ppf t =
+  Fmt.pf ppf "TLS data PMS %a R1 %a R2 %a options %s %a"
+    Cstruct.hexdump_pp t.pre_master Cstruct.hexdump_pp t.random1
+    Cstruct.hexdump_pp t.random2 t.options
+    Fmt.(option ~none:(unit "no user + pass")
+           (prefix (unit "user: ") (pair ~sep:(unit ", pass") string string)))
+    t.user_pass
+
 (* TODO produce this from config *)
 let options =
   "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,comp-lzo,keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-client"
 
-let key_method = int_of_char '2' (* RLY? *)
+let key_method = 0x02
 
 let encode_tls_data t =
   let prefix = Cstruct.create 5 in
@@ -290,7 +298,7 @@ let decode_tls_data buf =
   in
   let opt_len = Cstruct.BE.get_uint16 buf (64 + 5) in
   guard (Cstruct.len buf >= 7 + 64 + opt_len) `Partial >>= fun () ->
-  let options = Cstruct.(to_string (sub buf (7 + 64) (pred opt_len))) in
+  let options = match opt_len with 0 | 1 -> "" | _ -> Cstruct.(to_string (sub buf (7 + 64) (pred opt_len))) in
   guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len)) = 0)
     (`Malformed "tls data option not null-terminated") >>= fun () ->
   (if Cstruct.len buf = 7 + 64 + opt_len then
@@ -299,15 +307,22 @@ let decode_tls_data buf =
      guard (Cstruct.len buf >= 7 + 64 + opt_len + 4) `Partial >>= fun () ->
      let u_len = Cstruct.BE.get_uint16 buf (7 + 64 + opt_len) in
      guard (Cstruct.len buf >= 7 + 64 + opt_len + 4 + u_len) `Partial >>= fun () ->
-     let u = Cstruct.(to_string (sub buf (7 + 64 + opt_len + 2) (pred u_len))) in
-     guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len + 2 + u_len)) = 0)
+     let u = match u_len with 0 | 1 -> "" | _ -> Cstruct.(to_string (sub buf (7 + 64 + opt_len + 2) (pred u_len))) in
+     guard (u_len = 0 || Cstruct.get_uint8 buf (pred (7 + 64 + opt_len + 2 + u_len)) = 0)
        (`Malformed "tls data username not null-terminated") >>= fun () ->
      let p_len = Cstruct.BE.get_uint16 buf (7 + 64 + opt_len) in
      guard (Cstruct.len buf >= 7 + 64 + opt_len + 4 + u_len + p_len) `Partial >>= fun () ->
-     let p = Cstruct.(to_string (sub buf (7 + 64 + opt_len + 4 + u_len) (pred p_len))) in
-     guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len + 4 + u_len + p_len)) = 0)
+     let p = match p_len with 0 | 1 -> "" | _ -> Cstruct.(to_string (sub buf (7 + 64 + opt_len + 4 + u_len) (pred p_len))) in
+     let end_of_data = 7 + 64 + opt_len + 4 + u_len + p_len in
+     guard (p_len = 0 || Cstruct.get_uint8 buf (pred end_of_data) = 0)
        (`Malformed "tls data password not null-terminated") >>| fun () ->
-     Some (u, p)) >>| fun user_pass ->
+     (* for some reason there may be some slack here... *)
+     if Cstruct.len buf > end_of_data then
+       Logs.warn (fun m -> m "slack at end of tls_data %a"
+                     Cstruct.hexdump_pp (Cstruct.shift buf end_of_data));
+     match u, p with
+     | "", "" -> None
+     | _ -> Some (u, p)) >>| fun user_pass ->
     { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
 
 (*
