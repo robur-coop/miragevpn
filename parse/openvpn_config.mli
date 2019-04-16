@@ -2,7 +2,6 @@
 type line
 val pp_line : line Fmt.t
 
-val parse : string -> (line list, string) result
 type inline_or_path = [ `Inline | `Path of string ]
 
 module Conf_map : sig
@@ -31,6 +30,6 @@ module Conf_map : sig
   include module type of Gmap.Make(K)
 end
 
-val parse_gadt : line list -> (Conf_map.t, string) result
+val parse : string -> (Conf_map.t, string) result
 
 val is_valid_client_config : Conf_map.t -> bool

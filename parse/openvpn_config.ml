@@ -391,7 +391,7 @@ let a_config_entry : 'a t =
   ]
 
 
-let parse config_str : (line list, 'x) result=
+let parse_internal config_str : (line list, 'x) result=
   let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string
@@ -409,56 +409,57 @@ let parse config_str : (line list, 'x) result=
       )
     )
 
-let parse_gadt : line list -> (Conf_map.t, 'err) result =
-  (Ok Conf_map.empty) |> List.fold_left
-    (fun acc line -> Rresult.R.bind acc (fun (acc:Conf_map.t) ->
-         let ret k v = Ok (Conf_map.add k v acc) in
-         let ok_add k v = Ok (Conf_map.update k (function
-             | None -> Some [v]
-             | Some old -> Some (v::old)
-           ) acc)
-         in
-         let unit k = ret k () in
-         match line with
-         | `Auth_retry kind     -> ret Auth_retry kind
-         | `Auth_user_pass kind -> ret Auth_user_pass kind
-         | `Bind   -> ret Bind true
-         | `Nobind -> ret Bind false
-         | `Cipher str -> ret Cipher str
-         | `Client     -> (* alias for --tls-client --pull *)
-           Rresult.(unit Tls_client >>| Conf_map.add Pull ())
-         | `Comp_lzo   -> unit Comp_lzo
-         | `Float      -> unit Float
-         | `Keepalive low_high -> ret Keepalive low_high
-         | `Mssfix int -> ret Mssfix int
-         | `Mute_replay_warnings -> unit Mute_replay_warnings
-         | `Passtos    -> unit Passtos
-         | `Remote host_port -> ok_add Remote host_port
-         | `Remote_random -> unit Remote_random
-         | `Replay_window low_high -> ret Replay_window low_high
-         | `Tls_client -> unit Tls_client
-         | `Tun_mtu i  -> ret Tun_mtu i
-         | `Verb    i  -> ret Verb i
-         | `Inline ("tls-auth", x) ->
-           Rresult.R.(Angstrom.parse_string a_tls_auth_payload x
-                      >>= ret Tls_auth_payload)
-         | `Inline ("connection", str) ->
-           Rresult.R.(Angstrom.parse_string a_remote str
-                      >>= fun (`Remote peer) -> ok_add Remote peer)
-         | `Inline ("ca", str) ->
-           begin match X509.Encoding.Pem.parse (Cstruct.of_string str) with
-             | ("CERTIFICATE", x)::[] ->
-               begin match X509.Encoding.parse x with
-               | Some cert -> ret Ca cert
-               | None -> Error "CA: invalid certificate"
-               end
-             | exception Invalid_argument _ -> Error "CA: Error parsing PEM container"
-             | _ -> Error "CA: PEM does not consist of a single certificate"
-           end
-         | `Blank
-         | _ -> Ok acc
-       )
-    )
+let parse config_str : (Conf_map.t, 'err) result =
+  let open Rresult in
+  parse_internal config_str >>=
+  List.fold_left
+    (fun acc line -> acc >>= fun acc ->
+      let ret k v = Ok (Conf_map.add k v acc) in
+      let ok_add k v = Ok (Conf_map.update k (function
+          | None -> Some [v]
+          | Some old -> Some (v::old)
+        ) acc)
+      in
+      let unit k = ret k () in
+      match line with
+      | `Auth_retry kind     -> ret Auth_retry kind
+      | `Auth_user_pass kind -> ret Auth_user_pass kind
+      | `Bind   -> ret Bind true
+      | `Nobind -> ret Bind false
+      | `Cipher str -> ret Cipher str
+      | `Client     -> (* alias for --tls-client --pull *)
+        unit Tls_client >>| Conf_map.add Pull ()
+      | `Comp_lzo   -> unit Comp_lzo
+      | `Float      -> unit Float
+      | `Keepalive low_high -> ret Keepalive low_high
+      | `Mssfix int -> ret Mssfix int
+      | `Mute_replay_warnings -> unit Mute_replay_warnings
+      | `Passtos    -> unit Passtos
+      | `Remote host_port -> ok_add Remote host_port
+      | `Remote_random -> unit Remote_random
+      | `Replay_window low_high -> ret Replay_window low_high
+      | `Tls_client -> unit Tls_client
+      | `Tun_mtu i  -> ret Tun_mtu i
+      | `Verb    i  -> ret Verb i
+      | `Inline ("tls-auth", x) ->
+        Angstrom.parse_string a_tls_auth_payload x
+        >>= ret Tls_auth_payload
+      | `Inline ("connection", str) ->
+        Angstrom.parse_string a_remote str
+        >>= fun (`Remote peer) -> ok_add Remote peer
+      | `Inline ("ca", str) ->begin
+          match X509.Encoding.Pem.parse (Cstruct.of_string str) with
+          | ("CERTIFICATE", x)::[] ->
+            begin match X509.Encoding.parse x with
+              | Some cert -> ret Ca cert
+              | None -> Error "CA: invalid certificate"
+            end
+          | exception Invalid_argument _ ->Error "CA: Error parsing PEM container"
+          | _ -> Error "CA: PEM does not consist of a single certificate"
+        end
+      | `Blank
+      | _ -> Ok acc
+    ) (Ok Conf_map.empty)
 
 let is_valid_client_config t =
   Conf_map.mem Remote t (* has a Remote *)
