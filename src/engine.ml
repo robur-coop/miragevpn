@@ -191,10 +191,43 @@ let handle_inner state now data =
     in
     let out = hmac_and_out state.key state.my_hmac header p in
     Ok (state, [out])
-  | TLS_handshake _, `Ack _ ->
-    Logs.warn (fun m -> m "TODO: ignoring ACK");
-    Ok (state, [])
   | TLS_established (tls, key), `Control (Packet.Control, (_, _, payload)) ->
+    (match Tls.Engine.handle_tls tls payload with
+     | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
+     | `Ok (r, `Response out, `Data d) ->
+       match r with
+       | `Eof | `Alert _ as e ->
+         Logs.err (fun m -> m "response %a, TLS payload %a"
+                      Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
+                      Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+         Error (`Tls e)
+       | `Ok tls' -> Ok (tls', out, d)) >>= fun (tls', tls_response, d) ->
+    (match tls_response with
+     | None -> ()
+     | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
+    (match d with
+     | None -> Error (`Msg "TLS established, expected data, received nothing")
+     | Some data ->
+       Logs.info (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
+       Packet.decode_tls_data data >>= fun tls_data ->
+       let keys = derive_keys state key tls_data in
+       Logs.info (fun m -> m "received tls data %a, keys %a"
+                     Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
+       (* now we send a PUSH_REQUEST\0 and see what happens *)
+       let state, header = header state (ptime_to_ts_exn now) in
+       let data = Cstruct.of_string "PUSH_REQUEST\000" in
+       let tls'', data =
+         match Tls.Engine.send_application_data tls' [data] with
+         | None -> Logs.err (fun m -> m "send application data failed"); assert false
+         | Some (tls'', payload) -> tls'', payload
+       in
+       let state, m_id = next_message_id state in
+       let p = `Control (Packet.Control, (header, m_id, data)) in
+       let out = hmac_and_out state.key state.my_hmac header p in
+       let client_state = Push_request_sent (tls'', keys) in
+       let state' = { state with client_state } in
+       Ok (state', [out]))
+  | Push_request_sent (tls, _key), `Control (Packet.Control, (_, _, payload)) ->
     (match Tls.Engine.handle_tls tls payload with
      | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
      | `Ok (r, `Response out, `Data d) ->
@@ -209,14 +242,14 @@ let handle_inner state now data =
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
     (match d with
-     | None -> Error (`Msg "TLS established, expected data, received nothing")
+     | None -> Error (`Msg "push request sent, expected data, received nothing")
      | Some data ->
-       Logs.info (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
-       Packet.decode_tls_data data >>= fun tls_data ->
-       let keys = derive_keys state key tls_data in
-       Logs.info (fun m -> m "received tls data %a, keys %a"
-                     Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
+       Logs.info (fun m -> m "push request, received TLS payload %S %a"
+                     (Cstruct.to_string data) Cstruct.hexdump_pp data);
        Ok (state, []))
+  | _, `Ack _ ->
+    Logs.warn (fun m -> m "TODO: ignoring ACK");
+    Ok (state, [])
   | _ -> Error (`No_transition (state, (state.key, data)))
 
 let expected_packet state data =

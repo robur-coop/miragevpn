@@ -9,11 +9,13 @@ type client_state =
   | Expect_server_reset
   | TLS_handshake of Tls.Engine.state
   | TLS_established of Tls.Engine.state * key_source
+  | Push_request_sent of Tls.Engine.state * Cstruct.t
 
 let pp_client_state ppf = function
   | Expect_server_reset -> Fmt.string ppf "expecting server reset"
   | TLS_handshake _ -> Fmt.string ppf "TLS handshake in process"
   | TLS_established _ -> Fmt.string ppf "TLS handshake established"
+  | Push_request_sent _ -> Fmt.string ppf "push request sent"
 
 type t = {
   linger : Cstruct.t ;
