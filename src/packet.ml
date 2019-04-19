@@ -146,7 +146,7 @@ let to_be_signed_header ?(more = 0) op header =
 type control = header * packet_id * Cstruct.t
 
 let pp_control ppf (hdr, id, payload) =
-  Fmt.pf ppf "%a message-id %lu payload %a" pp_header hdr id Cstruct.hexdump_pp payload
+  Fmt.pf ppf "%a message-id %lu@.payload %a" pp_header hdr id Cstruct.hexdump_pp payload
 
 let decode_control buf =
   decode_header buf >>= fun (header, off) ->

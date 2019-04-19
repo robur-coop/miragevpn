@@ -82,6 +82,56 @@ let pp_tls_error ppf = function
   | `Alert typ -> Fmt.pf ppf "alert from other side %s" (Tls.Packet.alert_type_to_string typ)
   | `Fail f -> Fmt.pf ppf "failure from our side %s" (Tls.Engine.string_of_failure f)
 
+let prf ?sids ~label ~secret ~client_random ~server_random len =
+  (* This is the same as TLS_1_0 / TLS_1_1:
+     - split secret into upper and lower half
+     - compute md5 hmac (with upper half) and sha1 hmac (with lower half)
+       - iterate until len reached: H seed ++ H (n-1 ++ seed)
+     - XOR the md5 and sha1 output
+  *)
+  let sids = match sids with
+    | None -> Cstruct.empty
+    | Some (c, s) ->
+      let buf = Cstruct.create 16 in
+      Cstruct.BE.set_uint64 buf 0 c;
+      Cstruct.BE.set_uint64 buf 8 s;
+      buf
+  in
+  let seed = Cstruct.(concat [ of_string label ; client_random ; server_random ; sids ]) in
+  let p_hash (hmac, hmac_len) key =
+    let rec expand a to_go =
+      let res = hmac ~key (Cstruct.append a seed) in
+      if to_go > hmac_len then
+        Cstruct.append res (expand (hmac ~key a) (to_go - hmac_len))
+      else
+        Cstruct.sub res 0 to_go
+    in
+    expand (hmac ~key seed) len
+  in
+  let halve secret =
+    let size = Cstruct.len secret in
+    if size mod 2 <> 0 then assert false;
+    Cstruct.split secret (size / 2)
+  in
+  let s1, s2 = halve secret in
+  let md5 = p_hash Nocrypto.Hash.MD5.(hmac, digest_size) s1
+  and sha = p_hash Nocrypto.Hash.SHA1.(hmac, digest_size) s2
+  in
+  Nocrypto.Uncommon.Cs.xor md5 sha
+
+let derive_keys (s : State.t) (key_source : State.key_source) (tls_data : Packet.tls_data) =
+  let master_key =
+    prf ~label:"OpenVPN master secret" ~secret:key_source.pre_master
+      ~client_random:key_source.random1 ~server_random:tls_data.random1 48
+  in
+  let keys =
+    prf ~label:"OpenVPN key expansion" ~secret:master_key
+      ~client_random:key_source.random2 ~server_random:tls_data.random2
+      ~sids:(s.my_session_id, s.their_session_id)
+      (4 * 64)
+  in
+  keys
+
 let handle_inner state now data =
   let open Rresult.R.Infix in
   match state.client_state, data with
@@ -118,12 +168,13 @@ let handle_inner state now data =
         if Tls.Engine.can_handle_appdata tls' then (* this only true after server send finished, i.e. tls_response == None *)
           match tls_response with
           | None ->
-            let tls_data = Packet.{ pre_master = state.rng 48 ; random1 = state.rng 32 ; random2 = state.rng 32 ;
-                                    options = Packet.options ; user_pass = None } (* TODO: from config *)
-            in
+            let pre_master, random1, random2 = state.rng 48, state.rng 32, state.rng 32 in
+            (* TODO: options and auth+pass from config *)
+            let tls_data = Packet.{ pre_master ; random1 ; random2 ; options = Packet.options ; user_pass = None } in
+            let key_source = { State.pre_master ; random1 ; random2 } in
             begin match Tls.Engine.send_application_data tls' [Packet.encode_tls_data tls_data] with
               | None -> Logs.err (fun m -> m "send application data failed"); assert false
-              | Some (tls'', payload) -> TLS_established tls'', Some payload
+              | Some (tls'', payload) -> TLS_established (tls'', key_source), Some payload
             end
           | Some _ ->
             Logs.err (fun m -> m "can handle appdata, but client wants to send something as well");
@@ -138,13 +189,12 @@ let handle_inner state now data =
         let state, m_id = next_message_id state in
         state, `Control (Packet.Control, (header, m_id, payload))
     in
-    Logs.debug (fun m -> m "out state is %a" State.pp state);
     let out = hmac_and_out state.key state.my_hmac header p in
     Ok (state, [out])
   | TLS_handshake _, `Ack _ ->
     Logs.warn (fun m -> m "TODO: ignoring ACK");
     Ok (state, [])
-  | TLS_established tls, `Control (Packet.Control, (_, _, payload)) ->
+  | TLS_established (tls, key), `Control (Packet.Control, (_, _, payload)) ->
     (match Tls.Engine.handle_tls tls payload with
      | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
      | `Ok (r, `Response out, `Data d) ->
@@ -154,17 +204,18 @@ let handle_inner state now data =
                       Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
                       Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
          Error (`Tls e)
-       | `Ok tls' -> Ok (tls', out, d)) >>= fun (tls', tls_response, d) ->
-    let state = { state with client_state = TLS_established tls' } in
+       | `Ok tls' -> Ok (tls', out, d)) >>= fun (_tls', tls_response, d) ->
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
     (match d with
-     | None -> Logs.err (fun m -> m "TLS established, no data"); Ok (state, [])
+     | None -> Error (`Msg "TLS established, expected data, received nothing")
      | Some data ->
        Logs.info (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
        Packet.decode_tls_data data >>= fun tls_data ->
-       Logs.info (fun m -> m "received tls data %a" Packet.pp_tls_data tls_data);
+       let keys = derive_keys state key tls_data in
+       Logs.info (fun m -> m "received tls data %a, keys %a"
+                     Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
        Ok (state, []))
   | _ -> Error (`No_transition (state, (state.key, data)))
 
@@ -178,7 +229,7 @@ let expected_packet state data =
   guard (Int32.equal state.their_packet_id hdr.Packet.packet_id)
     (`Non_monotonic_packet_id (state, hdr)) >>= fun () ->
   opt_guard (Int32.equal state.their_message_id) msg_id
-    (`Non_monotonic_message_id (state, hdr)) >>= fun () ->
+    (`Non_monotonic_message_id (state, msg_id, hdr)) >>= fun () ->
   guard (Int64.equal state.their_session_id 0L ||
          Int64.equal state.their_session_id hdr.Packet.local_session)
     (`Mismatch_their_session_id (state, hdr)) >>= fun () ->
@@ -195,9 +246,9 @@ let pp_error ppf = function
   | `Non_monotonic_packet_id (state, hdr) ->
     Fmt.pf ppf "non monotonic packet id in %a@ (state %a)"
       Packet.pp_header hdr pp state
-  | `Non_monotonic_message_id (state, hdr) ->
-    Fmt.pf ppf "non monotonic message id in %a@ (state %a)"
-      Packet.pp_header hdr pp state
+  | `Non_monotonic_message_id (state, msg_id, hdr) ->
+    Fmt.pf ppf "non monotonic message id %a in %a@ (state %a)"
+      Fmt.(option ~none:(unit "no") int32) msg_id Packet.pp_header hdr pp state
   | `Mismatch_their_session_id (state, hdr) ->
     Fmt.pf ppf "mismatched their session id in %a@ (state %a)"
       Packet.pp_header hdr pp state
@@ -211,6 +262,7 @@ let pp_error ppf = function
     Fmt.pf ppf "no transition found for data %a@ (state %a)"
       Packet.pp data pp state
   | `Tls tls_e -> pp_tls_error ppf tls_e
+  | `Msg msg -> Fmt.string ppf msg
 
 let handle state now buf =
   let open Rresult.R.Infix in
@@ -229,6 +281,9 @@ let handle state now buf =
       (* _first_ update state with last_received_message_id and packet_id *)
       expected_packet state data >>= fun state' ->
       handle_inner state' now data >>= fun (state', outs) ->
+      Logs.debug (fun m -> m "out state is %a" State.pp state);
+      Logs.debug (fun m -> m "outs is %a"
+                     Fmt.(list ~sep:(unit "@.") Cstruct.hexdump_pp) outs);
       handle_multi state' linger (out@outs)
   in
   handle_multi state (Cstruct.append state.linger buf) []

@@ -1,8 +1,14 @@
 
+type key_source = {
+  pre_master : Cstruct.t ; (* only in client -> server, 48 bytes *)
+  random1 : Cstruct.t ; (* 32 bytes *)
+  random2 : Cstruct.t ; (* 32 bytes *)
+}
+
 type client_state =
   | Expect_server_reset
   | TLS_handshake of Tls.Engine.state
-  | TLS_established of Tls.Engine.state
+  | TLS_established of Tls.Engine.state * key_source
 
 let pp_client_state ppf = function
   | Expect_server_reset -> Fmt.string ppf "expecting server reset"
