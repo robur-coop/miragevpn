@@ -1,6 +1,8 @@
 open Angstrom
 
-type inline_or_path = [ `Inline | `Path of string ]
+module A = Angstrom
+
+type 'a inline_or_path = [ `Need_inline of 'a | `Path of string * 'a ]
 
 module Conf_map = struct
   (*type server
@@ -15,23 +17,79 @@ module Conf_map = struct
     | Ca       : X509.t k
     | Cipher   : string k
     | Comp_lzo : flag k
+    | Connect_retry : (int * int) k
+    | Dev      : [`Null | `Tun of int | `Tap of int] k
     | Float    : flag k
+    | Ifconfig_nowarn : flag k
     | Keepalive : (int * int) k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
+    | Persist_key : flag k
     | Pull     : flag k
+    | Proto    : [`Tcp | `Udp] k
     | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
+    | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
     | Replay_window : (int * int) k
-    | Tls_client    : flag k
+    | Resolv_retry : [`Infinite | `Seconds of int] k
     | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Tls_client    : flag k
+    | Tls_min : [`v1_3 | `v1_2 | `v1_1 ] k
     | Tun_mtu : int k
     | Verb : int k
 
   module K = struct
     type 'a t = 'a k
-    let pp ppf (_v: _ t) _a = Fmt.pf ppf "hello"
+    let pp (type x) ppf (k: x t) (v:x) =
+      let p () = Fmt.pf ppf in
+      match k,v with
+      | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
+      | Auth_user_pass, (user,pass) ->
+        Fmt.pf ppf "auth-user-pass %S %S" user pass
+      | Bind, bool -> p() "bind %b" bool
+      | Ca, ca -> p() "ca # %s" (X509.common_name_to_string ca)
+      | Cipher, cipher -> p() "cipher %s" cipher
+      | Comp_lzo, () -> p() "comp-lzo # deprecated"
+      | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
+      | Dev, `Tap i -> p() "dev tap%d" i
+      | Dev, `Tun i -> p() "dev tun%d" i
+      | Dev, `Null -> p() "dev null"
+      | Float, () -> p() "float"
+      | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
+      | Keepalive, (low,high) -> p() "keepalive %d %d" low high
+      | Mssfix, int -> p() "mssfix %d" int
+      | Mute_replay_warnings, () -> p() "mute-replay-warnings"
+      | Passtos, () -> p() "passtos"
+      | Persist_key, () -> p() "persist-key"
+      | Proto, `Tcp -> p() "proto tcp"
+      | Proto, `Udp -> p() "proto udp"
+      | Pull, () -> p() "pull"
+      | Remote, lst ->
+        p() "remote @[<v>%a@]"
+          Fmt.(list ~sep:(unit" ") @@ pair ~sep:(unit ":")
+                 (fun ppf -> function
+                    | `Domain name -> Domain_name.pp ppf name
+                    | `IP ip -> Ipaddr.pp ppf ip)
+                 int (*port*)) lst
+      | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
+      | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
+      | Remote_random, () -> p() "remote-random"
+      | Replay_window, (low,high) -> p() "replay-window %d %d" low high
+      | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
+      | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
+      | Tls_auth, (a,b,c,d) ->
+        p() "tls-auth @[<v>%a@ %a@ %a@ %a@]"
+          Cstruct.hexdump_pp a
+          Cstruct.hexdump_pp b
+          Cstruct.hexdump_pp c
+          Cstruct.hexdump_pp d
+      | Tls_client, () -> p() "tls-client"
+      | Tls_min, ver -> p() "tls-min %s" (match ver with
+          | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
+      | Tun_mtu, int -> p() "tun-mtu %d" int
+      | Verb, int -> p() "verb %d" int
+
     let compare : type a b. a t -> b t -> (a,b) Gmap.Order.t = fun a b ->
       match Hashtbl.(compare (hash a) (hash b) ) with
       | 0 -> Obj.magic Gmap.Order.Eq (* GADT equality :-/ *)
@@ -42,107 +100,68 @@ module Conf_map = struct
   include Gmap.Make(K)
 
   let is_valid_client_config t =
-    mem Remote t (* has a Remote *)
-    && mem Tls_client t
-    && (mem Auth_user_pass t (* TODO or has client certificate ? *)
-       )
-
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let open Rresult in
+    R.reword_error (fun err -> "not a valid client config: " ^  err)
+      ( ensure_mem Remote "does not have a remote"  >>=fun()->
+        ensure_mem Tls_client "is not a TLS client" >>=fun()->
+        ensure_mem Auth_user_pass "does not have user/password"
+        (* ^-- TODO or has client certificate ? *)
+        >>= fun () ->
+        (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
+           Error "remote-cert-tls is not SERVER?!" else Ok ())
+      )
 end
 
+open Conf_map
+
 type line = [
-  | `Auth_retry of [ `Nointeract ]
-  | `Auth_user_pass of inline_or_path
-  | `Bind
+  | `Entries of b list
+  | `Entry of b
   | `Blank
-  | `Ca of inline_or_path
-  | `Cipher of string
-  | `Client
-  | `Comp_lzo
-  | `Connect_retry of int * int
-  | `Dev of [ `Null | `Tap of int | `Tun of int ]
-  | `Float
-  | `Ifconfig_nowarn
   | `Inline of string * string
-  | `Keepalive of int * int
-  | `Mssfix of int
-  | `Mute_replay_warnings
-  | `Nobind (* negation of `Bind *)
-  | `Passtos
-  | `Persist_key
-  | `Pkcs12 of [ `Inline | `Path of string ]
-  | `Proto of [ `Tcp | `Udp ]
   | `Proto_force of [ `Tcp | `Udp ]
-  | `Remote of [`IP of Ipaddr.t | `Domain of Domain_name.t] * int
   | `Remote_cert_key_usage of int
-  | `Remote_cert_tls of [ `Server ]
-  | `Remote_random
-  | `Replay_window of int * int
-  | `Resolv_retry of [ `Infinite ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
-  | `TLS_min of [ `v1_1 | `v1_2 | `v1_3 ]
-  | `Tls_auth of [ `Inline | `Path of string ]
-  | `Tls_client
-  | `Tun_mtu of int
-  | `Verb of int
+  | [`Ca | `Pkcs12 | `Tls_auth | `Auth_user_pass] inline_or_path
 ]
 
 let pp_line ppf (x : line) =
   let v = Fmt.pf in
   (match x with
+   | `Entries _ -> v ppf "entries TODO"
+   | `Entry _ -> v ppf "entry TODO"
    | `Blank -> v ppf "#"
-   | `Ca _ -> v ppf "ca"
-   | `Cipher x -> v ppf "cipher %S" x
-   | `Client -> v ppf "client"
-   | `Comp_lzo -> v ppf "comp-lzo"
-   | `Dev _name -> v ppf "dev _"
-   | `Ifconfig_nowarn -> v ppf "ifconfig-nowarn"
-   | `Auth_retry _ -> v ppf "auth-retry"
-   | `Connect_retry _ -> v ppf "connect-retry"
-   | `Auth_user_pass _ -> v ppf "auth-user-pass"
-   | `Keepalive _ -> v ppf "keepalive _ _"
-   | `Mssfix i -> v ppf "mssfix %d" i
-   | `Passtos -> v ppf "passtos"
-   | `Persist_key -> v ppf "persist-key"
-   | `Pkcs12 _path -> v ppf "pkcs12 _"
-   | `Remote_random -> v ppf "remote-random"
-   | `Proto _ -> v ppf "proto"
    | `Proto_force _ -> v ppf "proto-force"
-   | `Resolv_retry _ -> v ppf "resolv-retry"
    | `Socks_proxy _ -> v ppf "socks-proxy"
-   | `Nobind -> v ppf "nobind"
-   | `Bind -> v ppf "bind"
-   | `Float -> v ppf "float"
-   | `Tls_client -> v ppf "tls-client"
-   | `Tls_auth _ -> v ppf "tls-auth _"
-   | `TLS_min _ -> v ppf "tls-min _"
-   | `Remote_cert_tls _ -> v ppf "remote-cert-tls _"
    | `Remote_cert_key_usage f -> v ppf "remote-cert-ku %0.4x" f
-   | `Mute_replay_warnings -> v ppf "mute-replay-warnings"
-   | `Tun_mtu mtu -> v ppf "tun-mtu %d" mtu
-   | `Verb n -> v ppf "verb %d" n
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
-   | `Replay_window (_size, _duration) -> v ppf "replay-window _"
-   | `Remote (_name, _port) -> v ppf "remote _"
+   | `Path (fn, _) -> v ppf "inline-or-path: %s" fn
+   | `Need_inline _ -> v ppf "inline-or-path: inline"
   )
 
-let a_comment : unit t =
+let a_comment =
   (* TODO validate against openvpn behavior,
      - can a finished line like 'dev tun0' have a comment at the end?
      - can comments be prefixed by whitespace? *)
   ((char '#' <|> char ';') *>
    skip_many (skip @@ function '\n' -> false | _ -> true))
 
-let a_whitespace_unit : unit t =
+let a_whitespace_unit =
   skip (function | ' '| '\t' -> true
                  | _ -> false)
 
-let a_whitespace_or_comment : unit t =
+let a_whitespace_or_comment =
     a_comment <|> a_whitespace_unit
 
 let a_ign_whitespace = skip_many a_whitespace_or_comment
 let a_ign_whitespace_no_comment = skip_many a_whitespace_unit
 
 let a_whitespace = skip_many1 a_whitespace_or_comment
+
+let not_control_char = function '\x00'..'\x1f'|'\x7f' -> false | _ -> true
+
+let a_line predicate = take_while predicate <* (end_of_line <|> end_of_input)
 
 let a_number =
   take_while1 (function '0'..'9' -> true | _ -> false) >>= fun str ->
@@ -155,7 +174,10 @@ let a_number_range min' max' =
   a_number >>= function | n when n <= max' && min' <= n -> return n
                         | n -> fail (Fmt.strf "Number out of range: %d" n)
 
-let a_client = string "client" *> a_ign_whitespace *> return `Client
+let a_client =
+  (* alias for --tls-client --pull *)
+  string "client" *> a_ign_whitespace *>
+  return (`Entries [ B (Tls_client,()) ; B (Pull,()) ])
 
 (* TODO: "dev tun" is also valid, according to the manpage:
    "tunX - X can be omitted for a dynamic device" *)
@@ -173,7 +195,7 @@ let a_proto =
   string "proto" *> a_whitespace *> choice [
     string "tcp" *> return `Tcp ;
     string "udp" *> return `Udp
-  ] >>| fun prot -> `Proto prot
+  ] >>| fun prot -> `Entry (B(Proto,prot))
 
 let a_proto_force =
   string "proto-force" *> a_whitespace *> choice [
@@ -184,28 +206,26 @@ let a_proto_force =
 
 let a_resolv_retry =
   string "resolv-retry" *> a_whitespace *>
-  choice [ string "infinite" *> return `Infinite
-         ]
+  choice [ string "infinite" *> return `Infinite ;
+           a_number >>= fun i -> return (`Seconds i)
+         ] >>| fun i -> `Entry (B(Resolv_retry,i))
 
-let a_filepath =
+let a_filepath kind =
   choice [
-    string "[inline]" *> return `Inline ;
+    string "[inline]" *> return (`Need_inline kind);
     (take_while1 (function '\x00'..'\x1f' -> false
-                         | _ -> true) >>| fun p -> `Path p) ;
+                         | _ -> true) >>| fun p -> `Path (p,kind)) ;
   ]
 
-let a_option_with_single_path name =
+let a_option_with_single_path name kind =
   string name *> a_whitespace *>
-  a_filepath
+  a_filepath kind
 
-let a_ca =
-  a_option_with_single_path "ca"  >>| fun path -> `Ca path
+let a_ca = a_option_with_single_path "ca" `Ca
 
-let a_pkcs12 =
-  a_option_with_single_path "pkcs12" >>| fun path -> `Pkcs12 path
+let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 
-let a_tls_auth =
-  a_option_with_single_path "tls-auth"  >>| fun path -> `Tls_auth path
+let a_tls_auth = a_option_with_single_path "tls-auth" `Tls_auth
 
 let a_tls_auth_payload =
   let abort s = fail ("Invalid TLS AUTH HMAC key: " ^ s) in
@@ -229,25 +249,35 @@ let a_tls_auth_payload =
            sub cs (128+64) 64)
 
 let a_auth_user_pass =
-  a_option_with_single_path "auth-user-pass" >>| fun path ->
-  `Auth_user_pass path
+  a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
 let a_auth_user_pass_payload =
-  (* TODO windows newlines? *)
-  available >>= peek_string >>| String.split_on_char '\n' >>= function
-  | user::pass::_ -> return Conf_map.(Auth_user_pass, (user,pass))
-  | _ -> fail "reading user/password file failed"
+  (* To protect against a client passing a maliciously  formed  user‐
+     name  or  password string, the username string must consist only
+     of these characters: alphanumeric, underbar ('_'),  dash  ('-'),
+     dot  ('.'), or at ('@').  The password string can consist of any
+     printable characters except for CR or LF.  Any  illegal  charac‐
+     ters in either the username or password string will be converted
+     to underbar ('_').*)
+  ( a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
+                    | _ -> false) >>= fun user ->
+    a_line not_control_char >>= fun pass ->
+    end_of_input *> return (Auth_user_pass, (user,pass))
+  ) <|> fail "reading user/password file failed"
 
 let a_auth_retry =
   string "auth-retry" *> a_whitespace *>
   choice [ string "nointeract" *> return `Nointeract ] >>| fun x ->
-  `Auth_retry x
+  `Entry (B(Auth_retry,x))
 
 let a_socks_proxy =
   string "socks-proxy" *> a_whitespace *>
   take_till (function '\n'|'\t'|' ' -> false | _ -> true) >>= fun server ->
   ( (a_whitespace *> a_number_range 0 65535 >>= fun port ->
-     ( (a_whitespace *> a_filepath >>| fun path -> (server, port, path))
+     ( (a_whitespace *> a_filepath `Socks_proxy >>= function
+         | `Path (path, `Socks_proxy) -> return (server, port, `Path path)
+         | `Need_inline _ -> fail "socks-proxy not inlineable"
+         )
        <|> return (server, port, `Path "stdin")
      )
     )
@@ -255,23 +285,25 @@ let a_socks_proxy =
   ) >>| fun x -> `Socks_proxy x
 
 let a_flag =
+  let r k v = return (B (k,v)) in
   choice [
-    string "bind" *> return `Bind ;
-    string "nobind" *> return `Nobind ;
-    string "float" *> return `Float ;
-    string "remote-random" *> return `Remote_random ;
-    string "tls-client" *> return `Tls_client ;
-    string "persist-key" *> return `Persist_key ;
-    string "comp-lzo" *> return `Comp_lzo ; (* TODO warn! *)
-    string "passtos" *> return `Passtos ;
-    string "mute-replay-warnings" *> return `Mute_replay_warnings ;
-    string "ifconfig-nowarn" *> return `Ifconfig_nowarn ;
-  ]
+    string "bind" *> r Bind true ;
+    string "nobind" *> r Bind false ;
+    string "float" *> r Float () ;
+    string "remote-random" *> r Remote_random () ;
+    string "tls-client" *> r Tls_client () ;
+    string "persist-key" *> r Persist_key () ;
+    string "comp-lzo" *> r Comp_lzo () ; (* TODO warn! *)
+    string "passtos" *> r Passtos () ;
+    string "mute-replay-warnings" *> r Mute_replay_warnings () ;
+    string "ifconfig-nowarn" *> r Ifconfig_nowarn () ;
+  ] >>| fun b -> `Entry b
 
 let a_remote_cert_tls =
   string "remote-cert-tls" *> a_whitespace *>
-  choice [ string "server" *> return `Server
-         ] >>| fun purpose -> `Remote_cert_tls purpose
+  choice [ string "server" *> return `Server ;
+           string "client" *> return `Client ;
+         ] >>| fun purpose -> `Entry (B(Remote_cert_tls,purpose))
 
 let a_hex =
   let is_hex = function '0'..'9' | 'a'..'f' | 'A'..'F' -> true | _ -> false in
@@ -289,14 +321,16 @@ let a_tls_version_min =
   choice [ string "1.3" *> return `v1_3 ;
            string "1.2" *> return `v1_2 ;
            string "1.1" *> return `v1_1 ;
-         ] >>| fun v -> `TLS_min v
+         ] >>| fun v -> `Entry (B(Tls_min,v))
 
 let a_entry_one_number name =
   string name *> a_whitespace *> a_number
 
-let a_tun_mtu = a_entry_one_number "tun-mtu" >>| fun x -> `Tun_mtu x
+let a_tun_mtu = a_entry_one_number "tun-mtu" >>| fun x ->
+  `Entry (B(Tun_mtu,x))
 
-let a_mssfix = a_entry_one_number "mssfix" >>| fun x -> `Mssfix x
+let a_mssfix = a_entry_one_number "mssfix" >>| fun x ->
+  `Entry (B(Mssfix,x))
 (* TODO make a_mssfix use a_number_range *)
 
 let a_entry_two_numbers name =
@@ -304,21 +338,23 @@ let a_entry_two_numbers name =
   a_whitespace *> a_number >>| fun y -> x,y
 
 let a_connect_retry =
-  a_entry_two_numbers "connect-retry" >>| fun pair -> `Connect_retry pair
+  a_entry_two_numbers "connect-retry" >>| fun pair ->
+  `Entry (B (Connect_retry,pair))
 
 let a_keepalive =
-  a_entry_two_numbers "keepalive" >>| fun pair -> `Keepalive pair
+  a_entry_two_numbers "keepalive" >>| fun pair ->
+  `Entry (B(Keepalive,pair))
 
 let a_verb =
-  a_entry_one_number "verb" >>| fun x -> `Verb x
+  a_entry_one_number "verb" >>| fun x -> `Entries [B (Verb, x)]
 
 let a_cipher =
   string "cipher" *> a_whitespace *>
   take_while1 (function ' '| '\n' | '\t' -> false | _ -> true)
-  >>| fun v -> `Cipher v
+  >>| fun v -> `Entry (B(Cipher, v))
 
 let a_replay_window =
-  let replay_window a b = `Replay_window (a, b) in
+  let replay_window a b = `Entry (B (Replay_window, (a, b))) in
   lift2 replay_window
     (string "replay-window" *> a_whitespace *> a_number)
     (option 15 (a_whitespace *> a_number))
@@ -345,7 +381,7 @@ let a_domain_name =
 (* TODO finish "remote [port] [proto]" by adding proto (tcp/udp/tcp4/tcp6/udp4/udp6)
    what are the semantics if proto and remote proto is provided? *)
 let a_remote =
-  let remote a b = `Remote (a, b) in
+  let remote a b = a, b in
   lift2 remote
     (string "remote" *> a_whitespace *>
      choice [
@@ -355,6 +391,8 @@ let a_remote =
      ]
     )
     (option 1194 (a_whitespace *> a_number))
+
+let a_remote_entry = a_remote >>| fun (a,b) -> `Entry (B (Remote, [a,b]))
 
 let a_inline =
   (* TODO strip trailing newlines inside block ?*)
@@ -373,14 +411,14 @@ explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
 link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
 proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
 
-let a_config_entry : 'a t =
+let a_config_entry : line A.t =
   a_ign_whitespace_no_comment *>
   Angstrom.choice [
     a_client ;
-    (a_dev >>| fun name -> `Dev name) ;
+    (a_dev >>| fun name -> `Entry (B (Dev,name))) ;
     a_proto ;
     a_proto_force ;
-    (a_resolv_retry >>| fun x -> `Resolv_retry x) ;
+    a_resolv_retry ;
     a_tls_auth ;
     a_remote_cert_tls ;
     a_remote_cert_key_usage ;
@@ -396,7 +434,7 @@ let a_config_entry : 'a t =
     a_tun_mtu ;
     a_cipher ;
     a_replay_window ;
-    a_remote ;
+    a_remote_entry ;
     a_pkcs12 ;
     a_flag ;
     a_ca ;
@@ -433,44 +471,33 @@ let parse_next effect initial_state : (parser_state, 'err) result =
   let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
     function
     | (hd:line)::tl ->
-      let multi kv = loop (List.fold_left (fun acc (k,v) ->
-          Conf_map.add k v acc) acc kv) tl in
-      let ret k v = multi [k,v] and unit k = multi [k,()] in
-      let ok_add k v = loop (Conf_map.update k (function
+      (* TODO should make sure not to override without conflict resolution,
+         ie use addb_unless_bound and so on... *)
+      let multib kv = loop (List.fold_left (fun acc b ->
+          addb b acc) acc kv) tl in
+      let multi lst = List.map (fun (k,v) -> B(k,v)) lst|> multib in
+      let ret k v = multi [k,v] in
+      let ok_add k v = loop (update k (function
           | None -> Some [v]
           | Some old -> Some (v::old)
         ) acc) tl in
       begin match hd with
-        | `Auth_user_pass (`Path wanted_name) ->
+        | `Path (wanted_name, kind) ->
           begin match effect with
             | Some `File (effect_name, contents) when
                 String.equal effect_name wanted_name ->
-              Angstrom.parse_string a_auth_user_pass_payload
-                contents >>= fun (k,v) -> ret k v
+              begin match kind with
+                | `Auth_user_pass ->
+                  Angstrom.parse_string a_auth_user_pass_payload
+                    contents >>= fun (k,v) -> ret k v
+                | _ -> Error "Unknown file type requested"
+              end
             | _ -> Ok (`Need_file (wanted_name, (hd::tl, acc)))
           end
-      | `Auth_retry kind -> ret Auth_retry kind
-      | `Bind       -> ret Bind true
-      | `Cipher str -> ret Cipher str
-      | `Client     -> (* alias for --tls-client --pull *)
-        multi [Tls_client,() ; Pull, ()]
-      | `Comp_lzo   -> unit Comp_lzo
-      | `Float      -> unit Float
-      | `Keepalive low_high -> ret Keepalive low_high
-      | `Mssfix int -> ret Mssfix int
-      | `Mute_replay_warnings -> unit Mute_replay_warnings
-      | `Nobind -> ret Bind false
-      | `Passtos    -> unit Passtos
-      | `Remote host_port -> ok_add Remote host_port
-      | `Remote_random -> unit Remote_random
-      | `Replay_window low_high -> ret Replay_window low_high
-      | `Tls_client -> unit Tls_client
-      | `Tun_mtu i  -> ret Tun_mtu i
-      | `Verb    i  -> ret Verb i
       | `Inline ("tls-auth", x) ->
         parse_string a_tls_auth_payload x >>= ret Tls_auth
       | `Inline ("connection", str) ->
-        parse_string a_remote str >>= fun (`Remote peer) -> ok_add Remote peer
+        parse_string a_remote str >>= fun peer -> ok_add Remote peer
       | `Inline ("ca", str) ->begin
           match X509.Encoding.Pem.parse (Cstruct.of_string str) with
           | ("CERTIFICATE", x)::[] ->
@@ -483,8 +510,10 @@ let parse_next effect initial_state : (parser_state, 'err) result =
           | _ -> Error "CA: PEM does not consist of a single certificate"
         end
       | `Blank -> loop acc tl
+      | `Entry (B(k,v)) -> ret k v
+      | `Entries lst -> multib lst
       | line ->
-        Logs.warn (fun m -> m"ignoring unrecognized option: %a" pp_line line) ;
+        Logs.warn (fun m -> m"ignoring unimplemented option: %a" pp_line line) ;
         loop acc tl
       end
     | [] -> Ok (`Done acc : parser_state)
@@ -497,7 +526,7 @@ let parse_next effect initial_state : (parser_state, 'err) result =
 let parse_begin config_str : (parser_state, 'err) result =
   let open Rresult in
   parse_internal config_str >>= fun lines ->
-  parse_next None (`Partial (lines, Conf_map.empty))
+  parse_next None (`Partial (lines, empty))
 
 let parse_easy ~string_of_file config_str =
   let open Rresult in
