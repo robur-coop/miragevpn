@@ -45,21 +45,23 @@ let hmac_and_out key hmac_key header p =
 
 
 let client config now rng () =
-  match Openvpn_config.Conf_map.(find Tls_auth config) with
+  match Openvpn_config.Conf_map.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
-    let authenticator = match Openvpn_config.Conf_map.(find Ca config) with
+    let authenticator = match Openvpn_config.Conf_map.find Ca config with
       | None ->
         Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
         X509.Authenticator.null
       | Some ca ->
         Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
         X509.Authenticator.chain_of_trust ~time:(now ()) [ ca ]
+    and user_pass = Openvpn_config.Conf_map.find Auth_user_pass config
     in
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let state = {
       rng ;
       linger = Cstruct.empty ;
+      user_pass ;
       authenticator ; key = 0 ; client_state = Expect_server_reset ;
       my_hmac ;
       my_session_id = 0xF00DBEEFL ;
@@ -170,8 +172,7 @@ let handle_inner state now data =
           match tls_response with
           | None ->
             let pre_master, random1, random2 = state.rng 48, state.rng 32, state.rng 32 in
-            (* TODO: options and auth+pass from config *)
-            let tls_data = Packet.{ pre_master ; random1 ; random2 ; options = Packet.options ; user_pass = None } in
+            let tls_data = Packet.{ pre_master ; random1 ; random2 ; options = Packet.options ; user_pass = state.user_pass } in
             let key_source = { State.pre_master ; random1 ; random2 } in
             begin match Tls.Engine.send_application_data tls' [Packet.encode_tls_data tls_data] with
               | None -> Logs.err (fun m -> m "send application data failed"); assert false
@@ -215,19 +216,24 @@ let handle_inner state now data =
        Logs.info (fun m -> m "received tls data %a, keys %a"
                      Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
        (* now we send a PUSH_REQUEST\0 and see what happens *)
-       let state, header = header state (ptime_to_ts_exn now) in
-       let data = Cstruct.of_string "PUSH_REQUEST\000" in
+       let state, ack_header = header state (ptime_to_ts_exn now) in
+       (* first send an ack for the received key data packet (this needs to be
+          a separate packet from the PUSH_REQUEST for unknown reasons) *)
+       let ack = `Ack ack_header in
+       let ack_out = hmac_and_out state.key state.my_hmac ack_header ack in
+       let state, data_header = header state (ptime_to_ts_exn now) in
+       let data = Cstruct.of_string "PUSH_REQUEST\x00" in
        let tls'', data =
          match Tls.Engine.send_application_data tls' [data] with
          | None -> Logs.err (fun m -> m "send application data failed"); assert false
          | Some (tls'', payload) -> tls'', payload
        in
        let state, m_id = next_message_id state in
-       let p = `Control (Packet.Control, (header, m_id, data)) in
-       let out = hmac_and_out state.key state.my_hmac header p in
+       let p = `Control (Packet.Control, (data_header, m_id, data)) in
+       let data_out = hmac_and_out state.key state.my_hmac data_header p in
        let client_state = Push_request_sent (tls'', keys) in
        let state' = { state with client_state } in
-       Ok (state', [out]))
+       Ok (state', [ack_out ; data_out]))
   | Push_request_sent (tls, _key), `Control (Packet.Control, (_, _, payload)) ->
     (match Tls.Engine.handle_tls tls payload with
      | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
@@ -315,7 +321,7 @@ let handle state now buf =
       (* _first_ update state with last_received_message_id and packet_id *)
       expected_packet state data >>= fun state' ->
       handle_inner state' now data >>= fun (state', outs) ->
-      Logs.debug (fun m -> m "out state is %a" State.pp state);
+      Logs.debug (fun m -> m "out state is %a" State.pp state');
       Logs.debug (fun m -> m "outs is %a"
                      Fmt.(list ~sep:(unit "@.") Cstruct.hexdump_pp) outs);
       handle_multi state' linger (out@outs)
