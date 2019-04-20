@@ -1,4 +1,3 @@
-
 open Lwt.Infix
 open Openvpn
 
@@ -51,6 +50,7 @@ let read_file filename =
   Bytes.unsafe_to_string buf
 
 let jump _ filename =
+  Printexc.record_backtrace true;
   Lwt_main.run (
     Nocrypto_entropy_lwt.initialize () >>= fun () ->
     read_file filename >>= fun str ->
