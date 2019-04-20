@@ -31,7 +31,7 @@ let header state timestamp =
 let ptime_to_ts_exn now =
   let now = now () in
   match Ptime.(Span.to_int_s (to_span now)) with
-  | None -> assert false
+  | None -> assert false (* this will break in 2038-01-19 *)
   | Some x -> Int32.of_int x
 
 let compute_hmac key p hmac_key =
@@ -42,7 +42,6 @@ let hmac_and_out key hmac_key header p =
   let hmac = compute_hmac key p hmac_key in
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode (key, p')
-
 
 let client config now rng () =
   match Openvpn_config.Conf_map.find Tls_auth config with
@@ -86,7 +85,8 @@ let pp_tls_error ppf = function
   | `Fail f -> Fmt.pf ppf "failure from our side %s" (Tls.Engine.string_of_failure f)
 
 let prf ?sids ~label ~secret ~client_random ~server_random len =
-  (* This is the same as TLS_1_0 / TLS_1_1:
+  (* This is the same as TLS_1_0 / TLS_1_1
+     (copied from ocaml-tls/lib/handshake_crypto.ml):
      - split secret into upper and lower half
      - compute md5 hmac (with upper half) and sha1 hmac (with lower half)
        - iterate until len reached: H seed ++ H (n-1 ++ seed)
@@ -100,7 +100,9 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
       Cstruct.BE.set_uint64 buf 8 s;
       buf
   in
-  let seed = Cstruct.(concat [ of_string label ; client_random ; server_random ; sids ]) in
+  let seed =
+    Cstruct.(concat [ of_string label ; client_random ; server_random ; sids ])
+  in
   let p_hash (hmac, hmac_len) key =
     let rec expand a to_go =
       let res = hmac ~key (Cstruct.append a seed) in
@@ -135,7 +137,7 @@ let derive_keys (s : State.t) (key_source : State.key_source) (tls_data : Packet
   in
   keys
 
-let handle_inner state now data =
+let client_handle state now data =
   let open Rresult.R.Infix in
   match state.client_state, data with
   | Expect_server_reset, `Control (Packet.Hard_reset_server, _) ->
@@ -320,7 +322,7 @@ let handle state now buf =
                     State.pp state Packet.pp (key, data)) ;
       (* _first_ update state with last_received_message_id and packet_id *)
       expected_packet state data >>= fun state' ->
-      handle_inner state' now data >>= fun (state', outs) ->
+      client_handle state' now data >>= fun (state', outs) ->
       Logs.debug (fun m -> m "out state is %a" State.pp state');
       Logs.debug (fun m -> m "outs is %a"
                      Fmt.(list ~sep:(unit "@.") Cstruct.hexdump_pp) outs);
