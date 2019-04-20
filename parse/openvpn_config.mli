@@ -41,12 +41,7 @@ module Conf_map : sig
   val is_valid_client_config : t -> (unit, string) result
 end
 
-type parser_partial_state
-type parser_state = [`Done of Conf_map.t
-                    | `Partial of parser_partial_state
-                    | `Need_file of (string * parser_partial_state) ]
-type parser_effect = [`File of string * string] option
-
-val parse_easy : string_of_file:(string -> (string,string) result) ->
+val parse : string_of_file:(string -> (string,string) result) ->
   string -> (Conf_map.t, string) result
-(** looks up references to external files also*)
+(** Parses a configuration string, looking up references to external files
+    as needed.*)

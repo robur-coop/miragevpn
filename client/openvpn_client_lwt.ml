@@ -57,7 +57,7 @@ let jump _ filename =
     match
       let open Rresult.R.Infix in
       let string_of_file fn = Ok (Lwt_main.run (read_file fn)) in
-      Openvpn_config.parse_easy ~string_of_file str >>= fun config ->
+      Openvpn_config.parse ~string_of_file str >>= fun config ->
       Openvpn_config.Conf_map.is_valid_client_config config >>| fun () -> config
     with
     | Error s -> Lwt.fail_with ("config parser: " ^ s)

@@ -223,6 +223,17 @@ let a_option_with_single_path name kind =
 
 let a_ca = a_option_with_single_path "ca" `Ca
 
+let a_ca_payload str =
+  match X509.Encoding.Pem.parse (Cstruct.of_string str) with
+  | ("CERTIFICATE", x)::[] ->
+    begin match X509.Encoding.parse x with
+      | Some cert -> Ok cert
+      | None -> Error "CA: invalid certificate"
+    end
+  | exception Invalid_argument _ ->
+    Error "CA: Error parsing PEM container"
+  | _ -> Error "CA: PEM does not consist of a single certificate"
+
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 
 let a_tls_auth = a_option_with_single_path "tls-auth" `Tls_auth
@@ -466,7 +477,7 @@ type parser_state = [`Done of Conf_map.t
                     | `Need_file of (string * parser_partial_state) ]
 type parser_effect = [`File of string * string] option
 
-let parse_next effect initial_state : (parser_state, 'err) result =
+let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
   let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
     function
@@ -488,27 +499,20 @@ let parse_next effect initial_state : (parser_state, 'err) result =
                 String.equal effect_name wanted_name ->
               begin match kind with
                 | `Auth_user_pass ->
-                  Angstrom.parse_string a_auth_user_pass_payload
-                    contents >>= fun (k,v) -> ret k v
-                | _ -> Error "Unknown file type requested"
+                  parse_string a_auth_user_pass_payload contents
+                  >>= fun (k,v) -> ret k v
+                | `Ca -> a_ca_payload contents >>= ret Ca
+                | `Tls_auth ->
+                  parse_string a_tls_auth_payload contents >>= ret Tls_auth
+                | _ -> Error "Unknown file type requested TODO"
               end
             | _ -> Ok (`Need_file (wanted_name, (hd::tl, acc)))
           end
       | `Inline ("tls-auth", x) ->
         parse_string a_tls_auth_payload x >>= ret Tls_auth
       | `Inline ("connection", str) ->
-        parse_string a_remote str >>= fun peer -> ok_add Remote peer
-      | `Inline ("ca", str) ->begin
-          match X509.Encoding.Pem.parse (Cstruct.of_string str) with
-          | ("CERTIFICATE", x)::[] ->
-            begin match X509.Encoding.parse x with
-              | Some cert -> ret Ca cert
-              | None -> Error "CA: invalid certificate"
-            end
-          | exception Invalid_argument _ ->
-            Error "CA: Error parsing PEM container"
-          | _ -> Error "CA: PEM does not consist of a single certificate"
-        end
+        parse_string a_remote str >>= ok_add Remote
+      | `Inline ("ca", str) -> a_ca_payload str >>= ret Ca
       | `Blank -> loop acc tl
       | `Entry (B(k,v)) -> ret k v
       | `Entries lst -> multib lst
@@ -528,7 +532,7 @@ let parse_begin config_str : (parser_state, 'err) result =
   parse_internal config_str >>= fun lines ->
   parse_next None (`Partial (lines, empty))
 
-let parse_easy ~string_of_file config_str =
+let parse ~string_of_file config_str =
   let open Rresult in
   let rec loop = function
     | `Done conf -> Ok conf

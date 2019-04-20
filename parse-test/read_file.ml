@@ -15,7 +15,7 @@ let read_config_file fn =
     in loop st_size ;
     Bytes.to_string buf
   in
-  parse_easy ~string_of_file:(fun fn -> Ok (str fn)) (str fn)
+  parse ~string_of_file:(fun fn -> Ok (str fn)) (str fn)
 
 let () =
   if not !Sys.interactive then
