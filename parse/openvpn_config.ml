@@ -73,7 +73,8 @@ module Conf_map = struct
       | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
       | Auth_user_pass, (user,pass) ->
         Fmt.pf ppf "auth-user-pass %S %S" user pass
-      | Bind, bool -> p() "bind %b" bool
+      | Bind, true -> p() "bind"
+      | Bind, false -> p() "nobind"
       | Ca, ca -> p() "ca # %s" (X509.common_name_to_string ca)
       | Cipher, cipher -> p() "cipher %s" cipher
       | Comp_lzo, () -> p() "comp-lzo # deprecated"
