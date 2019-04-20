@@ -41,8 +41,34 @@ module Conf_map = struct
 
   module K = struct
     type 'a t = 'a k
-    let pp (type x) ppf (k: x t) (v:x) =
+    let pp _ppf _k _v = () (* TODO will be removed from Gmap *)
+
+    let compare : type a b. a t -> b t -> (a,b) Gmap.Order.t = fun a b ->
+      match Hashtbl.(compare (hash a) (hash b) ) with
+      | 0 -> Obj.magic Gmap.Order.Eq (* GADT equality :-/ *)
+      | x when x < 0 -> Lt
+      | _ -> Gt
+  end
+
+  include Gmap.Make(K)
+
+  let is_valid_client_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let open Rresult in
+    R.reword_error (fun err -> "not a valid client config: " ^  err)
+      ( ensure_mem Remote "does not have a remote"  >>=fun()->
+        ensure_mem Tls_client "is not a TLS client" >>=fun()->
+        ensure_mem Auth_user_pass "does not have user/password"
+        (* ^-- TODO or has client certificate ? *)
+        >>= fun () ->
+        (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
+           Error "remote-cert-tls is not SERVER?!" else Ok ())
+      )
+
+  let pp ppf t =
+    let pp ppf (b:b) =
       let p () = Fmt.pf ppf in
+      let B (k,v) = b in
       match k,v with
       | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
       | Auth_user_pass, (user,pass) ->
@@ -89,28 +115,8 @@ module Conf_map = struct
           | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
       | Tun_mtu, int -> p() "tun-mtu %d" int
       | Verb, int -> p() "verb %d" int
+    in Fmt.(pf ppf "@[<v>%a@]" (list ~sep:(unit"@ ") pp) (bindings t))
 
-    let compare : type a b. a t -> b t -> (a,b) Gmap.Order.t = fun a b ->
-      match Hashtbl.(compare (hash a) (hash b) ) with
-      | 0 -> Obj.magic Gmap.Order.Eq (* GADT equality :-/ *)
-      | x when x < 0 -> Lt
-      | _ -> Gt
-  end
-
-  include Gmap.Make(K)
-
-  let is_valid_client_config t =
-    let ensure_mem k err = if mem k t then Ok () else Error err in
-    let open Rresult in
-    R.reword_error (fun err -> "not a valid client config: " ^  err)
-      ( ensure_mem Remote "does not have a remote"  >>=fun()->
-        ensure_mem Tls_client "is not a TLS client" >>=fun()->
-        ensure_mem Auth_user_pass "does not have user/password"
-        (* ^-- TODO or has client certificate ? *)
-        >>= fun () ->
-        (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
-           Error "remote-cert-tls is not SERVER?!" else Ok ())
-      )
 end
 
 open Conf_map
