@@ -43,8 +43,9 @@ let hmac_and_out key hmac_key header p =
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode (key, p')
 
+
 let client config now rng () =
-  match Openvpn_config.Conf_map.(find Tls_auth_payload config) with
+  match Openvpn_config.Conf_map.(find Tls_auth config) with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
     let authenticator = match Openvpn_config.Conf_map.(find Ca config) with

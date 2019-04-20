@@ -10,7 +10,7 @@ module Conf_map = struct
 
   type 'a k =
     | Auth_retry : [`Nointeract] k
-    | Auth_user_pass : inline_or_path k
+    | Auth_user_pass : (string * string) k
     | Bind     : bool k
     | Ca       : X509.t k
     | Cipher   : string k
@@ -25,7 +25,7 @@ module Conf_map = struct
     | Remote_random : flag k
     | Replay_window : (int * int) k
     | Tls_client    : flag k
-    | Tls_auth_payload : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tun_mtu : int k
     | Verb : int k
 
@@ -40,6 +40,13 @@ module Conf_map = struct
   end
 
   include Gmap.Make(K)
+
+  let is_valid_client_config t =
+    mem Remote t (* has a Remote *)
+    && mem Tls_client t
+    && (mem Auth_user_pass t (* TODO or has client certificate ? *)
+       )
+
 end
 
 type line = [
@@ -225,6 +232,12 @@ let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" >>| fun path ->
   `Auth_user_pass path
 
+let a_auth_user_pass_payload =
+  (* TODO windows newlines? *)
+  available >>= peek_string >>| String.split_on_char '\n' >>= function
+  | user::pass::_ -> return Conf_map.(Auth_user_pass, (user,pass))
+  | _ -> fail "reading user/password file failed"
+
 let a_auth_retry =
   string "auth-retry" *> a_whitespace *>
   choice [ string "nointeract" *> return `Nointeract ] >>| fun x ->
@@ -409,31 +422,44 @@ let parse_internal config_str : (line list, 'x) result=
       )
     )
 
-let parse config_str : (Conf_map.t, 'err) result =
+type parser_partial_state = line list * Conf_map.t
+type parser_state = [`Done of Conf_map.t
+                    | `Partial of parser_partial_state
+                    | `Need_file of (string * parser_partial_state) ]
+type parser_effect = [`File of string * string] option
+
+let parse_next effect initial_state : (parser_state, 'err) result =
   let open Rresult in
-  parse_internal config_str >>=
-  List.fold_left
-    (fun acc line -> acc >>= fun acc ->
-      let ret k v = Ok (Conf_map.add k v acc) in
-      let ok_add k v = Ok (Conf_map.update k (function
+  let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
+    function
+    | (hd:line)::tl ->
+      let multi kv = loop (List.fold_left (fun acc (k,v) ->
+          Conf_map.add k v acc) acc kv) tl in
+      let ret k v = multi [k,v] and unit k = multi [k,()] in
+      let ok_add k v = loop (Conf_map.update k (function
           | None -> Some [v]
           | Some old -> Some (v::old)
-        ) acc)
-      in
-      let unit k = ret k () in
-      match line with
-      | `Auth_retry kind     -> ret Auth_retry kind
-      | `Auth_user_pass kind -> ret Auth_user_pass kind
-      | `Bind   -> ret Bind true
-      | `Nobind -> ret Bind false
+        ) acc) tl in
+      begin match hd with
+        | `Auth_user_pass (`Path wanted_name) ->
+          begin match effect with
+            | Some `File (effect_name, contents) when
+                String.equal effect_name wanted_name ->
+              Angstrom.parse_string a_auth_user_pass_payload
+                contents >>= fun (k,v) -> ret k v
+            | _ -> Ok (`Need_file (wanted_name, (hd::tl, acc)))
+          end
+      | `Auth_retry kind -> ret Auth_retry kind
+      | `Bind       -> ret Bind true
       | `Cipher str -> ret Cipher str
       | `Client     -> (* alias for --tls-client --pull *)
-        unit Tls_client >>| Conf_map.add Pull ()
+        multi [Tls_client,() ; Pull, ()]
       | `Comp_lzo   -> unit Comp_lzo
       | `Float      -> unit Float
       | `Keepalive low_high -> ret Keepalive low_high
       | `Mssfix int -> ret Mssfix int
       | `Mute_replay_warnings -> unit Mute_replay_warnings
+      | `Nobind -> ret Bind false
       | `Passtos    -> unit Passtos
       | `Remote host_port -> ok_add Remote host_port
       | `Remote_random -> unit Remote_random
@@ -442,11 +468,9 @@ let parse config_str : (Conf_map.t, 'err) result =
       | `Tun_mtu i  -> ret Tun_mtu i
       | `Verb    i  -> ret Verb i
       | `Inline ("tls-auth", x) ->
-        Angstrom.parse_string a_tls_auth_payload x
-        >>= ret Tls_auth_payload
+        parse_string a_tls_auth_payload x >>= ret Tls_auth
       | `Inline ("connection", str) ->
-        Angstrom.parse_string a_remote str
-        >>= fun (`Remote peer) -> ok_add Remote peer
+        parse_string a_remote str >>= fun (`Remote peer) -> ok_add Remote peer
       | `Inline ("ca", str) ->begin
           match X509.Encoding.Pem.parse (Cstruct.of_string str) with
           | ("CERTIFICATE", x)::[] ->
@@ -454,13 +478,34 @@ let parse config_str : (Conf_map.t, 'err) result =
               | Some cert -> ret Ca cert
               | None -> Error "CA: invalid certificate"
             end
-          | exception Invalid_argument _ ->Error "CA: Error parsing PEM container"
+          | exception Invalid_argument _ ->
+            Error "CA: Error parsing PEM container"
           | _ -> Error "CA: PEM does not consist of a single certificate"
         end
-      | `Blank
-      | _ -> Ok acc
-    ) (Ok Conf_map.empty)
+      | `Blank -> loop acc tl
+      | line ->
+        Logs.warn (fun m -> m"ignoring unrecognized option: %a" pp_line line) ;
+        loop acc tl
+      end
+    | [] -> Ok (`Done acc : parser_state)
+  in
+  match initial_state with
+  | `Done _ as ret -> Ok ret (* already done*)
+  | `Partial (lines, acc) -> loop acc lines
+  | `Need_file (_fn, (lines, acc)) -> loop acc lines
 
-let is_valid_client_config t =
-  Conf_map.mem Remote t (* has a Remote *)
-  && Conf_map.mem Tls_client t
+let parse_begin config_str : (parser_state, 'err) result =
+  let open Rresult in
+  parse_internal config_str >>= fun lines ->
+  parse_next None (`Partial (lines, Conf_map.empty))
+
+let parse_easy ~string_of_file config_str =
+  let open Rresult in
+  let rec loop = function
+    | `Done conf -> Ok conf
+    | `Partial _ as t -> parse_next None t >>= loop
+    | `Need_file (fn, t) ->
+      string_of_file fn >>= fun contents ->
+      parse_next (Some (`File (fn, contents))) (`Partial t) >>= loop
+  in
+  parse_begin config_str >>= fun initial -> loop initial
