@@ -58,11 +58,11 @@ let jump _ filename =
       let open Rresult.R.Infix in
       let string_of_file fn = Ok (Lwt_main.run (read_file fn)) in
       Openvpn_config.parse ~string_of_file str >>= fun config ->
-      Openvpn_config.Conf_map.is_valid_client_config config >>| fun () -> config
+      Openvpn_config.is_valid_client_config config >>| fun () -> config
     with
     | Error s -> Lwt.fail_with ("config parser: " ^ s)
     | Ok config ->
-      begin match Openvpn_config.Conf_map.(get Remote config) with
+      begin match Openvpn_config.(get Remote config) with
         | (`IP ip, port) :: _ -> Lwt.return (ip, port)
         | (`Domain name, port) :: _ ->
           begin

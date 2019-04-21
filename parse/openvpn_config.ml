@@ -49,10 +49,11 @@ module Conf_map = struct
 
   module K = struct
     type 'a t = 'a k
-    let pp _ppf _k _v = () (* TODO will be removed from Gmap *)
 
     let compare : type a b. a t -> b t -> (a,b) Gmap.Order.t = fun a b ->
-      match Hashtbl.(compare (hash a) (hash b) ) with
+      (* ensure they're plain variant tags: *)
+      let is_int x = Obj.(magic x |> is_int) in assert (is_int a && is_int b);
+      match compare (Obj.magic a : int) (Obj.magic b) with
       | 0 -> Obj.magic Gmap.Order.Eq (* GADT equality :-/ *)
       | x when x < 0 -> Lt
       | _ -> Gt
@@ -527,15 +528,15 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
     | (hd:line)::tl ->
       (* TODO should make sure not to override without conflict resolution,
          ie use addb_unless_bound and so on... *)
-      let resolve_add_conflict t (B (k,v) as b) =
+      let resolve_add_conflict t (B (k,v)) =
         let warn () =
           Logs.warn (fun m -> m "Configuration flag appears twice: %a"
                         pp (singleton k v)); Ok t in
-        match addb_unless_bound b t with
+        match add_unless_bound k v t with
         | Some t -> Ok t
         | None -> begin match k with
             (* can coalesce: *)
-            | Remote -> Ok (add Remote (v @ (get Remote t)) t)
+            | Remote -> Ok (add Remote ((get Remote t) @ v) t)
             (* idempotent, as most of the flags - not a failure, emit warn: *)
             | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
             | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
@@ -625,3 +626,13 @@ let parse ~string_of_file config_str =
       parse_next (Some (`File (fn, contents))) (`Partial t) >>= loop
   in
   parse_begin config_str >>= fun initial -> loop initial
+
+let eq : eq = { f = fun k v v2 ->
+    let eq = v = v2 in (*TODO non-polymorphic comparison*)
+    begin if not eq then Logs.debug
+          (fun m -> m "self-test: %a <> %a"
+              pp (singleton k v)
+              pp (singleton k v2))
+        ; eq end }
+
+include Conf_map

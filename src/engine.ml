@@ -44,17 +44,17 @@ let hmac_and_out key hmac_key header p =
   Packet.encode (key, p')
 
 let client config now rng () =
-  match Openvpn_config.Conf_map.find Tls_auth config with
+  match Openvpn_config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
-    let authenticator = match Openvpn_config.Conf_map.find Ca config with
+    let authenticator = match Openvpn_config.find Ca config with
       | None ->
         Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
         X509.Authenticator.null
       | Some ca ->
         Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
         X509.Authenticator.chain_of_trust ~time:(now ()) [ ca ]
-    and user_pass = Openvpn_config.Conf_map.find Auth_user_pass config
+    and user_pass = Openvpn_config.find Auth_user_pass config
     in
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let transport = {

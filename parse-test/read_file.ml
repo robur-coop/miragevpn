@@ -25,17 +25,16 @@ let () =
     let fn = Sys.argv.(1) in
     match read_config_file fn with
     | Ok rules ->
-      Fmt.pr "@[<v>%a@]\n" Conf_map.pp rules ;
+      Fmt.pr "@[<v>%a@]\n" pp rules ;
       Logs.info (fun m -> m "Read %d entries!"
-                    (Conf_map.cardinal rules)) ;
+                    (cardinal rules)) ;
       begin match
           parse ~string_of_file:(fun _fn -> assert false)
-            (Fmt.strf "%a" Conf_map.pp rules) with
+            (Fmt.strf "%a" pp rules) with
       | Error s->
         Logs.err (fun m ->m "self-test failed to parse: %s" s);
         exit 2
-      | Ok dogfood when Conf_map.equal (fun _ _ -> true) rules dogfood ->
-        ()
+      | Ok dogfood when equal eq rules dogfood -> ()
       | Ok _ -> Logs.err (fun m -> m "self-test failed"); exit 1
       end
     | Error s -> Logs.err (fun m -> m "%s" s)
