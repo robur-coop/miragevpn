@@ -1,13 +1,21 @@
+module Logs = (val Logs.(src_log @@ Src.create
+                           ~doc:"Openvpn library's configuration module"
+                           "ovpn.config") : Logs.LOG)
 open Angstrom
 
 module A = Angstrom
 
-type 'a inline_or_path = [ `Need_inline of 'a | `Path of string * 'a ]
+type inlineable = [ `Auth_user_pass | `Ca | `Connection | `Pkcs12 | `Tls_auth ]
+let string_of_inlineable = function
+  | `Auth_user_pass -> "auth-user-pass"
+  | `Ca -> "ca"
+  | `Connection -> "connection"
+  | `Pkcs12 -> "pkcs12"
+  | `Tls_auth -> "tls-auth"
+type inline_or_path = [ `Need_inline of inlineable
+                      | `Path of string * inlineable ]
 
 module Conf_map = struct
-  (*type server
-  type client
-    type any*)
   type flag = unit
 
   type 'a k =
@@ -35,7 +43,7 @@ module Conf_map = struct
     | Resolv_retry : [`Infinite | `Seconds of int] k
     | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_client    : flag k
-    | Tls_min : [`v1_3 | `v1_2 | `v1_1 ] k
+    | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     | Tun_mtu : int k
     | Verb : int k
 
@@ -72,10 +80,13 @@ module Conf_map = struct
       match k,v with
       | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
       | Auth_user_pass, (user,pass) ->
-        Fmt.pf ppf "auth-user-pass %S %S" user pass
+        Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
       | Bind, true -> p() "bind"
       | Bind, false -> p() "nobind"
-      | Ca, ca -> p() "ca # %s" (X509.common_name_to_string ca)
+      | Ca, ca -> p() "ca [inline]\n# CN: %S\n<ca>\n%s</ca>"
+                    (X509.common_name_to_string ca)
+                    (X509.Encoding.Pem.Certificate.to_pem_cstruct1 ca
+                     |> Cstruct.to_string)
       | Cipher, cipher -> p() "cipher %s" cipher
       | Comp_lzo, () -> p() "comp-lzo # deprecated"
       | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
@@ -93,12 +104,13 @@ module Conf_map = struct
       | Proto, `Udp -> p() "proto udp"
       | Pull, () -> p() "pull"
       | Remote, lst ->
-        p() "remote @[<v>%a@]"
-          Fmt.(list ~sep:(unit" ") @@ pair ~sep:(unit ":")
+        Fmt.(list ~sep:(unit"@ ") @@
+             (fun ppf -> pf ppf "remote %a"@@
+               pair ~sep:(unit " ")
                  (fun ppf -> function
                     | `Domain name -> Domain_name.pp ppf name
                     | `IP ip -> Ipaddr.pp ppf ip)
-                 int (*port*)) lst
+                 int (*port*))) ppf lst
       | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
       | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
       | Remote_random, () -> p() "remote-random"
@@ -106,17 +118,26 @@ module Conf_map = struct
       | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
       | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
       | Tls_auth, (a,b,c,d) ->
-        p() "tls-auth @[<v>%a@ %a@ %a@ %a@]"
-          Cstruct.hexdump_pp a
-          Cstruct.hexdump_pp b
-          Cstruct.hexdump_pp c
-          Cstruct.hexdump_pp d
+        p() "tls-auth [inline]\n<tls-auth>\n%s\n%a\n%s\n</tls-auth>"
+          "-----BEGIN OpenVPN Static key V1-----"
+          Fmt.(array ~sep:(unit"\n") string)
+          (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
+           | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
+          "-----END OpenVPN Static key V1-----"
       | Tls_client, () -> p() "tls-client"
-      | Tls_min, ver -> p() "tls-min %s" (match ver with
-          | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
+      | Tls_version_min, (ver,or_highest) ->
+        p() "tls-version-min %s%s" (match ver with
+            | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
+          (if or_highest then " or-highest" else "")
       | Tun_mtu, int -> p() "tun-mtu %d" int
       | Verb, int -> p() "verb %d" int
-    in Fmt.(pf ppf "@[<v>%a@]" (list ~sep:(unit"@ ") pp) (bindings t))
+    in
+    let minimized_t =
+      if mem Tls_client t && mem Pull t then begin
+        Fmt.pf ppf "client\n" ; remove Tls_client t |> remove Pull
+      end else t
+    in
+    Fmt.(pf ppf "%a" (list ~sep:(unit"@.") pp) (bindings minimized_t))
 
 end
 
@@ -130,7 +151,7 @@ type line = [
   | `Proto_force of [ `Tcp | `Udp ]
   | `Remote_cert_key_usage of int
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
-  | [`Ca | `Pkcs12 | `Tls_auth | `Auth_user_pass] inline_or_path
+  | inline_or_path
 ]
 
 let pp_line ppf (x : line) =
@@ -144,7 +165,7 @@ let pp_line ppf (x : line) =
    | `Remote_cert_key_usage f -> v ppf "remote-cert-ku %0.4x" f
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
    | `Path (fn, _) -> v ppf "inline-or-path: %s" fn
-   | `Need_inline _ -> v ppf "inline-or-path: inline"
+   | `Need_inline _ -> v ppf "inline-or-path: Need_inline"
   )
 
 let a_comment =
@@ -234,7 +255,7 @@ let a_ca_payload str =
   match X509.Encoding.Pem.parse (Cstruct.of_string str) with
   | ("CERTIFICATE", x)::[] ->
     begin match X509.Encoding.parse x with
-      | Some cert -> Ok cert
+      | Some cert -> Ok (B (Ca, cert))
       | None -> Error "CA: invalid certificate"
     end
   | exception Invalid_argument _ ->
@@ -261,10 +282,11 @@ let a_tls_auth_payload =
       if 256 = sz then return lst else
         abort @@ "Wrong size ("^(string_of_int sz)^"); need exactly 256 bytes")
   >>| Cstruct.concat >>| fun cs ->
-  Cstruct.(sub cs 0        64,
-           sub cs 64       64,
-           sub cs 128      64,
-           sub cs (128+64) 64)
+  B (Tls_auth,
+     Cstruct.(sub cs 0        64,
+              sub cs 64       64,
+              sub cs 128      64,
+              sub cs (128+64) 64))
 
 let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
@@ -280,7 +302,7 @@ let a_auth_user_pass_payload =
   ( a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
                     | _ -> false) >>= fun user ->
     a_line not_control_char >>= fun pass ->
-    end_of_input *> return (Auth_user_pass, (user,pass))
+    end_of_input *> return (B (Auth_user_pass, (user,pass)))
   ) <|> fail "reading user/password file failed"
 
 let a_auth_retry =
@@ -315,6 +337,7 @@ let a_flag =
     string "passtos" *> r Passtos () ;
     string "mute-replay-warnings" *> r Mute_replay_warnings () ;
     string "ifconfig-nowarn" *> r Ifconfig_nowarn () ;
+    string "pull" *> r Pull () ;
   ] >>| fun b -> `Entry b
 
 let a_remote_cert_tls =
@@ -339,7 +362,10 @@ let a_tls_version_min =
   choice [ string "1.3" *> return `v1_3 ;
            string "1.2" *> return `v1_2 ;
            string "1.1" *> return `v1_1 ;
-         ] >>| fun v -> `Entry (B(Tls_min,v))
+         ] >>= fun v ->
+  choice [a_whitespace *> string "or-highest" *> return true ;
+          a_ign_whitespace *> end_of_line *> return false ] >>| fun or_h ->
+  `Entry (B(Tls_version_min,(v,or_h)))
 
 let a_entry_one_number name =
   string name *> a_whitespace *> a_number
@@ -399,7 +425,7 @@ let a_domain_name =
 (* TODO finish "remote [port] [proto]" by adding proto (tcp/udp/tcp4/tcp6/udp4/udp6)
    what are the semantics if proto and remote proto is provided? *)
 let a_remote =
-  let remote a b = a, b in
+  let remote a b = B (Remote, [a,b]) in
   lift2 remote
     (string "remote" *> a_whitespace *>
      choice [
@@ -410,7 +436,7 @@ let a_remote =
     )
     (option 1194 (a_whitespace *> a_number))
 
-let a_remote_entry = a_remote >>| fun (a,b) -> `Entry (B (Remote, [a,b]))
+let a_remote_entry = a_remote >>| fun b -> `Entry b
 
 let a_inline =
   (* TODO strip trailing newlines inside block ?*)
@@ -420,14 +446,6 @@ let a_inline =
   take_till (function '<' -> true | _ -> false) >>= fun x ->
   return (`Inline (tag, x))
   <* char '<' <* char '/' <* string tag <* char '>'
-
-(* TODO entries can sometimes be nested, like in <connection> blocks:
-The following OpenVPN options may be used inside of  a  <connection> block:
-
-bind,  connect-retry,  connect-retry-max,  connect-timeout,
-explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
-link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
-proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
 
 let a_config_entry : line A.t =
   a_ign_whitespace_no_comment *>
@@ -484,6 +502,24 @@ type parser_state = [`Done of Conf_map.t
                     | `Need_file of (string * parser_partial_state) ]
 type parser_effect = [`File of string * string] option
 
+let parse_inline str = let open Rresult in
+  function
+  | `Auth_user_pass ->
+    (* TODO openvpn doesn't seem to allow inlining passwords, we do.. *)
+    parse_string a_auth_user_pass_payload str
+  | `Tls_auth -> parse_string a_tls_auth_payload str
+  | `Connection ->
+    (* TODO entries can sometimes be nested, like in <connection> blocks:
+       The following OpenVPN options may be used inside of  a  <connection> block:
+       bind,  connect-retry,  connect-retry-max,  connect-timeout,
+       explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
+       link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
+       proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
+    parse_string a_remote str
+  | `Ca -> a_ca_payload str
+  | kind -> Error ("config-parser: not sure how to parse inline " ^
+                   (string_of_inlineable kind))
+
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
   let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
@@ -491,41 +527,81 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
     | (hd:line)::tl ->
       (* TODO should make sure not to override without conflict resolution,
          ie use addb_unless_bound and so on... *)
+      let resolve_add_conflict t (B (k,v) as b) =
+        let warn () =
+          Logs.warn (fun m -> m "Configuration flag appears twice: %a"
+                        pp (singleton k v)); Ok t in
+        match addb_unless_bound b t with
+        | Some t -> Ok t
+        | None -> begin match k with
+            (* can coalesce: *)
+            | Remote -> Ok (add Remote (v @ (get Remote t)) t)
+            (* idempotent, as most of the flags - not a failure, emit warn: *)
+            | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
+            | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
+            | Passtos -> warn () | Persist_key -> warn () | Pull -> warn ()
+            | Remote_random -> warn ()
+            (* else: *)
+            | _ -> Error (Fmt.strf "conflicting keys: %a not in"
+                            pp (singleton k v))
+          end
+      in
       let multib kv = loop (List.fold_left (fun acc b ->
-          addb b acc) acc kv) tl in
-      let multi lst = List.map (fun (k,v) -> B(k,v)) lst|> multib in
-      let ret k v = multi [k,v] in
-      let ok_add k v = loop (update k (function
-          | None -> Some [v]
-          | Some old -> Some (v::old)
-        ) acc) tl in
+          match resolve_add_conflict acc b with
+          | Ok acc -> acc
+          | Error err -> Logs.err (fun m -> m "%S : %a" err pp acc);
+            failwith "") acc kv) tl in
+      let retb b = multib [b] in
       begin match hd with
         | `Path (wanted_name, kind) ->
           begin match effect with
-            | Some `File (effect_name, contents) when
+            | Some `File (effect_name, content) when
                 String.equal effect_name wanted_name ->
-              begin match kind with
-                | `Auth_user_pass ->
-                  parse_string a_auth_user_pass_payload contents
-                  >>= fun (k,v) -> ret k v
-                | `Ca -> a_ca_payload contents >>= ret Ca
-                | `Tls_auth ->
-                  parse_string a_tls_auth_payload contents >>= ret Tls_auth
-                | _ -> Error "Unknown file type requested TODO"
-              end
-            | _ -> Ok (`Need_file (wanted_name, (hd::tl, acc)))
+              (* TODO ensure returned B matches kind? *)
+              R.reword_error (fun x -> "failed parsing provided file: " ^ x)
+                (parse_inline content kind) >>= retb
+            | Some `File (name, _) ->
+              Error ("config-parser: got unrequested file contents for " ^ name)
+            | None -> Ok (`Need_file (wanted_name, (hd::tl, acc)))
           end
-      | `Inline ("tls-auth", x) ->
-        parse_string a_tls_auth_payload x >>= ret Tls_auth
-      | `Inline ("connection", str) ->
-        parse_string a_remote str >>= ok_add Remote
-      | `Inline ("ca", str) -> a_ca_payload str >>= ret Ca
-      | `Blank -> loop acc tl
-      | `Entry (B(k,v)) -> ret k v
-      | `Entries lst -> multib lst
-      | line ->
-        Logs.warn (fun m -> m"ignoring unimplemented option: %a" pp_line line) ;
-        loop acc tl
+        | `Need_inline kind ->
+          let looking_for = string_of_inlineable kind in
+          begin match List.partition (function
+              | `Inline (kind2, _) -> String.equal looking_for kind2
+              | _ -> false) tl with
+          | `Inline (_, x)::inline_tl, other_tl ->
+            Logs.debug (fun m -> m "consuming [inline] %s" looking_for);
+            parse_inline x kind >>= resolve_add_conflict acc >>= fun acc ->
+            loop acc (other_tl @ inline_tl)
+          | [], _ ->
+            (* TODO if we already have it in the map, we don't need to fail: *)
+            Error ("not found: needed [inline]: " ^ looking_for)
+          | _ -> Error "TODO List.partition was wrong"
+          end
+        | `Inline ("connection", x) ->
+          parse_inline x `Connection >>= resolve_add_conflict acc >>= fun acc ->
+          loop acc tl
+        | `Inline (fname, _) ->
+          (* Except for "connection" all blocks must be warranted by an
+             [inline] value in a matching directive. If we have one, we move
+             this block to the end of the list (since we -know- it's needed).
+             If not, we ignore it after emitting an error: *)
+          loop acc @@
+          tl @ if List.exists (function
+              | `Need_inline k when String.equal fname
+                    (string_of_inlineable k)-> true
+              | _ -> false) tl then [hd]
+          else begin Logs.warn (fun m ->
+              m "Inline block %S seems to be redundant" fname); [] end
+        | `Blank -> loop acc tl
+        | `Entry b -> retb b
+        | `Entries lst -> multib lst
+        | ( `Proto_force _
+          | `Socks_proxy _
+          | `Remote_cert_key_usage _) as line ->
+          Logs.warn (fun m -> m"ignoring unimplemented option: %a"
+                        pp_line line) ;
+          loop acc tl
       end
     | [] -> Ok (`Done acc : parser_state)
   in

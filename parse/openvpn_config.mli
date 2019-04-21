@@ -2,8 +2,9 @@
 type line
 val pp_line : line Fmt.t
 
-type 'a inline_or_path = [ `Need_inline of 'a
-                         | `Path of (string * 'a) ]
+type inlineable = [`Ca | `Connection | `Tls_auth | `Auth_user_pass | `Pkcs12 ]
+type inline_or_path = [ `Need_inline of inlineable
+                      | `Path of (string * inlineable) ]
 
 module Conf_map : sig
   type flag = unit
@@ -32,7 +33,11 @@ module Conf_map : sig
     | Resolv_retry  : [`Infinite | `Seconds of int] k
     | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_client    : flag k
-    | Tls_min : [`v1_3 | `v1_2 | `v1_1 ] k
+
+    | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
+    (** [v * or_highest]: if [or_highest] then v = the highest version supported
+        by the TLS library.*)
+
     | Tun_mtu : int k
     | Verb : int k
   module K : Gmap.KEY with type 'a t = 'a k
