@@ -36,9 +36,21 @@ let pp_transport ppf t =
     t.my_session_id t.my_packet_id t.my_message_id
     t.their_session_id t.their_packet_id t.their_message_id t.their_last_acked_message_id
 
+type keys_ctx = {
+  my_key : Nocrypto.Cipher_block.AES.CBC.key ;
+  my_hmac : Cstruct.t ;
+  their_key : Nocrypto.Cipher_block.AES.CBC.key ;
+  their_hmac : Cstruct.t ;
+}
+
+let pp_keys ppf t =
+  Fmt.pf ppf "keys: my hmac %a, their hmac %a"
+    Cstruct.hexdump_pp t.my_hmac Cstruct.hexdump_pp t.their_hmac
+
 type t = {
   linger : Cstruct.t ;
   transport : transport_layer ;
+  keys_ctx : keys_ctx option ;
   authenticator : X509.Authenticator.a ;
   user_pass : (string * string) option ;
   rng : int -> Cstruct.t ;

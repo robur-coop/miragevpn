@@ -75,7 +75,8 @@ let client config now rng () =
       rng ;
       user_pass ;
       authenticator ; client_state = Expect_server_reset ;
-      transport
+      transport ;
+      keys_ctx = None ;
     } in
     let timestamp = ptime_to_ts_exn now in
     let transport, header = header state.transport timestamp in
@@ -201,6 +202,13 @@ let client_handle state op data =
         let keys = derive_keys state.transport key tls_data in
         Logs.info (fun m -> m "received tls data %a@.key block %a"
                       Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
+        let keys_ctx = {
+          my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
+          my_hmac = Cstruct.sub keys 64 20 ;
+          their_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 128 32) ;
+          their_hmac = Cstruct.sub keys 192 20 ;
+        } in
+        let state = { state with keys_ctx = Some keys_ctx } in
         (* now we send a PUSH_REQUEST\0 and see what happens *)
         (* first send an ack for the received key data packet (this needs to be
            a separate packet from the PUSH_REQUEST for unknown reasons) *)
@@ -289,22 +297,38 @@ let handle state now buf =
     match Packet.decode buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out)
-    | Ok (key, data, linger) ->
-      (match data with
-       | `Data _ ->
-         Logs.warn (fun m -> m "not handling data yet, but received some");
-         Ok (state, [])
+    | Ok (key, p, linger) ->
+      (match p with
+       | `Data (_, data) ->
+         begin match state.keys_ctx with
+           | None ->
+             Logs.warn (fun m -> m "received some data, but session is not keyed yet");
+             Ok (state, [])
+           | Some ctx ->
+             (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
+             let hmac, data = Cstruct.split data Packet.hmac_len in
+             let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
+             guard (Cstruct.equal hmac hmac') (`Bad_mac (state, hmac', (key, p))) >>= fun () ->
+             let iv, data = Cstruct.split data 16 in
+             let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
+             Logs.info (fun m -> m "decrypted data@.%a" Cstruct.hexdump_pp dec);
+             (* now, dec is: uint32 packet id followed by lzo-compressed data
+                and padding (looks like last byte and all other contain the
+                length of the padding, i.e. 11 * 0x0b *)
+             (* if dec[4] == 0xfa, then compression is off *)
+             Ok (state, [])
+         end
        | (`Ack _ | `Control _) as d ->
          (* verify mac *)
          let computed_mac, packet_mac =
-           compute_hmac key data state.transport.their_hmac,
-           Packet.((header data).hmac)
+           compute_hmac key p state.transport.their_hmac,
+           Packet.((header p).hmac)
          in
          guard (Cstruct.equal computed_mac packet_mac)
-           (`Bad_mac (state, computed_mac, (key, data))) >>= fun () ->
+           (`Bad_mac (state, computed_mac, (key, p))) >>= fun () ->
          Logs.info (fun m -> m "mac good");
          (* _first_ update state with last_received_message_id and packet_id *)
-         expected_packet state.transport data >>= fun transport ->
+         expected_packet state.transport p >>= fun transport ->
          let state' = { state with transport } in
          match d with
          | `Ack _ ->
