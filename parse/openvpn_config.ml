@@ -28,12 +28,16 @@ module Conf_map = struct
     | Connect_retry : (int * int) k
     | Dev      : [`Null | `Tun of int | `Tap of int] k
     | Float    : flag k
+    | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
     | Keepalive : (int * int) k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
     | Persist_key : flag k
+    | Ping      : int k
+    | Ping_exit : int k
+    | Ping_restart : int k
     | Pull     : flag k
     | Proto    : [`Tcp | `Udp] k
     | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
@@ -41,9 +45,16 @@ module Conf_map = struct
     | Remote_random : flag k
     | Replay_window : (int * int) k
     | Resolv_retry : [`Infinite | `Seconds of int] k
+    | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
+               * Ipaddr.t option
+               * [`ip of Ipaddr.t | `net_gateway | `remote_host
+                 | `vpn_gateway] option
+               * int option) k
+    | Route_gateway : Ipaddr.t option k
     | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_client    : flag k
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
+    | Topology : [`net30 | `p2p | `subnet] k
     | Tun_mtu : int k
     | Verb : int k
 
@@ -95,12 +106,17 @@ module Conf_map = struct
       | Dev, `Tun i -> p() "dev tun%d" i
       | Dev, `Null -> p() "dev null"
       | Float, () -> p() "float"
+      | Ifconfig, (local,remote) ->
+        p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
       | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
       | Keepalive, (low,high) -> p() "keepalive %d %d" low high
       | Mssfix, int -> p() "mssfix %d" int
       | Mute_replay_warnings, () -> p() "mute-replay-warnings"
       | Passtos, () -> p() "passtos"
       | Persist_key, () -> p() "persist-key"
+      | Ping, i -> p() "ping %d" i
+      | Ping_exit, i -> p() "ping-exit %d" i
+      | Ping_restart, i -> p() "ping-restart %d" i
       | Proto, `Tcp -> p() "proto tcp"
       | Proto, `Udp -> p() "proto udp"
       | Pull, () -> p() "pull"
@@ -118,6 +134,19 @@ module Conf_map = struct
       | Replay_window, (low,high) -> p() "replay-window %d %d" low high
       | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
       | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
+      | Route, (network,netmask,gateway,metric) ->
+        let pp_addr ppf v = Fmt.pf ppf "%s" (match v with
+            | `ip ip -> Ipaddr.to_string ip
+            | `net_gateway -> "net_gateway"
+            | `remote_host -> "remote_host"
+            | `vpn_gateway -> "vpn_gateway") in
+        p() "route %a %a %a %a"
+          pp_addr network
+          Fmt.(option ~none:(unit"default") Ipaddr.pp) netmask
+          Fmt.(option ~none:(unit"default") pp_addr) gateway
+          Fmt.(option ~none:(unit"default") int) metric
+      | Route_gateway, v ->
+        p() "route-gateway %a" Fmt.(option ~none:(unit"default") Ipaddr.pp) v
       | Tls_auth, (a,b,c,d) ->
         p() "tls-auth [inline]\n<tls-auth>\n%s\n%a\n%s\n</tls-auth>"
           "-----BEGIN OpenVPN Static key V1-----"
@@ -130,6 +159,8 @@ module Conf_map = struct
         p() "tls-version-min %s%s" (match ver with
             | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
           (if or_highest then " or-highest" else "")
+      | Topology, v -> p() "topology %s" (match v with
+            `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
       | Tun_mtu, int -> p() "tun-mtu %d" int
       | Verb, int -> p() "verb %d" int
     in
@@ -150,7 +181,6 @@ type line = [
   | `Blank
   | `Inline of string * string
   | `Proto_force of [ `Tcp | `Udp ]
-  | `Remote_cert_key_usage of int
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
   | inline_or_path
 ]
@@ -163,22 +193,43 @@ let pp_line ppf (x : line) =
    | `Blank -> v ppf "#"
    | `Proto_force _ -> v ppf "proto-force"
    | `Socks_proxy _ -> v ppf "socks-proxy"
-   | `Remote_cert_key_usage f -> v ppf "remote-cert-ku %0.4x" f
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
    | `Path (fn, _) -> v ppf "inline-or-path: %s" fn
    | `Need_inline _ -> v ppf "inline-or-path: Need_inline"
   )
 
 let a_comment =
-  (* TODO validate against openvpn behavior,
-     - can a finished line like 'dev tun0' have a comment at the end?
-     - can comments be prefixed by whitespace? *)
+  (* MUST have # or ; at the first column of a line. *)
   ((char '#' <|> char ';') *>
    skip_many (skip @@ function '\n' -> false | _ -> true))
 
 let a_whitespace_unit =
   skip (function | ' '| '\t' -> true
                  | _ -> false)
+
+let a_single_param =
+  (* Handles single-quoted or double-quoted, using backslash as escaping char.*)
+  let rec escaped q acc : string Angstrom.t =
+    let again = escaped q in
+    let ret acc = return (String.concat "" (List.rev acc)) in
+    peek_char >>= function
+    | Some '\\' -> advance 1 >>= fun () -> any_char >>= (function
+        | q2 when q=q2 -> again (String.make 1 q::acc)
+        | c -> again (String.make 1 c::"\\"::acc))
+    | Some q2 when q = q2 -> ret acc
+    | Some c -> advance 1 >>= fun () -> again ((String.make 1 c)::acc)
+    | None -> fail ("end of input while looking for matching "
+                    ^ (String.make 1 q) ^" quote")
+  in
+  choice [
+    char '\'' *> Angstrom.commit *> escaped '\'' [] <* char '\'' ;
+    char '"' *> Angstrom.commit *> escaped '"' [] <* char '"' ;
+    ( take_while (function ' '|'\t'|'\''|'"'|'\n' -> false | _ -> true)
+      >>= fun v -> if String.(contains_from v (min 0 @@ length v) '\'')
+                   || String.(contains_from v (min 0 @@ length v) '"')
+      then fail "unquoted parameter contains quote"
+      else return v) ;
+  ]
 
 let a_whitespace_or_comment =
     a_comment <|> a_whitespace_unit
@@ -231,7 +282,6 @@ let a_proto_force =
     string "tcp" *> return `Tcp ;
     string "udp" *> return `Udp
   ] >>| fun prot -> `Proto_force prot
-
 
 let a_resolv_retry =
   string "resolv-retry" *> a_whitespace *>
@@ -353,10 +403,7 @@ let a_hex =
   match int_of_string ("0x" ^ str) with
   | i -> return i
   | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
-
-let a_remote_cert_key_usage =
-  string "remote-cert-ku" *> a_whitespace *> a_hex >>| fun purpose ->
-  `Remote_cert_key_usage purpose
+let _TODO = a_hex
 
 let a_tls_version_min =
   string "tls-version-min" *> a_whitespace *>
@@ -370,6 +417,12 @@ let a_tls_version_min =
 
 let a_entry_one_number name =
   string name *> a_whitespace *> a_number
+
+let a_ping =
+  a_entry_one_number "ping" >>| fun n -> `Entry (B(Ping, n))
+
+let a_ping_restart =
+  a_entry_one_number "ping-restart" >>| fun n -> `Entry (B(Ping_restart, n))
 
 let a_tun_mtu = a_entry_one_number "tun-mtu" >>| fun x ->
   `Entry (B(Tun_mtu,x))
@@ -393,10 +446,17 @@ let a_keepalive =
 let a_verb =
   a_entry_one_number "verb" >>| fun x -> `Entries [B (Verb, x)]
 
+let a_topology =
+  string "topology" *> a_whitespace *>
+  choice [
+    string "net30" *> return `net30 ;
+    string "p2p" *> return `p2p ;
+    string "subnet" *> return `subnet ;
+  ] >>| fun v -> `Entry (B( Topology, v))
+
 let a_cipher =
   string "cipher" *> a_whitespace *>
-  take_while1 (function ' '| '\n' | '\t' -> false | _ -> true)
-  >>| fun v -> `Entry (B(Cipher, v))
+  a_single_param >>| fun v -> `Entry (B(Cipher, v))
 
 let a_replay_window =
   let replay_window a b = `Entry (B (Replay_window, (a, b))) in
@@ -407,8 +467,8 @@ let a_replay_window =
 let a_ipv4_dotted_quad =
   take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
   match Ipaddr.V4.of_string ip with
-    | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %s: %S" x ip)
-    | Ok ip -> return ip
+  | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %s: %S" x ip)
+  | Ok ip -> return ip
 
 let a_ipv6_coloned_hex =
   take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
@@ -417,11 +477,21 @@ let a_ipv6_coloned_hex =
   | Error `Msg x -> fail (Fmt.strf "Invalid IPv6: %s: %S" x ip)
   | Ok ip -> return ip
 
+let a_ip =
+  (a_ipv4_dotted_quad >>| fun v4 -> Ipaddr.V4 v4)
+  <|> (a_ipv6_coloned_hex >>| fun v6 -> Ipaddr.V6 v6)
+
 let a_domain_name =
   take_till (function '\x00'..'\x1f' | ' ' | '"' | '\'' -> true | _ -> false)
   >>= fun str -> match Domain_name.of_string str with
   | Error `Msg x -> fail (Fmt.strf "Invalid domain name: %s: %S" x str)
   | Ok x -> return x
+
+let a_ifconfig =
+  string "ifconfig" *>
+  a_whitespace *> a_ip >>= fun local ->
+  a_whitespace *> a_ip >>| fun remote ->
+  `Entry (B(Ifconfig, (local,remote)))
 
 (* TODO finish "remote [port] [proto]" by adding proto (tcp/udp/tcp4/tcp6/udp4/udp6)
    what are the semantics if proto and remote proto is provided? *)
@@ -439,6 +509,45 @@ let a_remote =
 
 let a_remote_entry = a_remote >>| fun b -> `Entry b
 
+let a_network_or_gateway =
+  choice [ (a_ip >>| fun ip -> `ip ip) ;
+           (string "vpn_gateway" *> return `vpn_gateway) ;
+           (string "net_gateway" *> return `net_gateway) ;
+           (string "remote_host" *> return `remote_host) ]
+
+let a_route =
+  (* --route network/IP [netmask] [gateway] [metric] *)
+  string "route" *> a_whitespace *> a_network_or_gateway >>= fun network ->
+  let some x = Some x in
+
+  option (some @@ Ipaddr.of_string_exn "255.255.255.255", None, None)
+    ( (a_whitespace *>
+       (((string "default" *> return
+           (some @@ Ipaddr.of_string_exn "255.255.255.255"))
+       ) <|> (a_ip >>| fun x -> some x))) >>= fun netmask ->
+      option (None,None)
+        (a_whitespace *>
+         ((string "default" *>
+           ((return None)) <|> (a_network_or_gateway >>| some))
+         ) >>= fun gateway ->
+
+         option None
+           (a_whitespace *>
+            ((string "default" *> return None) <|>
+             (a_number_range 0 255 >>| fun n -> some n))
+           ) >>| fun metric -> gateway,metric
+        ) >>| (fun (gateway,metric) -> netmask,gateway,metric)
+      (* <* end_of_input*)
+    ) >>| fun (netmask,gateway,metric) ->
+  `Entry (B (Route, (network,netmask,gateway,metric)))
+
+let a_route_gateway =
+  (string "route-gateway" *> a_whitespace) *>
+  choice [
+    (a_single_param >>= function "dhcp" -> return None
+                               | _ -> fail "not 'dhcp'") ;
+    (a_ip >>| fun x -> Some x) ] >>| fun x -> `Entry (B(Route_gateway,x))
+
 let a_inline =
   (* TODO strip trailing newlines inside block ?*)
   char '<' *> take_while1 (function 'a'..'z' |'-' -> true
@@ -447,6 +556,22 @@ let a_inline =
   take_till (function '<' -> true | _ -> false) >>= fun x ->
   return (`Inline (tag, x))
   <* char '<' <* char '/' <* string tag <* char '>'
+
+let a_not_implemented =
+  (choice
+     [ string "sndbuf" ;
+       string "rcvbuf" ;
+       string "ip-win32" ;
+       string "socket-flags" ;
+       string "remote-cert-ku" ;
+       (* TODO: *)
+       string "redirect-gateway" ;
+       string "dhcp-option" ;
+     ] <* a_whitespace >>= fun key ->
+   take_while (function '\n' -> false | _ -> true) >>| fun rest ->
+   Logs.warn (fun m ->m "IGNORING %S %S" key rest)
+  ) *> A.many_till (skip (fun _ -> true)) end_of_line
+  *> (*end_of_line *>*) return `Blank
 
 let a_config_entry : line A.t =
   a_ign_whitespace_no_comment *>
@@ -458,7 +583,6 @@ let a_config_entry : line A.t =
     a_resolv_retry ;
     a_tls_auth ;
     a_remote_cert_tls ;
-    a_remote_cert_key_usage ;
     a_verb ;
     a_connect_retry ;
     a_auth_retry ;
@@ -475,6 +599,14 @@ let a_config_entry : line A.t =
     a_pkcs12 ;
     a_flag ;
     a_ca ;
+    a_ping ;
+    a_ping_restart ;
+    a_ifconfig ;
+    a_topology ;
+    a_route ;
+    a_route_gateway ;
+    a_topology ;
+    a_not_implemented ;
     a_whitespace *> return `Blank ;
   ]
 
@@ -521,6 +653,14 @@ let parse_inline str = let open Rresult in
   | kind -> Error ("config-parser: not sure how to parse inline " ^
                    (string_of_inlineable kind))
 
+let eq : eq = { f = fun k v v2 ->
+    let eq = v = v2 in (*TODO non-polymorphic comparison*)
+    begin if not eq then Logs.debug
+          (fun m -> m "eq self-test: %a <> %a"
+              pp (singleton k v)
+              pp (singleton k v2))
+        ; eq end }
+
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
   let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
@@ -530,28 +670,36 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
          ie use addb_unless_bound and so on... *)
       let resolve_add_conflict t (B (k,v)) =
         let warn () =
-          Logs.warn (fun m -> m "Configuration flag appears twice: %a"
+          Logs.debug (fun m -> m "Configuration flag appears twice: %a"
                         pp (singleton k v)); Ok t in
         match add_unless_bound k v t with
         | Some t -> Ok t
         | None -> begin match k with
-            (* can coalesce: *)
-            | Remote -> Ok (add Remote ((get Remote t) @ v) t)
             (* idempotent, as most of the flags - not a failure, emit warn: *)
             | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
             | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
             | Passtos -> warn () | Persist_key -> warn () | Pull -> warn ()
             | Remote_random -> warn ()
+            (* adding wouldn't change anything: *)
+            | _ when v = get k t -> (* TODO polymorphic comparison *)
+              Logs.debug (fun m ->
+                  m "Config key %a was supplied multiple times with same value"
+                pp (singleton k v)) ; Ok t
+            (* can coalesce: *)
+            | Remote -> Ok (add Remote ((get Remote t) @ v) t)
             (* else: *)
             | _ -> Error (Fmt.strf "conflicting keys: %a not in"
                             pp (singleton k v))
           end
       in
-      let multib kv = loop (List.fold_left (fun acc b ->
+      let multib kv =
+        (List.fold_left (fun acc b ->
+             acc >>= fun acc ->
           match resolve_add_conflict acc b with
-          | Ok acc -> acc
-          | Error err -> Logs.err (fun m -> m "%S : %a" err pp acc);
-            failwith "") acc kv) tl in
+          | Ok _ as next -> next
+          | Error err ->
+            Logs.debug (fun m -> m "%S : %a" err pp acc);
+            Error err) (Ok acc) kv) >>= fun acc -> loop acc tl in
       let retb b = multib [b] in
       begin match hd with
         | `Path (wanted_name, kind) ->
@@ -598,8 +746,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
         | `Entry b -> retb b
         | `Entries lst -> multib lst
         | ( `Proto_force _
-          | `Socks_proxy _
-          | `Remote_cert_key_usage _) as line ->
+          | `Socks_proxy _) as line ->
           Logs.warn (fun m -> m"ignoring unimplemented option: %a"
                         pp_line line) ;
           loop acc tl
@@ -626,13 +773,5 @@ let parse ~string_of_file config_str =
       parse_next (Some (`File (fn, contents))) (`Partial t) >>= loop
   in
   parse_begin config_str >>= fun initial -> loop initial
-
-let eq : eq = { f = fun k v v2 ->
-    let eq = v = v2 in (*TODO non-polymorphic comparison*)
-    begin if not eq then Logs.debug
-          (fun m -> m "self-test: %a <> %a"
-              pp (singleton k v)
-              pp (singleton k v2))
-        ; eq end }
 
 include Conf_map

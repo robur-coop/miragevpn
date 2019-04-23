@@ -11,12 +11,20 @@ type 'a k =
   | Connect_retry : (int * int) k
   | Dev      : [`Null | `Tun of int | `Tap of int] k
   | Float    : flag k
+
+  | Ifconfig : (Ipaddr.t * Ipaddr.t) k
+  (**  TODO --ifconfig parameters which are IP addresses can also be  speci‐
+              fied as a DNS or /etc/hosts file resolvable name.*)
+
   | Ifconfig_nowarn : flag k
   | Keepalive: (int * int) k
   | Mssfix   : int k
   | Mute_replay_warnings : flag k
   | Passtos  : flag k
   | Persist_key : flag k
+  | Ping      : int k
+  | Ping_exit : int k
+  | Ping_restart : int k
   | Pull     : flag k
   | Proto    : [`Tcp | `Udp] k (** TODO should Proto be bound to a remote? *)
   | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
@@ -24,6 +32,12 @@ type 'a k =
   | Remote_random : flag k
   | Replay_window : (int * int) k
   | Resolv_retry  : [`Infinite | `Seconds of int] k
+  | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
+             * Ipaddr.t option
+             * [`ip of Ipaddr.t | `net_gateway | `remote_host
+               | `vpn_gateway] option
+             * int option) k
+  | Route_gateway : Ipaddr.t option k (** [None] -> default to DHCP *)
   | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
   | Tls_client    : flag k
 
@@ -31,6 +45,7 @@ type 'a k =
   (** [v * or_highest]: if [or_highest] then v = the highest version supported
       by the TLS library.*)
 
+  | Topology : [`net30 | `p2p | `subnet] k
   | Tun_mtu : int k
   | Verb : int k
 module K : Gmap.KEY with type 'a t = 'a k

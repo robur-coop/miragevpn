@@ -1,4 +1,5 @@
 opam-version: "2.0"
+synopsis:     "Library implementing the OpenVPN protocol and configuration format"
 name:         "openvpn"
 homepage:     "https://github.com/roburio/openvpn"
 dev-repo:     "git+https://github.com/roburio/openvpn.git"
@@ -19,7 +20,7 @@ depends: [
   "ocamlbuild" {build}
   "dune" {build}
 
-  "odoc" {doc}
+  "odoc" {with-doc}
 
   "fmt"      { >= "0.8.6"  &  < "0.9.0" }
   "logs"     { >= "0.6.2"  &  < "0.7.0" }
