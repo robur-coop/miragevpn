@@ -230,10 +230,26 @@ let incoming_client state op data =
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
     (match d with
-     | None -> Error (`Msg "push request sent, expected data, received nothing")
      | Some data ->
-       Logs.info (fun m -> m "push request, received TLS payload %S" (Cstruct.to_string data));
-       Ok (state, []))
+       if Cstruct.len data = 0 then
+         Logs.err (fun m -> m "push request sent: empty TLS reply")
+       else
+         let str = Cstruct.(to_string (sub data 0 (pred (len data)))) in
+         Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
+         begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
+           | Some ("", opts) ->
+             let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
+             begin match Openvpn_config.parse ~string_of_file:(fun _ -> Error "string of file is not available") opts with
+               | Ok conf ->
+                 Logs.info (fun m -> m "received push reply %a" Openvpn_config.pp conf);
+               | Error msg ->
+                 Logs.err (fun m -> m "couldn't parse push reply %s" msg);
+             end
+           | _ ->
+             Logs.err (fun m -> m "push request sent, expected push_reply, got: %S" str);
+         end;
+     | None -> Logs.err (fun m -> m "push request sent, expected data, received nothing"));
+    Ok (state, [])
   | _ -> Error (`No_transition (state, op, data))
 
 let expected_packet state data =
