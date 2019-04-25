@@ -2,7 +2,7 @@ open State
 
 type nonrec t = t
 (* the left "t" is not visible on the right. the right one is looked up in the
-   current environment, and there is a "t" defined in State, thus thus means:
+   current environment, and there is a "t" defined in State - this is equivalent to:
    type t = State.t *)
 
 let guard p e = if p then Ok () else Error e
