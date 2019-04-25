@@ -9,7 +9,7 @@ type client_state =
   | Expect_server_reset
   | TLS_handshake of Tls.Engine.state
   | TLS_established of Tls.Engine.state * key_source
-  | Push_request_sent of Tls.Engine.state * Cstruct.t
+  | Push_request_sent of Tls.Engine.state
 
 let pp_client_state ppf = function
   | Expect_server_reset -> Fmt.string ppf "expecting server reset"
