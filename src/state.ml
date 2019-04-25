@@ -28,10 +28,6 @@ let pp_client_state ppf = function
   | Push_request_sent _ -> Fmt.string ppf "push request sent"
   | Established (_, ip) -> Fmt.pf ppf "established %a" pp_ip_config ip
 
-let ready_to_send = function
-  | Established _ -> true
-  | _ -> false
-
 type transport = {
   key : int ;
   my_hmac : Cstruct.t ;
@@ -54,13 +50,15 @@ let pp_transport ppf t =
 type keys_ctx = {
   my_key : Nocrypto.Cipher_block.AES.CBC.key ;
   my_hmac : Cstruct.t ;
+  my_packet_id : int32 ;
   their_key : Nocrypto.Cipher_block.AES.CBC.key ;
   their_hmac : Cstruct.t ;
+  their_packet_id : int32 ;
 }
 
 let pp_keys ppf t =
-  Fmt.pf ppf "keys: my hmac %a, their hmac %a"
-    Cstruct.hexdump_pp t.my_hmac Cstruct.hexdump_pp t.their_hmac
+  Fmt.pf ppf "keys: my id %lu, their id %lu"
+    t.my_packet_id t.their_packet_id
 
 type t = {
   linger : Cstruct.t ;

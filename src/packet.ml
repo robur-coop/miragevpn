@@ -171,7 +171,8 @@ let to_be_signed_control op (header, packet_id, payload) =
 
 let decode_data buf = Ok buf
 
-let encode_data data = data, Cstruct.len data
+let encode_data payload =
+  Cstruct.(append (create 3) payload, len payload + 3)
 
 let decode buf =
   guard (Cstruct.len buf >= 3) `Partial >>= fun () ->

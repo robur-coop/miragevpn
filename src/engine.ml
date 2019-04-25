@@ -185,8 +185,10 @@ let maybe_kdf transport key = function
     let keys_ctx = {
       my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
       my_hmac = Cstruct.sub keys 64 20 ;
+      my_packet_id = 1l ;
       their_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 128 32) ;
       their_hmac = Cstruct.sub keys 192 20 ;
+      their_packet_id = 1l ;
     } in
     Ok keys_ctx
 
@@ -275,7 +277,7 @@ let incoming_client state op data =
     { state with client_state }, []
   | _ -> Error (`No_transition (state, op, data))
 
-let expected_packet state data =
+let expected_packet (state : transport) data =
   (* expects monotonic packet + message id, session ids matching *)
   (* TODO track ack'ed message ids from them (only really important for UDP) *)
   match data with
@@ -345,27 +347,79 @@ let wrap_openvpn transport ts out =
     let transport, m_id = next_message_id transport in
     transport, (header, `Control (Packet.Control, (header, m_id, out)))
 
-let outgoing state _now _data =
-  if ready_to_send state.client_state then
+let pad block_size cs =
+  let pad_len =
+    let l = (Cstruct.len cs) mod block_size in
+    if l = 0 then block_size else block_size - l
+  in
+  let out = Cstruct.create pad_len in
+  Cstruct.memset out pad_len;
+  Cstruct.append cs out
+
+let unpad cs =
+  let l = Cstruct.len cs in
+  let amount = Cstruct.get_uint8 cs (pred l) in
+  Cstruct.sub cs 0 (l - amount)
+
+let data_out ctx rng key data =
   (* output is: packed_id 0xfa data, then wrap openvpn partial header
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
      --> hmac and prepend hash *)
-    assert false
-  else
-    Error `Not_ready
+  Logs.debug (fun m -> m "sending %d bytes data out id %lu" (Cstruct.len data) ctx.my_packet_id);
+  let hdr = Cstruct.create 5 in
+  Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
+  Cstruct.set_uint8 hdr 4 0xfa;
+  let block_size = 16 in
+  let iv = rng block_size
+  and data = pad block_size (Cstruct.append hdr data)
+  in
+  (* Logs.debug (fun m -> m "padded data is %d: %a" (Cstruct.len data) Cstruct.hexdump_pp data); *)
+  let enc = Nocrypto.Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
+  let payload = Cstruct.append iv enc in
+  let hmac = Nocrypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
+  let payload' = Cstruct.append hmac payload in
+  let out = Packet.encode (key, `Data (Packet.Data_v2, payload')) in
+  (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
+  let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  (ctx', out)
+
+let outgoing state data =
+  match state.keys_ctx with
+  | None -> Error `Not_ready
+  | Some ctx ->
+    let keys_ctx, data = data_out ctx state.rng state.transport.key data in
+    Ok ({ state with keys_ctx = Some keys_ctx }, [ data ])
+
+let ping =
+  Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
 let incoming_data err ctx data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
   let hmac, data = Cstruct.split data Packet.hmac_len in
   let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
-  guard (Cstruct.equal hmac hmac') (err hmac') >>| fun () ->
+  guard (Cstruct.equal hmac hmac') (err hmac') >>= fun () ->
   let iv, data = Cstruct.split data 16 in
-  Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data
+  let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* now, dec is: uint32 packet id followed by lzo-compressed data
      and padding (looks like last byte and all other contain the
      length of the padding, i.e. 11 * 0x0b *)
+  guard (Cstruct.len dec > 5)
+    (Rresult.R.msgf "payload %a too short (need at least 5 bytes)"
+       Cstruct.hexdump_pp dec) >>= fun () ->
+  (* TODO validate packet id and ordering -- do i need to ack it as well? *)
+  Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+  let compression = Cstruct.get_uint8 dec 4 in
   (* if dec[4] == 0xfa, then compression is off *)
+  (match compression with
+   | 0xFA -> Ok (Cstruct.shift dec 5)
+   | _ -> Rresult.R.error_msgf "unknown compression 0x%X" compression) >>| fun data ->
+  let data' = unpad data in
+  if Cstruct.equal data' ping then begin
+    Logs.warn (fun m -> m "received ping!");
+    [ping], []
+  end else
+    [], [data']
 
 let incoming state now buf =
   let rec multi state buf out appdata =
@@ -381,8 +435,13 @@ let incoming state now buf =
              Ok (state, [], [])
            | Some keys ->
              let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
-             incoming_data bad_mac keys data >>| fun data ->
-             state, [], [data]
+             incoming_data bad_mac keys data >>| fun (out, data) ->
+             let ctx, outs = List.fold_left (fun (ctx, acc) data ->
+                 let ctx, out = data_out ctx state.rng state.transport.key data in
+                 (ctx, out :: acc))
+                 (keys, []) out
+             in
+             { state with keys_ctx = Some ctx }, List.rev outs, data
          end
        | (`Ack _ | `Control _) as d ->
          (* verify mac *)

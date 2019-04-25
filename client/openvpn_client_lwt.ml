@@ -26,7 +26,7 @@ let read_from_fd fd =
         Lwt.fail_with "end of file from server"
       else
         let cs = Cstruct.of_bytes ~len:count buf in
-        Logs.debug (fun m -> m "read %d bytes@.%a" count Cstruct.hexdump_pp cs) ;
+        Logs.debug (fun m -> m "read %d bytes" count) ;
         Lwt.return cs)
   |> Lwt_result.map_err (fun e ->
       Rresult.R.msgf "read error %s" (Printexc.to_string e))
