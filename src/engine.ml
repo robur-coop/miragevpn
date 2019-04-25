@@ -158,7 +158,63 @@ let handle_tls tls data =
       Error (`Tls e)
     | `Ok tls' -> Ok (tls', out, d)
 
+let maybe_kex rng user_pass tls =
+  if Tls.Engine.can_handle_appdata tls then
+    let pre_master, random1, random2 = rng 48, rng 32, rng 32 in
+    let tls_data = Packet.{ pre_master ; random1 ; random2 ; options = Packet.options ; user_pass } in
+    let key_source = { State.pre_master ; random1 ; random2 } in
+    match Tls.Engine.send_application_data tls [Packet.encode_tls_data tls_data] with
+    | None -> Error (`Msg "Tls.send application data failed for tls_data")
+    | Some (tls', payload) ->
+      let client_state = TLS_established (tls', key_source) in
+      Ok (client_state, Some payload)
+  else
+    Ok (TLS_handshake tls, None)
+
+let maybe_kdf transport key = function
+  | None ->
+    Error (`Msg "TLS established, expected data, received nothing");
+  | Some data ->
+    let open Rresult.R.Infix in
+    Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
+    Packet.decode_tls_data data >>= fun tls_data ->
+    let keys = derive_keys transport key tls_data in
+    Logs.info (fun m -> m "received tls data %a@.key block %a"
+                  Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
+    let keys_ctx = {
+      my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
+      my_hmac = Cstruct.sub keys 64 20 ;
+      their_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 128 32) ;
+      their_hmac = Cstruct.sub keys 192 20 ;
+    } in
+    Ok keys_ctx
+
+let push_request tls =
+  let data = Cstruct.of_string "PUSH_REQUEST\x00" in
+  match Tls.Engine.send_application_data tls [data] with
+  | None -> Error (`Msg "Tls.send application data failed for push request")
+  | Some (tls', payload) -> Ok (tls', payload)
+
+let maybe_push_reply = function
+  | Some data ->
+    if Cstruct.len data = 0 then
+      Error (`Msg "push request sent: empty TLS reply")
+    else
+      let str = Cstruct.(to_string (sub data 0 (pred (len data)))) in
+      Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
+      begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
+        | Some ("", opts) ->
+          let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
+          Rresult.R.error_to_msg ~pp_error:Fmt.string
+            (Openvpn_config.parse ~string_of_file:(fun _ -> Error "string of file is not available") opts)
+        | _ ->
+          Error (`Msg (Fmt.strf "push request sent, expected push_reply, got: %S" str);)
+      end
+  | None -> Error (`Msg "push request sent, expected data, received nothing")
+
 let incoming_client state op data =
+  Logs.info (fun m -> m "incoming client!!! op %a (state %a)"
+                Packet.pp_operation op pp state);
   let open Rresult.R.Infix in
   match state.client_state, op with
   | Expect_server_reset, Packet.Hard_reset_server ->
@@ -174,81 +230,35 @@ let incoming_client state op data =
     handle_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
-    (if Tls.Engine.can_handle_appdata tls' then
-       let pre_master, random1, random2 = state.rng 48, state.rng 32, state.rng 32 in
-       let tls_data = Packet.{ pre_master ; random1 ; random2 ; options = Packet.options ; user_pass = state.user_pass } in
-       let key_source = { State.pre_master ; random1 ; random2 } in
-       match Tls.Engine.send_application_data tls' [Packet.encode_tls_data tls_data] with
-       | None -> Error (`Msg "Tls.send application data failed for tls_data")
-       | Some (tls'', payload) ->
-         let client_state = TLS_established (tls'', key_source) in
-         let out = match tls_response with
-           | None -> [payload]
-           | Some data ->
-             Logs.err (fun m -> m "can handle appdata, but client wants to send something as well");
-             [data ; payload]
-         in
-         Ok (client_state, out)
-     else
-       Ok (TLS_handshake tls', match tls_response with None -> [] | Some p -> [p])) >>| fun (client_state, out) ->
+    maybe_kex state.rng state.user_pass tls' >>| fun (client_state, data) ->
     let state = { state with client_state } in
+    let out = match tls_response, data with
+      | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
+      | None, Some data -> [ data ]
+      | Some res, None -> [ res ]
+      | Some res, Some data ->
+        Logs.warn (fun m -> m "tls handshake response and application data");
+        [ res ; data ]
+    in
     state, out
   | TLS_established (tls, key), Packet.Control ->
     handle_tls tls data >>= fun (tls', tls_response, d) ->
-    let out = match tls_response with None -> [] | Some x -> [x] in
-    begin match d with
-      | None ->
-        Logs.warn (fun m -> m "TLS established, expected data, received nothing");
-        Ok (state, out)
-      | Some data ->
-        Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
-        Packet.decode_tls_data data >>= fun tls_data ->
-        let keys = derive_keys state.transport key tls_data in
-        Logs.info (fun m -> m "received tls data %a@.key block %a"
-                      Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
-        let keys_ctx = {
-          my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
-          my_hmac = Cstruct.sub keys 64 20 ;
-          their_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 128 32) ;
-          their_hmac = Cstruct.sub keys 192 20 ;
-        } in
-        let state = { state with keys_ctx = Some keys_ctx } in
-        (* now we send a PUSH_REQUEST\0 and see what happens *)
-        (* first send an ack for the received key data packet (this needs to be
-           a separate packet from the PUSH_REQUEST for unknown reasons) *)
-        let data = Cstruct.of_string "PUSH_REQUEST\x00" in
-        match Tls.Engine.send_application_data tls' [data] with
-        | None -> Error (`Msg "Tls.send application data failed for push request")
-        | Some (tls'', payload) ->
-          let client_state = Push_request_sent (tls'', keys) in
-          let state' = { state with client_state } in
-          Ok (state', out @ [Cstruct.empty ; payload])
-    end
-  | Push_request_sent (tls, _key), Packet.Control ->
+    maybe_kdf state.transport key d >>= fun keys_ctx ->
+    (* now we send a PUSH_REQUEST\0 and see what happens *)
+    push_request tls' >>| fun (tls'', out) ->
+    let client_state = Push_request_sent tls'' in
+    let state' = { state with client_state ; keys_ctx = Some keys_ctx } in
+    (* first send an ack for the received key data packet (this needs to be
+       a separate packet from the PUSH_REQUEST for unknown reasons) *)
+    let tls_out = match tls_response with None -> [] | Some x -> [x] in
+    (state', tls_out @ [ Cstruct.empty ; out ])
+  | Push_request_sent tls, Packet.Control ->
     handle_tls tls data >>= fun (_tls', tls_response, d) ->
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
-    (match d with
-     | Some data ->
-       if Cstruct.len data = 0 then
-         Logs.err (fun m -> m "push request sent: empty TLS reply")
-       else
-         let str = Cstruct.(to_string (sub data 0 (pred (len data)))) in
-         Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
-         begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
-           | Some ("", opts) ->
-             let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
-             begin match Openvpn_config.parse ~string_of_file:(fun _ -> Error "string of file is not available") opts with
-               | Ok conf ->
-                 Logs.info (fun m -> m "received push reply %a" Openvpn_config.pp conf);
-               | Error msg ->
-                 Logs.err (fun m -> m "couldn't parse push reply %s" msg);
-             end
-           | _ ->
-             Logs.err (fun m -> m "push request sent, expected push_reply, got: %S" str);
-         end;
-     | None -> Logs.err (fun m -> m "push request sent, expected data, received nothing"));
+    maybe_push_reply d >>= fun config ->
+    Logs.info (fun m -> m "received push reply %a" Openvpn_config.pp config);
     Ok (state, [])
   | _ -> Error (`No_transition (state, op, data))
 
