@@ -1,13 +1,10 @@
 open State
 open Rresult.R.Infix
 
-type nonrec t = t
-(* the left "t" is not visible on the right. the right one is looked up in the
-   current environment, and there is a "t" defined in State - this is equivalent to:
-   type t = State.t *)
-
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
+
+let ready f = match f.client_state with Established (_, ip) -> Some ip | _ -> None
 
 let next_message_id state =
   { state with my_message_id = Int32.succ state.my_message_id },
