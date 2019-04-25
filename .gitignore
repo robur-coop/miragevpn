@@ -3,3 +3,13 @@ _build/
 .merlin
 *.install
 *.swp
+.mirage.config
+mirage/*/Makefile*
+_build-solo5-hvt
+*hvt
+key_gen.ml
+main.ml
+mirage-unikernel*opam
+myocamlbuild.ml
+solo5-hvt
+static*.ml*
