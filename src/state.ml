@@ -5,17 +5,32 @@ type key_source = {
   random2 : Cstruct.t ; (* 32 bytes *)
 }
 
+type ip_config = {
+  ip : Ipaddr.V4.t ;
+  prefix : Ipaddr.V4.Prefix.t ;
+  gateway : Ipaddr.V4.t ;
+}
+
+let pp_ip_config ppf { ip ; prefix ; gateway } =
+  Fmt.pf ppf "ip %a prefix %a gateway %a" Ipaddr.V4.pp ip Ipaddr.V4.Prefix.pp prefix Ipaddr.V4.pp gateway
+
 type client_state =
   | Expect_server_reset
   | TLS_handshake of Tls.Engine.state
   | TLS_established of Tls.Engine.state * key_source
   | Push_request_sent of Tls.Engine.state
+  | Established of Tls.Engine.state * ip_config
 
 let pp_client_state ppf = function
   | Expect_server_reset -> Fmt.string ppf "expecting server reset"
   | TLS_handshake _ -> Fmt.string ppf "TLS handshake in process"
   | TLS_established _ -> Fmt.string ppf "TLS handshake established"
   | Push_request_sent _ -> Fmt.string ppf "push request sent"
+  | Established (_, ip) -> Fmt.pf ppf "established %a" pp_ip_config ip
+
+let ready_to_send = function
+  | Established _ -> true
+  | _ -> false
 
 type transport = {
   key : int ;

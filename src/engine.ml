@@ -1,4 +1,5 @@
 open State
+open Rresult.R.Infix
 
 type nonrec t = t
 (* the left "t" is not visible on the right. the right one is looked up in the
@@ -147,7 +148,7 @@ let derive_keys (s : State.transport) (key_source : State.key_source) (tls_data 
   in
   keys
 
-let handle_tls tls data =
+let incoming_tls tls data =
   match Tls.Engine.handle_tls tls data with
   | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
   | `Ok (r, `Response out, `Data d) -> match r with
@@ -175,12 +176,12 @@ let maybe_kdf transport key = function
   | None ->
     Error (`Msg "TLS established, expected data, received nothing");
   | Some data ->
-    let open Rresult.R.Infix in
     Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
     Packet.decode_tls_data data >>= fun tls_data ->
     let keys = derive_keys transport key tls_data in
     Logs.info (fun m -> m "received tls data %a@.key block %a"
                   Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
+    (* TODO parse options with the config parser and configure the state accordingly *)
     let keys_ctx = {
       my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
       my_hmac = Cstruct.sub keys 64 20 ;
@@ -206,7 +207,9 @@ let maybe_push_reply = function
         | Some ("", opts) ->
           let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
           Openvpn_config.parse ~string_of_file:(fun _ ->
-              Rresult.R.error_msgf "string of file is not available") opts
+              Rresult.R.error_msgf "string of file is not available") opts >>| fun config ->
+          Logs.info (fun m -> m "received push reply %a" Openvpn_config.pp config);
+          config
         | _ ->
           Error (`Msg (Fmt.strf "push request sent, expected push_reply, got: %S" str);)
       end
@@ -215,7 +218,6 @@ let maybe_push_reply = function
 let incoming_client state op data =
   Logs.info (fun m -> m "incoming client!!! op %a (state %a)"
                 Packet.pp_operation op pp state);
-  let open Rresult.R.Infix in
   match state.client_state, op with
   | Expect_server_reset, Packet.Hard_reset_server ->
     (* we reply with ACK + TLS client hello! *)
@@ -227,7 +229,7 @@ let incoming_client state op data =
     Ok (state, [ch])
   | TLS_handshake tls, Packet.Control ->
     (* we reply with ACK + maybe TLS response *)
-    handle_tls tls data >>= fun (tls', tls_response, d) ->
+    incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
     maybe_kex state.rng state.user_pass tls' >>| fun (client_state, data) ->
@@ -242,7 +244,7 @@ let incoming_client state op data =
     in
     state, out
   | TLS_established (tls, key), Packet.Control ->
-    handle_tls tls data >>= fun (tls', tls_response, d) ->
+    incoming_tls tls data >>= fun (tls', tls_response, d) ->
     maybe_kdf state.transport key d >>= fun keys_ctx ->
     (* now we send a PUSH_REQUEST\0 and see what happens *)
     push_request tls' >>| fun (tls'', out) ->
@@ -250,20 +252,30 @@ let incoming_client state op data =
     let state' = { state with client_state ; keys_ctx = Some keys_ctx } in
     (* first send an ack for the received key data packet (this needs to be
        a separate packet from the PUSH_REQUEST for unknown reasons) *)
-    let tls_out = match tls_response with None -> [] | Some x -> [x] in
+    let tls_out = match tls_response with None -> [] | Some x -> (* warn here as well? *) [x] in
     (state', tls_out @ [ Cstruct.empty ; out ])
   | Push_request_sent tls, Packet.Control ->
-    handle_tls tls data >>= fun (_tls', tls_response, d) ->
+    incoming_tls tls data >>= fun (tls', tls_response, d) ->
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
-    maybe_push_reply d >>= fun config ->
-    Logs.info (fun m -> m "received push reply %a" Openvpn_config.pp config);
-    Ok (state, [])
+    maybe_push_reply d >>| fun config ->
+    (* TODO validate config *)
+    let ip, prefix =
+        match Openvpn_config.(get Ifconfig config) with
+          | V4 ip, V4 mask -> ip, Ipaddr.V4.Prefix.of_netmask mask ip
+          | _ -> assert false
+    and gateway =
+      match Openvpn_config.(get Route_gateway config) with
+      | Some V4 ip -> ip
+      | _ -> assert false
+    in
+    let ctx = { ip ; prefix ; gateway } in
+    let client_state = Established (tls', ctx) in
+    { state with client_state }, []
   | _ -> Error (`No_transition (state, op, data))
 
 let expected_packet state data =
-  let open Rresult.R.Infix in
   (* expects monotonic packet + message id, session ids matching *)
   (* TODO track ack'ed message ids from them (only really important for UDP) *)
   match data with
@@ -333,39 +345,44 @@ let wrap_openvpn transport ts out =
     let transport, m_id = next_message_id transport in
     transport, (header, `Control (Packet.Control, (header, m_id, out)))
 
-let outgoing _state _now _data =
+let outgoing state _now _data =
+  if ready_to_send state.client_state then
   (* output is: packed_id 0xfa data, then wrap openvpn partial header
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
      --> hmac and prepend hash *)
-  assert false
+    assert false
+  else
+    Error `Not_ready
+
+let incoming_data err ctx data =
+  (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
+  let hmac, data = Cstruct.split data Packet.hmac_len in
+  let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
+  guard (Cstruct.equal hmac hmac') (err hmac') >>| fun () ->
+  let iv, data = Cstruct.split data 16 in
+  Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data
+  (* now, dec is: uint32 packet id followed by lzo-compressed data
+     and padding (looks like last byte and all other contain the
+     length of the padding, i.e. 11 * 0x0b *)
+  (* if dec[4] == 0xfa, then compression is off *)
 
 let incoming state now buf =
-  let open Rresult.R.Infix in
-  let rec multi state buf out =
+  let rec multi state buf out appdata =
     match Packet.decode buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
-    | Error `Partial -> Ok ({ state with linger = buf }, out)
+    | Error `Partial -> Ok ({ state with linger = buf }, out, appdata)
     | Ok (key, p, linger) ->
       (match p with
        | `Data (_, data) ->
          begin match state.keys_ctx with
            | None ->
              Logs.warn (fun m -> m "received some data, but session is not keyed yet");
-             Ok (state, [])
-           | Some ctx ->
-             (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
-             let hmac, data = Cstruct.split data Packet.hmac_len in
-             let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
-             guard (Cstruct.equal hmac hmac') (`Bad_mac (state, hmac', (key, p))) >>= fun () ->
-             let iv, data = Cstruct.split data 16 in
-             let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
-             Logs.info (fun m -> m "decrypted data@.%a" Cstruct.hexdump_pp dec);
-             (* now, dec is: uint32 packet id followed by lzo-compressed data
-                and padding (looks like last byte and all other contain the
-                length of the padding, i.e. 11 * 0x0b *)
-             (* if dec[4] == 0xfa, then compression is off *)
-             Ok (state, [])
+             Ok (state, [], [])
+           | Some keys ->
+             let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
+             incoming_data bad_mac keys data >>| fun data ->
+             state, [], [data]
          end
        | (`Ack _ | `Control _) as d ->
          (* verify mac *)
@@ -383,7 +400,7 @@ let incoming state now buf =
          | `Ack _ ->
            (* nothing to do for an ack *)
            Logs.info (fun m -> m "ignoring acknowledgement");
-           Ok (state', out)
+           Ok (state', [], [])
          | `Control (typ, (_, _, data)) ->
            (* process control in client state machine -- TODO: should receive partial state *)
            incoming_client state' typ data >>| fun (state', outs) ->
@@ -407,7 +424,7 @@ let incoming state now buf =
            Logs.debug (fun m -> m "out state is %a" State.pp state');
            Logs.debug (fun m -> m "the number of outgoing packets is %d"
                           (List.length outs));
-           (state', outs)) >>= fun (state', outs) ->
-      multi state' linger (out@outs)
+           (state', outs, [])) >>= fun (state', outs, app) ->
+      multi state' linger (out@outs) (appdata@app)
   in
-  multi state (Cstruct.append state.linger buf) []
+  multi state (Cstruct.append state.linger buf) [] []

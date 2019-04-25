@@ -92,7 +92,14 @@ let jump _ filename =
           read_from_fd fd >>= fun b ->
           match Openvpn.(Rresult.R.error_to_msg ~pp_error (incoming !s (now ()) b)) with
           | Error e -> fail e
-          | Ok (s', outs) -> s := s' ; write_multiple_to_fd fd outs >>= loop
+          | Ok (s', outs, app) ->
+            s := s' ;
+            List.iter (fun data ->
+                Logs.info (fun m -> m "received OpenVPN payload:@.%a"
+                              Cstruct.hexdump_pp data))
+              app ;
+            write_multiple_to_fd fd outs
+            >>= loop
         in
         loop ()
       end
