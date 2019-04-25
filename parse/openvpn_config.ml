@@ -27,6 +27,10 @@ module Conf_map = struct
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
     | Dev      : [`Null | `Tun of int | `Tap of int] k
+    | Dhcp_disable_nbt: flag k
+    | Dhcp_dns: Ipaddr.t list k
+    | Dhcp_ntp: Ipaddr.t list k
+    | Dhcp_domain: Domain_name.t k
     | Float    : flag k
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
@@ -105,6 +109,14 @@ module Conf_map = struct
       | Dev, `Tap i -> p() "dev tap%d" i
       | Dev, `Tun i -> p() "dev tun%d" i
       | Dev, `Null -> p() "dev null"
+      | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
+      | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
+      | Dhcp_ntp, ips ->
+        Fmt.(list ~sep:(unit"@.") @@
+             (fun ppf -> pf ppf "dhcp-option ntp %a" Ipaddr.pp )) ppf ips
+      | Dhcp_dns, ips ->
+        Fmt.(list ~sep:(unit"@.") @@
+             (fun ppf -> pf ppf "dhcp-option dns %a" Ipaddr.pp)) ppf ips
       | Float, () -> p() "float"
       | Ifconfig, (local,remote) ->
         p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
@@ -121,7 +133,7 @@ module Conf_map = struct
       | Proto, `Udp -> p() "proto udp"
       | Pull, () -> p() "pull"
       | Remote, lst ->
-        Fmt.(list ~sep:(unit"@ ") @@
+        Fmt.(list ~sep:(unit"@.") @@
              (fun ppf -> pf ppf "remote %a"@@
                pair ~sep:(unit " ")
                  (fun ppf -> function
@@ -259,9 +271,10 @@ let a_client =
   string "client" *> a_ign_whitespace *>
   return (`Entries [ B (Tls_client,()) ; B (Pull,()) ])
 
-(* TODO: "dev tun" is also valid, according to the manpage:
-   "tunX - X can be omitted for a dynamic device" *)
 let a_dev =
+  Logs.warn (fun m ->
+      m "TODO: 'dev tun' is also valid, according to the manpage: \
+         'tunX - X can be omitted for a dynamic device'");
   let a_device_name =
     choice [
       (string "tun" *> a_number_range 0 128 >>| fun x -> `Tun x) ;
@@ -269,7 +282,8 @@ let a_dev =
       string "null" *> return `Null ;
     ]
   in
-  string "dev" *> a_whitespace *> a_device_name
+  string "dev" *> a_whitespace *> a_device_name >>| fun name ->
+  `Entry (B (Dev,name))
 
 let a_proto =
   string "proto" *> a_whitespace *> choice [
@@ -557,6 +571,16 @@ let a_inline =
   return (`Inline (tag, x))
   <* char '<' <* char '/' <* string tag <* char '>'
 
+let a_dhcp_option =
+  string "dhcp-option" *> a_whitespace *>
+  a_single_param >>| String.lowercase_ascii >>= (function
+      | "disable-nbt" -> return @@ B (Dhcp_disable_nbt,())
+      | "dns" -> a_whitespace *> a_ip >>| fun ip -> B (Dhcp_dns, [ip])
+      | "domain" -> a_whitespace *> a_domain_name >>| fun d -> B(Dhcp_domain, d)
+      | "ntp" -> a_whitespace *> a_ip >>| fun ip -> B (Dhcp_ntp, [ip])
+      | _ -> fail "Unrecognized dhcp-option type")
+  >>| fun b -> `Entry b
+
 let a_not_implemented =
   (choice
      [ string "sndbuf" ;
@@ -565,8 +589,8 @@ let a_not_implemented =
        string "socket-flags" ;
        string "remote-cert-ku" ;
        (* TODO: *)
+       string "dhcp-option";
        string "redirect-gateway" ;
-       string "dhcp-option" ;
      ] <* a_whitespace >>= fun key ->
    take_while (function '\n' -> false | _ -> true) >>| fun rest ->
    Logs.warn (fun m ->m "IGNORING %S %S" key rest)
@@ -577,7 +601,8 @@ let a_config_entry : line A.t =
   a_ign_whitespace_no_comment *>
   Angstrom.choice [
     a_client ;
-    (a_dev >>| fun name -> `Entry (B (Dev,name))) ;
+    a_dev ;
+    a_dhcp_option ;
     a_proto ;
     a_proto_force ;
     a_resolv_retry ;
@@ -686,6 +711,8 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
                   m "Config key %a was supplied multiple times with same value"
                 pp (singleton k v)) ; Ok t
             (* can coalesce: *)
+            | Dhcp_dns -> Ok (add Dhcp_dns ((get Dhcp_dns t) @ v) t)
+            | Dhcp_ntp -> Ok (add Dhcp_ntp ((get Dhcp_ntp t) @ v) t)
             | Remote -> Ok (add Remote ((get Remote t) @ v) t)
             (* else: *)
             | _ -> Error (Fmt.strf "conflicting keys: %a not in"
@@ -763,7 +790,7 @@ let parse_begin config_str : (parser_state, 'err) result =
   parse_internal config_str >>= fun lines ->
   parse_next None (`Partial (lines, empty))
 
-let parse ~string_of_file config_str =
+let parse ~string_of_file config_str : (Conf_map.t, [> Rresult.R.msg]) result =
   let open Rresult in
   let rec loop = function
     | `Done conf -> Ok conf
@@ -772,6 +799,7 @@ let parse ~string_of_file config_str =
       string_of_file fn >>= fun contents ->
       parse_next (Some (`File (fn, contents))) (`Partial t) >>= loop
   in
-  parse_begin config_str >>= fun initial -> loop initial
+  R.reword_error (fun (s:string) -> `Msg s)
+    (parse_begin config_str >>= fun initial -> loop initial)
 
 include Conf_map

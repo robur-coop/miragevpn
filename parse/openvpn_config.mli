@@ -10,6 +10,10 @@ type 'a k =
   | Comp_lzo : flag k
   | Connect_retry : (int * int) k
   | Dev      : [`Null | `Tun of int | `Tap of int] k
+  | Dhcp_disable_nbt: flag k
+  | Dhcp_dns: Ipaddr.t list k
+  | Dhcp_ntp: Ipaddr.t list k
+  | Dhcp_domain: Domain_name.t k
   | Float    : flag k
 
   | Ifconfig : (Ipaddr.t * Ipaddr.t) k
@@ -64,6 +68,6 @@ val eq : eq
 val is_valid_client_config : t -> (unit, string) result
 
 val parse : string_of_file:(string -> (string,string) result) ->
-  string -> (t, string) result
+  string -> (t, [> Rresult.R.msg]) result
 (** Parses a configuration string, looking up references to external files
     as needed.*)

@@ -31,11 +31,11 @@ let () =
       begin match
           parse ~string_of_file:(fun _fn -> assert false)
             (Fmt.strf "%a" pp rules) with
-      | Error s->
+      | Error `Msg s->
         Logs.err (fun m ->m "self-test failed to parse: %s" s);
         exit 2
       | Ok dogfood when equal eq rules dogfood -> ()
       | Ok _ -> Logs.err (fun m -> m "self-test failed"); exit 1
       end
-    | Error s -> Logs.err (fun m -> m "%s" s)
+    | Error `Msg s -> Logs.err (fun m -> m "%s" s)
   end
