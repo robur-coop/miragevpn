@@ -1,6 +1,9 @@
 open State
 
 type nonrec t = t
+(* the left "t" is not visible on the right. the right one is looked up in the
+   current environment, and there is a "t" defined in State, thus thus means:
+   type t = State.t *)
 
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
