@@ -686,6 +686,105 @@ let eq : eq = { f = fun k v v2 ->
               pp (singleton k v2))
         ; eq end }
 
+
+let resolve_conflict (type a) t (k:a key) (v:a)
+  : ((a key * a) option, 'a) result =
+  let warn () =
+    Logs.debug (fun m -> m "Configuration flag appears twice: %a"
+                   pp (singleton k v)); Ok None in
+  match mem k t with
+  | true -> Ok (Some (k,v))
+  | false -> begin match k with
+      (* idempotent, as most of the flags - not a failure, emit warn: *)
+      | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
+      | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
+      | Passtos -> warn () | Persist_key -> warn () | Pull -> warn ()
+      | Remote_random -> warn ()
+      (* adding wouldn't change anything: *)
+      | _ when v = get k t -> (* TODO polymorphic comparison *)
+        Logs.debug (fun m ->
+            m "Config key %a was supplied multiple times with same value"
+              pp (singleton k v)) ; Ok None
+      (* can coalesce: *)
+      | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
+      | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
+      | Remote -> Ok (Some (Remote, (get Remote t @ v)))
+      (* else: *)
+      | _ -> Error (Fmt.strf "conflicting keys: %a not in"
+                      pp (singleton k v))
+    end
+
+let resolve_add_conflict t (B(k,v)) =
+  let open Rresult in
+  resolve_conflict t k v >>| function
+  | Some (k,v) -> add k v t | None -> t
+
+let valid_server_options ~client:_ _server_t =
+  Logs.err (fun m -> m "TODO valid_server_options is not implemented") ;
+  Ok ()
+
+let merge_push_reply ~client push_config =
+  let will_accept (type a) (k:a key) (v:a) =
+    match k,v with
+    (* whitelist keys we are willing to accept from server: *)
+    | Dhcp_disable_nbt, _ -> true
+    | Dhcp_domain, _ -> true
+    | Mssfix, _ -> true
+    | Tls_client, _ -> true
+    | Tun_mtu, _ -> true
+    | Topology, _ -> true
+    | Ping, _ -> true
+    | Ping_restart, _ -> true
+    (* TODO | Redirect_gateway, _ -> true *)
+
+    (* TODO should verify IPs: *)
+    | Dhcp_dns, _ -> true
+    | Dhcp_ntp, _ -> true
+    | Route, _ -> true
+    | Route_gateway, _ -> true
+    | _ -> false
+  in
+  let merger =
+    (* let naughty_server = in *)
+    let f (type a) (k:a key) (a:a option) (b:a option) =
+      let oks v = Ok (Some v) in
+      match k,(a:a option),(b:a option) with
+      (* server didn't touch this key: *)
+      | _, Some a, None -> oks a
+      | _, None, None -> Ok None
+      (* Client overrides list completely if set: *)
+      (* TODO all keys with type 'a list k should probably be listed here,
+         can we ensure that statically? *)
+      | Dhcp_dns, Some a, _ -> oks a
+      | Dhcp_ntp, Some a, _ -> oks a
+      (* TODO | Route, Some a, _ -> a*)
+      (* try to merge: *)
+      | _, Some a, Some b ->
+        begin match a, b with
+          (* they're equal, use client version: *)
+            _ when eq.f k a b -> oks a
+          | _ when not (will_accept k b) ->
+            Rresult.R.error_msgf "push-reply: won't accept %a"
+              pp (singleton k b)
+
+          (* at this point we need to merge them*)
+          | a,b -> begin match resolve_conflict (singleton k a) k b with
+              | Ok (Some (_,merged)) -> oks merged
+              (* client takes precedence if merging fails: *)
+              | _ -> oks a
+            end
+        end
+
+      (* try to use server value: *)
+      | _, None, Some v ->
+        if will_accept k v
+        then Ok b (* <-- use server version *)
+        else Rresult.R.error_msgf "server pushed disallowed: %a"
+            pp (singleton k v)
+    in ({ f } : merger)
+  in
+  merge merger client push_config
+
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
   let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
@@ -693,32 +792,6 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
     | (hd:line)::tl ->
       (* TODO should make sure not to override without conflict resolution,
          ie use addb_unless_bound and so on... *)
-      let resolve_add_conflict t (B (k,v)) =
-        let warn () =
-          Logs.debug (fun m -> m "Configuration flag appears twice: %a"
-                        pp (singleton k v)); Ok t in
-        match add_unless_bound k v t with
-        | Some t -> Ok t
-        | None -> begin match k with
-            (* idempotent, as most of the flags - not a failure, emit warn: *)
-            | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
-            | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
-            | Passtos -> warn () | Persist_key -> warn () | Pull -> warn ()
-            | Remote_random -> warn ()
-            (* adding wouldn't change anything: *)
-            | _ when v = get k t -> (* TODO polymorphic comparison *)
-              Logs.debug (fun m ->
-                  m "Config key %a was supplied multiple times with same value"
-                pp (singleton k v)) ; Ok t
-            (* can coalesce: *)
-            | Dhcp_dns -> Ok (add Dhcp_dns ((get Dhcp_dns t) @ v) t)
-            | Dhcp_ntp -> Ok (add Dhcp_ntp ((get Dhcp_ntp t) @ v) t)
-            | Remote -> Ok (add Remote ((get Remote t) @ v) t)
-            (* else: *)
-            | _ -> Error (Fmt.strf "conflicting keys: %a not in"
-                            pp (singleton k v))
-          end
-      in
       let multib kv =
         (List.fold_left (fun acc b ->
              acc >>= fun acc ->

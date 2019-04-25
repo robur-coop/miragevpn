@@ -65,9 +65,24 @@ val pp : Format.formatter -> t -> unit
 val eq : eq
 (** [eq] is an implementation of [cmp] for use with [{!equal} cmp t t2]*)
 
-val is_valid_client_config : t -> (unit,  [> Rresult.R.msg]) result
+open Rresult
 
-val parse : string_of_file:(string -> (string, Rresult.R.msg) result) ->
-  string -> (t, [> Rresult.R.msg]) result
+val is_valid_client_config : t -> (unit,  [> R.msg]) result
+
+val valid_server_options : client:t -> t -> (unit, [> R.msg]) result
+(** [valid_server_options client_config server_config] is a success if
+    [server_config] does not conflict with [client_config].
+    TODO return conflicting subset as error
+*)
+
+val merge_push_reply : client:t -> t -> (t, [> R.msg]) result
+(** [merge_push_reply client_config push_config] is a successful
+    merge of [client_config] and [push_config] if [push_config] does not
+    conflict with [client_config].
+    TODO return conflicting subset as error
+*)
+
+val parse : string_of_file:(string -> (string, R.msg) result) ->
+  string -> (t, [> R.msg]) result
 (** Parses a configuration string, looking up references to external files
     as needed.*)
