@@ -416,6 +416,9 @@ let incoming_data err ctx data =
    | _ -> Rresult.R.error_msgf "unknown compression 0x%X" compression) >>| fun data ->
   let data' = unpad data in
   if Cstruct.equal data' ping then begin
+    (* TODO not sure about this - we need a timer and record the timestamp of
+       the most recent sent packet (and send every interval a ping), plus
+       expect every interval at least one packet (otherwise: reconnect!?) *)
     Logs.warn (fun m -> m "received ping!");
     [ping], []
   end else
