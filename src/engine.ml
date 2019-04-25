@@ -205,7 +205,8 @@ let maybe_push_reply = function
       begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
         | Some ("", opts) ->
           let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
-          Openvpn_config.parse ~string_of_file:(fun _ -> Error "string of file is not available") opts
+          Openvpn_config.parse ~string_of_file:(fun _ ->
+              Rresult.R.error_msgf "string of file is not available") opts
         | _ ->
           Error (`Msg (Fmt.strf "push request sent, expected push_reply, got: %S" str);)
       end

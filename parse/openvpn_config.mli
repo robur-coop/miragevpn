@@ -52,8 +52,8 @@ type 'a k =
   | Topology : [`net30 | `p2p | `subnet] k
   | Tun_mtu : int k
   | Verb : int k
-module K : Gmap.KEY with type 'a t = 'a k
-include module type of Gmap.Make(K)
+
+include Gmap.S with type 'a key = 'a k
 
 val pp : Format.formatter -> t -> unit
 (** [pp ppf t] is [t] printed in a near approximation of the openvpn
@@ -65,9 +65,9 @@ val pp : Format.formatter -> t -> unit
 val eq : eq
 (** [eq] is an implementation of [cmp] for use with [{!equal} cmp t t2]*)
 
-val is_valid_client_config : t -> (unit, string) result
+val is_valid_client_config : t -> (unit,  [> Rresult.R.msg]) result
 
-val parse : string_of_file:(string -> (string,string) result) ->
+val parse : string_of_file:(string -> (string, Rresult.R.msg) result) ->
   string -> (t, [> Rresult.R.msg]) result
 (** Parses a configuration string, looking up references to external files
     as needed.*)

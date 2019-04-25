@@ -79,7 +79,7 @@ module Conf_map = struct
   let is_valid_client_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let open Rresult in
-    R.reword_error (fun err -> "not a valid client config: " ^  err)
+    R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
       ( ensure_mem Remote "does not have a remote"  >>=fun()->
         ensure_mem Tls_client "is not a TLS client" >>=fun()->
         ensure_mem Auth_user_pass "does not have user/password"
@@ -792,14 +792,16 @@ let parse_begin config_str : (parser_state, 'err) result =
 
 let parse ~string_of_file config_str : (Conf_map.t, [> Rresult.R.msg]) result =
   let open Rresult in
+  let to_msg t = R.reword_error (fun s -> `Msg s) t in
   let rec loop = function
     | `Done conf -> Ok conf
-    | `Partial _ as t -> parse_next None t >>= loop
+    | `Partial _ as t -> parse_next None t |> to_msg >>= loop
     | `Need_file (fn, t) ->
       string_of_file fn >>= fun contents ->
-      parse_next (Some (`File (fn, contents))) (`Partial t) >>= loop
+      parse_next (Some (`File (fn, contents))) (`Partial t)
+      |> to_msg >>= loop
   in
-  R.reword_error (fun (s:string) -> `Msg s)
-    (parse_begin config_str >>= fun initial -> loop initial)
+  parse_begin config_str |> to_msg >>= fun initial ->
+  (loop initial : (_,[< R.msg]) result :> (_,[> R.msg]) result)
 
 include Conf_map
