@@ -1,5 +1,7 @@
 open State
 
+type nonrec t = t
+
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
 
@@ -29,7 +31,6 @@ let header state timestamp =
   }
 
 let ptime_to_ts_exn now =
-  let now = now () in
   match Ptime.(Span.to_int_s (to_span now)) with
   | None -> assert false (* this will break in 2038-01-19 *)
   | Some x -> Int32.of_int x
@@ -53,7 +54,7 @@ let client config now rng () =
         X509.Authenticator.null
       | Some ca ->
         Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
-        X509.Authenticator.chain_of_trust ~time:(now ()) [ ca ]
+        X509.Authenticator.chain_of_trust ~time:now [ ca ]
     and user_pass = Openvpn_config.find Auth_user_pass config
     in
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
@@ -130,7 +131,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
   in
   Nocrypto.Uncommon.Cs.xor md5 sha
 
-let derive_keys (s : State.transport_layer) (key_source : State.key_source) (tls_data : Packet.tls_data) =
+let derive_keys (s : State.transport) (key_source : State.key_source) (tls_data : Packet.tls_data) =
   let master_key =
     prf ~label:"OpenVPN master secret" ~secret:key_source.pre_master
       ~client_random:key_source.random1 ~server_random:tls_data.random1 48
@@ -154,7 +155,7 @@ let handle_tls tls data =
       Error (`Tls e)
     | `Ok tls' -> Ok (tls', out, d)
 
-let client_handle state op data =
+let incoming_client state op data =
   let open Rresult.R.Infix in
   match state.client_state, op with
   | Expect_server_reset, Packet.Hard_reset_server ->
@@ -260,6 +261,18 @@ let expected_packet state data =
                  their_packet_id = Int32.succ hdr.Packet.packet_id ;
                  their_message_id }
 
+type error = [
+    Packet.error
+  | `Non_monotonic_packet_id of transport * Packet.header
+  | `Non_monotonic_message_id of transport * int32 option * Packet.header
+  | `Mismatch_their_session_id of transport * Packet.header
+  | `Mismatch_my_session_id of transport * Packet.header
+  | `Bad_mac of t * Cstruct.t * Packet.t
+  | `No_transition of t * Packet.operation * Cstruct.t
+  | `Tls of [ `Alert of Tls.Packet.alert_type | `Eof | `Fail of Tls.Engine.failure ]
+  | `Msg of string
+]
+
 let pp_error ppf = function
   | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
   | `Non_monotonic_packet_id (state, hdr) ->
@@ -291,9 +304,16 @@ let wrap_openvpn transport ts out =
     let transport, m_id = next_message_id transport in
     transport, (header, `Control (Packet.Control, (header, m_id, out)))
 
-let handle state now buf =
+let outgoing _state _now _data =
+  (* output is: packed_id 0xfa data, then wrap openvpn partial header
+     ~~> well, actually take a random IV, pad and encrypt,
+     ~~> prepend IV to encrrypted data
+     --> hmac and prepend hash *)
+  assert false
+
+let incoming state now buf =
   let open Rresult.R.Infix in
-  let rec handle_multi state buf out =
+  let rec multi state buf out =
     match Packet.decode buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out)
@@ -337,7 +357,7 @@ let handle state now buf =
            Ok (state', out)
          | `Control (typ, (_, _, data)) ->
            (* process control in client state machine -- TODO: should receive partial state *)
-           client_handle state' typ data >>| fun (state', outs) ->
+           incoming_client state' typ data >>| fun (state', outs) ->
            (* TODO: outs should be a variant: `Decrypt/`Encrypt/`Data *)
            (* each control needs to be acked! *)
            let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
@@ -359,6 +379,6 @@ let handle state now buf =
            Logs.debug (fun m -> m "the number of outgoing packets is %d"
                           (List.length outs));
            (state', outs)) >>= fun (state', outs) ->
-      handle_multi state' linger (out@outs)
+      multi state' linger (out@outs)
   in
-  handle_multi state (Cstruct.append state.linger buf) []
+  multi state (Cstruct.append state.linger buf) []

@@ -17,7 +17,7 @@ let pp_client_state ppf = function
   | TLS_established _ -> Fmt.string ppf "TLS handshake established"
   | Push_request_sent _ -> Fmt.string ppf "push request sent"
 
-type transport_layer = {
+type transport = {
   key : int ;
   my_hmac : Cstruct.t ;
   my_session_id : int64 ;
@@ -49,7 +49,7 @@ let pp_keys ppf t =
 
 type t = {
   linger : Cstruct.t ;
-  transport : transport_layer ;
+  transport : transport ;
   keys_ctx : keys_ctx option ;
   authenticator : X509.Authenticator.a ;
   user_pass : (string * string) option ;

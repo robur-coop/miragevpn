@@ -1,5 +1,4 @@
 open Lwt.Infix
-open Openvpn
 
 let rec write_to_fd fd data =
   if Cstruct.len data = 0 then
@@ -77,7 +76,7 @@ let jump _ filename =
         | [] -> Lwt.fail_with "no remote"
       end >>= fun (ip,port) ->
       Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
-      begin match Engine.client config now Nocrypto.Rng.generate () with
+      begin match Openvpn.client config (now ()) Nocrypto.Rng.generate () with
       | Error (`Msg msg) -> Lwt.fail_with ("couldn't init client: " ^ msg)
       | Ok (state, out) ->
         let s = ref state
@@ -91,7 +90,7 @@ let jump _ filename =
         write_to_fd fd out >>= fun () ->
         let rec loop () =
           read_from_fd fd >>= fun b ->
-          match Engine.(Rresult.R.error_to_msg ~pp_error (handle !s now b)) with
+          match Openvpn.(Rresult.R.error_to_msg ~pp_error (incoming !s (now ()) b)) with
           | Error e -> fail e
           | Ok (s', outs) -> s := s' ; write_multiple_to_fd fd outs >>= loop
         in
