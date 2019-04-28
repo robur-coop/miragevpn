@@ -55,14 +55,13 @@ module Main (R : Mirage_random.C) (P : Mirage_clock.PCLOCK) (S : Mirage_stack_lw
              | Error e -> Lwt.return (Rresult.R.error_to_msg ~pp_error:TCP.pp_error (Error e))
              | Ok `Eof -> Lwt.return (Error (`Msg "end of file from server"))
              | Ok (`Data b) ->
-               Logs.info (fun m -> m "received data %d %a" (Cstruct.len b) Cstruct.hexdump_pp b);
+               Logs.info (fun m -> m "received data %d" (Cstruct.len b));
                match Openvpn.(Rresult.R.error_to_msg ~pp_error (incoming !ovpn (now ()) b)) with
                | Error e -> Lwt.return (Error e)
                | Ok (ovpn', outs, app) ->
                  ovpn := ovpn' ;
                  List.iter (fun data ->
-                     Logs.info (fun m -> m "received OpenVPN payload:@.%a"
-                                   Cstruct.hexdump_pp data))
+                     Logs.info (fun m -> m "received OpenVPN payload:@.%d" (Cstruct.len data)))
                    app ;
                  Lwt_list.fold_left_s (fun acc x -> match acc with
                    | Ok () -> TCP.write flow x
@@ -73,13 +72,14 @@ module Main (R : Mirage_random.C) (P : Mirage_clock.PCLOCK) (S : Mirage_stack_lw
                    match Openvpn.ready !ovpn with
                    | Some ip_config ->
                      Logs.info (fun m -> m "openvpn is ready, sending a ping");
-                     let payload = R.generate 10 in
+                     let payload = R.generate 1024 in
                      let ping =
                        { Icmpv4_packet.code = 0 ; ty = Icmpv4_wire.Echo_request ;
                          subheader = Id_and_seq (0, !seq) }
                      in
                      Logs.info (fun m -> m "sending ping %a" Icmpv4_packet.pp ping);
                      let icmp_buf = Icmpv4_packet.Marshal.make_cstruct ~payload ping in
+                     let icmp_buf = Cstruct.append icmp_buf payload in
                      incr seq;
                      let ip =
                          { Ipv4_packet.src = ip_config.Openvpn.ip ; dst = Ipaddr.V4.of_string_exn "198.167.222.201" ;
