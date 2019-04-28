@@ -693,8 +693,8 @@ let resolve_conflict (type a) t (k:a key) (v:a)
     Logs.debug (fun m -> m "Configuration flag appears twice: %a"
                    pp (singleton k v)); Ok None in
   match mem k t with
-  | true -> Ok (Some (k,v))
-  | false -> begin match k with
+  | false -> Ok (Some (k,v))
+  | true -> begin match k with
       (* idempotent, as most of the flags - not a failure, emit warn: *)
       | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
       | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
@@ -710,8 +710,8 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
       | Remote -> Ok (Some (Remote, (get Remote t @ v)))
       (* else: *)
-      | _ -> Error (Fmt.strf "conflicting keys: %a not in"
-                      pp (singleton k v))
+      | _ -> Error (Fmt.strf "conflicting keys: %a not in %a"
+                      pp (singleton k v) pp t)
     end
 
 let resolve_add_conflict t (B(k,v)) =
@@ -744,46 +744,45 @@ let merge_push_reply ~client push_config =
     | Route_gateway, _ -> true
     | _ -> false
   in
-  let merger =
-    (* let naughty_server = in *)
-    let f (type a) (k:a key) (a:a option) (b:a option) =
-      let oks v = Ok (Some v) in
-      match k,(a:a option),(b:a option) with
-      (* server didn't touch this key: *)
-      | _, Some a, None -> oks a
-      | _, None, None -> Ok None
-      (* Client overrides list completely if set: *)
-      (* TODO all keys with type 'a list k should probably be listed here,
-         can we ensure that statically? *)
-      | Dhcp_dns, Some a, _ -> oks a
-      | Dhcp_ntp, Some a, _ -> oks a
-      (* TODO | Route, Some a, _ -> a*)
-      (* try to merge: *)
-      | _, Some a, Some b ->
-        begin match a, b with
-          (* they're equal, use client version: *)
-            _ when eq.f k a b -> oks a
-          | _ when not (will_accept k b) ->
-            Rresult.R.error_msgf "push-reply: won't accept %a"
-              pp (singleton k b)
+  (* let naughty_server = in *)
+  let f (type a) (k:a key) (a:a option) (b:a option) =
+    let oks v = Ok (Some v) in
+    match k,(a:a option),(b:a option) with
+    (* server didn't touch this key: *)
+    | _, Some a, None -> oks a
+    | _, None, None -> Ok None
+    (* Client overrides list completely if set: *)
+    (* TODO all keys with type 'a list k should probably be listed here,
+       can we ensure that statically? *)
+    | Dhcp_dns, Some a, Some _ -> oks a
+    | Dhcp_ntp, Some a, Some _ -> oks a
+    (* TODO | Route, Some a, _ -> a*)
+    (* try to merge: *)
+    | _, Some a, Some b ->
+      begin match a, b with
+        (* they're equal, use client version: *)
+          _ when eq.f k a b -> oks a
 
-          (* at this point we need to merge them*)
-          | a,b -> begin match resolve_conflict (singleton k a) k b with
-              | Ok (Some (_,merged)) -> oks merged
-              (* client takes precedence if merging fails: *)
-              | _ -> oks a
-            end
-        end
+        | _ when not (will_accept k b) ->
+          Rresult.R.error_msgf "push-reply: won't accept %a"
+            pp (singleton k b)
 
-      (* try to use server value: *)
-      | _, None, Some v ->
-        if will_accept k v
-        then Ok b (* <-- use server version *)
-        else Rresult.R.error_msgf "server pushed disallowed: %a"
-            pp (singleton k v)
-    in ({ f } : merger)
+        (* at this point we need to merge them*)
+        | a,b -> begin match resolve_conflict (singleton k a) k b with
+            | Ok (Some (_,merged)) -> oks merged
+            (* client takes precedence if merging fails: *)
+            | _ -> oks a
+          end
+      end
+
+    (* try to use server value: *)
+    | _, None, Some v ->
+      if will_accept k v
+      then Ok b (* <-- use server version *)
+      else Rresult.R.error_msgf "server pushed disallowed: %a"
+          pp (singleton k v)
   in
-  merge merger client push_config
+  merge { f } client push_config
 
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
