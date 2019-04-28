@@ -692,16 +692,16 @@ let resolve_conflict (type a) t (k:a key) (v:a)
   let warn () =
     Logs.debug (fun m -> m "Configuration flag appears twice: %a"
                    pp (singleton k v)); Ok None in
-  match mem k t with
-  | false -> Ok (Some (k,v))
-  | true -> begin match k with
+  match find k t with
+  | None -> Ok (Some (k,v))
+  | Some v2 -> begin match k with
       (* idempotent, as most of the flags - not a failure, emit warn: *)
       | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
       | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
       | Passtos -> warn () | Persist_key -> warn () | Pull -> warn ()
       | Remote_random -> warn ()
       (* adding wouldn't change anything: *)
-      | _ when v = get k t -> (* TODO polymorphic comparison *)
+      | _ when v = v2 -> (* TODO polymorphic comparison *)
         Logs.debug (fun m ->
             m "Config key %a was supplied multiple times with same value"
               pp (singleton k v)) ; Ok None
