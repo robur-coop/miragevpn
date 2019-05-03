@@ -11,7 +11,7 @@ open Lwt.Infix
 
 module Main (R : Mirage_random.C) (P : Mirage_clock.PCLOCK) (S : Mirage_stack_lwt.V4) (FS: Mirage_kv_lwt.RO) = struct
 
-  module DNS = Udns_mirage_client.Make(S)
+  module DNS = Dns_mirage_client.Make(S)
   module TCP = S.TCPV4
 
   let read_config data =

@@ -65,8 +65,8 @@ let jump _ filename =
         | (`IP ip, port) :: _ -> Lwt.return (ip, port)
         | (`Domain name, port) :: _ ->
           begin
-            let res = Udns_client_lwt.create () in
-            Udns_client_lwt.gethostbyname res name >>= function
+            let res = Dns_client_lwt.create () in
+            Dns_client_lwt.gethostbyname res name >>= function
             | Error `Msg x ->
               Logs.err (fun m -> m "gethostbyname for %a returned an error: %s"
                            Domain_name.pp name x) ;

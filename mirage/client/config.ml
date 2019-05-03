@@ -11,9 +11,9 @@ let openvpn_handler =
     [
       package "logs" ;
       package ~pin "openvpn";
-      package ~pin:udns "udns";
-      package ~pin:udns "udns-client";
-      package ~pin:udns "udns-mirage-client";
+      package ~pin:udns "dns";
+      package ~pin:udns "dns-client";
+      package ~pin:udns "dns-mirage-client";
       package "mirage-kv";
     ]
   in
