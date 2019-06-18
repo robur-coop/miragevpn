@@ -159,8 +159,9 @@ let incoming_tls tls data =
 let maybe_kex rng user_pass tls =
   if Tls.Engine.can_handle_appdata tls then
     let pre_master, random1, random2 = rng 48, rng 32, rng 32 in
-    let tls_data = Packet.{ pre_master ; random1 ; random2 ; options = Packet.options ; user_pass } in
-    let key_source = { State.pre_master ; random1 ; random2 } in
+    let tls_data = Packet.{ pre_master ; random1 ; random2 ; options ; user_pass }
+    and key_source = { State.pre_master ; random1 ; random2 }
+    in
     match Tls.Engine.send_application_data tls [Packet.encode_tls_data tls_data] with
     | None -> Error (`Msg "Tls.send application data failed for tls_data")
     | Some (tls', payload) ->
@@ -175,10 +176,12 @@ let maybe_kdf transport key = function
   | Some data ->
     Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
     Packet.decode_tls_data data >>= fun tls_data ->
+    (* TODO need to preserve master secret (for subsequent key updates)!? *)
     let keys = derive_keys transport key tls_data in
     Logs.info (fun m -> m "received tls data %a@.key block %a"
                   Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
-    (* TODO parse options with the config parser and configure the state accordingly *)
+    (* TODO parse options with config parser and configure accordingly *)
+    (* TODO offsets and length depend on some configuration parameters, no? *)
     let keys_ctx = {
       my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
       my_hmac = Cstruct.sub keys 64 20 ;
@@ -214,7 +217,7 @@ let maybe_push_reply = function
       end
   | None -> Error (`Msg "push request sent, expected data, received nothing")
 
-let incoming_client state op data =
+let incoming_control state op data =
   Logs.info (fun m -> m "incoming client!!! op %a (state %a)"
                 Packet.pp_operation op pp state);
   match state.client_state, op with
@@ -292,7 +295,7 @@ let expected_packet (state : transport) data =
       (`Mismatch_their_session_id (state, hdr)) >>= fun () ->
     opt_guard (Int64.equal state.my_session_id) hdr.Packet.remote_session
       (`Mismatch_my_session_id (state, hdr)) >>| fun () ->
-    (* TODO do sth with timestamp? *)
+    (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
     let their_message_id = match msg_id with
       | None -> state.their_message_id
       | Some x -> Int32.succ x
@@ -353,6 +356,7 @@ let pad block_size cs =
   Cstruct.memset out pad_len;
   Cstruct.append cs out
 
+(* TODO check for amount <= block_size && amount <= l! *)
 let unpad cs =
   let l = Cstruct.len cs in
   let amount = Cstruct.get_uint8 cs (pred l) in
@@ -366,6 +370,7 @@ let data_out ctx rng key data =
   Logs.debug (fun m -> m "sending %d bytes data out id %lu" (Cstruct.len data) ctx.my_packet_id);
   let hdr = Cstruct.create 5 in
   Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
+  (* byte 4 is compression -- 0xFA is "no compression" *)
   Cstruct.set_uint8 hdr 4 0xfa;
   let block_size = 16 in
   let iv = rng block_size
@@ -391,6 +396,10 @@ let outgoing state data =
 let ping =
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
+(* TODO need a timer and record the timestamp of the most recent sent packet
+   (and send every interval a ping), plus expect every interval at least one
+   packet (otherwise: reconnect!?) *)
+
 let incoming_data err ctx data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
   let hmac, data = Cstruct.split data Packet.hmac_len in
@@ -398,9 +407,7 @@ let incoming_data err ctx data =
   guard (Cstruct.equal hmac hmac') (err hmac') >>= fun () ->
   let iv, data = Cstruct.split data 16 in
   let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
-  (* now, dec is: uint32 packet id followed by lzo-compressed data
-     and padding (looks like last byte and all other contain the
-     length of the padding, i.e. 11 * 0x0b *)
+  (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
   guard (Cstruct.len dec > 5)
     (Rresult.R.msgf "payload %a too short (need at least 5 bytes)"
        Cstruct.hexdump_pp dec) >>= fun () ->
@@ -414,13 +421,33 @@ let incoming_data err ctx data =
             compression Cstruct.hexdump_pp dec) >>| fun data ->
   let data' = unpad data in
   if Cstruct.equal data' ping then begin
-    (* TODO not sure about this - we need a timer and record the timestamp of
-       the most recent sent packet (and send every interval a ping), plus
-       expect every interval at least one packet (otherwise: reconnect!?) *)
     Logs.warn (fun m -> m "received ping!");
-    [ping], []
+    (* TODO: should update somewhere a timestamp about last ping received! *)
+    None
   end else
-    [], [data']
+    Some data'
+
+let check_control_integrity err key p hmac_key =
+  let computed_mac, packet_mac =
+    compute_hmac key p hmac_key,
+    Packet.((header p).hmac)
+  in
+  guard (Cstruct.equal computed_mac packet_mac)
+    (err computed_mac) >>| fun () ->
+  Logs.info (fun m -> m "mac good")
+
+let wrap_hmac_control now transport outs =
+  let ts = ptime_to_ts_exn now in
+  let transport, outs =
+    List.fold_left (fun (transport, acc) out ->
+        (* add the OpenVPN header *)
+        let transport, (hdr, p) = wrap_openvpn transport ts out in
+        (* hmac each outgoing frame and encode *)
+        let out = hmac_and_out transport.key transport.my_hmac hdr p in
+        transport, out :: acc)
+      (transport, []) outs
+  in
+  transport, List.rev outs
 
 let incoming state now buf =
   let rec multi state buf out appdata =
@@ -428,6 +455,7 @@ let incoming state now buf =
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out, appdata)
     | Ok (key, p, linger) ->
+      let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
       (match p with
        | `Data (_, data) ->
          begin match state.keys_ctx with
@@ -435,56 +463,31 @@ let incoming state now buf =
              Logs.warn (fun m -> m "received some data, but session is not keyed yet");
              Ok (state, [], [])
            | Some keys ->
-             let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
-             incoming_data bad_mac keys data >>| fun (out, data) ->
-             let ctx, outs = List.fold_left (fun (ctx, acc) data ->
-                 let ctx, out = data_out ctx state.rng state.transport.key data in
-                 (ctx, out :: acc))
-                 (keys, []) out
-             in
-             { state with keys_ctx = Some ctx }, List.rev outs, data
+             incoming_data bad_mac keys data >>| fun data ->
+             let data = match data with None -> [] | Some x -> [ x ] in
+             state, [], data
          end
        | (`Ack _ | `Control _) as d ->
-         (* verify mac *)
-         let computed_mac, packet_mac =
-           compute_hmac key p state.transport.their_hmac,
-           Packet.((header p).hmac)
-         in
-         guard (Cstruct.equal computed_mac packet_mac)
-           (`Bad_mac (state, computed_mac, (key, p))) >>= fun () ->
-         Logs.info (fun m -> m "mac good");
+         check_control_integrity bad_mac key p state.transport.their_hmac >>= fun () ->
          (* _first_ update state with last_received_message_id and packet_id *)
          expected_packet state.transport p >>= fun transport ->
          let state' = { state with transport } in
          match d with
          | `Ack _ ->
-           (* nothing to do for an ack *)
+           (* TODO nothing to do for an ack, should bump ack number *)
            Logs.info (fun m -> m "ignoring acknowledgement");
            Ok (state', [], [])
          | `Control (typ, (_, _, data)) ->
            (* process control in client state machine -- TODO: should receive partial state *)
-           incoming_client state' typ data >>| fun (state', outs) ->
-           (* TODO: outs should be a variant: `Decrypt/`Encrypt/`Data *)
+           incoming_control state' typ data >>| fun (state', outs) ->
            (* each control needs to be acked! *)
            let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
-           (* now prepare each outgoing packet *)
-           let state', outs =
-             let ts = ptime_to_ts_exn now in
-             let transport, outs =
-               List.fold_left (fun (transport, acc) out ->
-                   (* add the OpenVPN header *)
-                   let transport, (hdr, p) = wrap_openvpn transport ts out in
-                   (* hmac each outgoing frame and encode *)
-                   let out = hmac_and_out transport.key transport.my_hmac hdr p in
-                   transport, out :: acc)
-                 (state'.transport, []) outs
-             in
-             { state' with transport }, List.rev outs
-           in
-           Logs.debug (fun m -> m "out state is %a" State.pp state');
-           Logs.debug (fun m -> m "the number of outgoing packets is %d"
-                          (List.length outs));
-           (state', outs, [])) >>= fun (state', outs, app) ->
+           (* now prepare outgoing packets *)
+           let transport, enc_outs = wrap_hmac_control now state'.transport outs in
+           let state'' = { state' with transport } in
+           (state'', enc_outs, [])) >>= fun (state', outs, app) ->
+      Logs.debug (fun m -> m "out state is %a" State.pp state');
+      Logs.debug (fun m -> m "number of outgoing packets is %d" (List.length outs));
       multi state' linger (out@outs) (appdata@app)
   in
   multi state (Cstruct.append state.linger buf) [] []
