@@ -83,7 +83,9 @@ module Conf_map = struct
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
       ( ensure_mem Remote "does not have a remote"  >>=fun()->
         ensure_mem Tls_client "is not a TLS client" >>=fun()->
-        ensure_not Comp_lzo "LZO compression is deprecated upstream, and not implemented in this library" >>=fun() ->
+        let _todo = ensure_not in
+        (* TODO
+           ensure_not Comp_lzo "LZO compression is deprecated upstream, and not implemented in this library" >>=fun() -> *)
         ensure_mem Auth_user_pass "does not have user/password"
         (* ^-- TODO or has client certificate ? *)
         >>= fun () ->

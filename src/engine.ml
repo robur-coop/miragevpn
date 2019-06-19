@@ -410,7 +410,8 @@ let incoming_data err ctx data =
   (* if dec[4] == 0xfa, then compression is off *)
   (match compression with
    | 0xFA -> Ok (Cstruct.shift dec 5)
-   | _ -> Rresult.R.error_msgf "unknown compression 0x%X" compression) >>| fun data ->
+   | _ -> Rresult.R.error_msgf "unknown compression %#X in packet:@.%a"
+            compression Cstruct.hexdump_pp dec) >>| fun data ->
   let data' = unpad data in
   if Cstruct.equal data' ping then begin
     (* TODO not sure about this - we need a timer and record the timestamp of

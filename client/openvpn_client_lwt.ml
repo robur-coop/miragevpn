@@ -78,9 +78,8 @@ let jump _ filename =
       Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
       begin match Openvpn.client config (now ()) Nocrypto.Rng.generate () with
       | Error (`Msg msg) -> Lwt.fail_with ("couldn't init client: " ^ msg)
-      | Ok (state, out) ->
-        let s = ref state
-        and dom =
+      | Ok (initial_state, out) ->
+        let dom =
           Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
         and ip = Ipaddr_unix.to_inet_addr ip
         in
@@ -88,20 +87,20 @@ let jump _ filename =
         Lwt_unix.(connect fd (ADDR_INET (ip, port))) >>= fun () ->
         let open Lwt_result in
         write_to_fd fd out >>= fun () ->
-        let rec loop () =
+        let rec loop state =
           read_from_fd fd >>= fun b ->
-          match Openvpn.(Rresult.R.error_to_msg ~pp_error (incoming !s (now ()) b)) with
+          match Openvpn.(Rresult.R.error_to_msg ~pp_error
+                           (incoming state (now ()) b)) with
           | Error e -> fail e
-          | Ok (s', outs, app) ->
-            s := s' ;
+          | Ok (next_state, outs, app) ->
             List.iter (fun data ->
                 Logs.info (fun m -> m "received OpenVPN payload:@.%a"
                               Cstruct.hexdump_pp data))
               app ;
             write_multiple_to_fd fd outs
-            >>= loop
+            >>= fun () -> loop next_state
         in
-        loop ()
+        loop initial_state
       end
   ) (* <- Lwt_main.run *)
 
