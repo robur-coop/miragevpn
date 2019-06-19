@@ -1,6 +1,7 @@
 (** OpenVPN configuration parsing module *)
 
 type flag = unit
+
 type 'a k =
   | Auth_retry : [`Nointeract] k
   | Auth_user_pass : (string * string) k (** username, password*)
@@ -21,14 +22,12 @@ type 'a k =
               fied as a DNS or /etc/hosts file resolvable name.*)
 
   | Ifconfig_nowarn : flag k
-  | Keepalive: (int * int) k
   | Mssfix   : int k
   | Mute_replay_warnings : flag k
   | Passtos  : flag k
   | Persist_key : flag k
-  | Ping      : int k
-  | Ping_exit : int k
-  | Ping_restart : int k
+  | Ping_interval : int k
+  | Ping_timeout : [`Restart of int | `Exit of int] k
   | Pull     : flag k
   | Proto    : [`Tcp | `Udp] k (** TODO should Proto be bound to a remote? *)
   | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k

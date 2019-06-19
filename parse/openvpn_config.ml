@@ -34,14 +34,12 @@ module Conf_map = struct
     | Float    : flag k
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
-    | Keepalive : (int * int) k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
     | Persist_key : flag k
-    | Ping      : int k
-    | Ping_exit : int k
-    | Ping_restart : int k
+    | Ping_interval : int k
+    | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
     | Proto    : [`Tcp | `Udp] k
     | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
@@ -96,100 +94,108 @@ module Conf_map = struct
            Error "remote-cert-tls is not SERVER?!" else Ok ())
       )
 
+  let pp_b ppf (b:b) =
+    let p () = Fmt.pf ppf in
+    let B (k,v) = b in
+    match k,v with
+    | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
+    | Auth_user_pass, (user,pass) ->
+      Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
+    | Bind, true -> p() "bind"
+    | Bind, false -> p() "nobind"
+    | Ca, ca -> p() "ca [inline]\n# CN: %S\n<ca>\n%s</ca>"
+                  (X509.common_name_to_string ca)
+                  (X509.Encoding.Pem.Certificate.to_pem_cstruct1 ca
+                   |> Cstruct.to_string)
+    | Cipher, cipher -> p() "cipher %s" cipher
+    | Comp_lzo, () -> p() "comp-lzo # deprecated"
+    | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
+    | Dev, `Tap i -> p() "dev tap%d" i
+    | Dev, `Tun i -> p() "dev tun%d" i
+    | Dev, `Null -> p() "dev null"
+    | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
+    | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
+    | Dhcp_ntp, ips ->
+      Fmt.(list ~sep:(unit"@.") @@
+           (fun ppf -> pf ppf "dhcp-option ntp %a" Ipaddr.pp )) ppf ips
+    | Dhcp_dns, ips ->
+      Fmt.(list ~sep:(unit"@.") @@
+           (fun ppf -> pf ppf "dhcp-option dns %a" Ipaddr.pp)) ppf ips
+    | Float, () -> p() "float"
+    | Ifconfig, (local,remote) ->
+      p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
+    | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
+    | Ping_interval, n -> p() "ping %d" n
+    | Ping_timeout, `Exit timeout -> p() "ping-exit %d" timeout
+    | Ping_timeout, `Restart timeout -> p() "ping-restart %d" timeout
+    | Mssfix, int -> p() "mssfix %d" int
+    | Mute_replay_warnings, () -> p() "mute-replay-warnings"
+    | Passtos, () -> p() "passtos"
+    | Persist_key, () -> p() "persist-key"
+    | Proto, `Tcp -> p() "proto tcp"
+    | Proto, `Udp -> p() "proto udp"
+    | Pull, () -> p() "pull"
+    | Remote, lst ->
+      Fmt.(list ~sep:(unit"@.") @@
+           (fun ppf -> pf ppf "remote %a"@@
+             pair ~sep:(unit " ")
+               (fun ppf -> function
+                  | `Domain name -> Domain_name.pp ppf name
+                  | `IP ip -> Ipaddr.pp ppf ip)
+               int (*port*))) ppf lst
+    | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
+    | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
+    | Remote_random, () -> p() "remote-random"
+    | Replay_window, (low,high) -> p() "replay-window %d %d" low high
+    | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
+    | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
+    | Route, (network,netmask,gateway,metric) ->
+      let pp_addr ppf v = Fmt.pf ppf "%s" (match v with
+          | `ip ip -> Ipaddr.to_string ip
+          | `net_gateway -> "net_gateway"
+          | `remote_host -> "remote_host"
+          | `vpn_gateway -> "vpn_gateway") in
+      p() "route %a %a %a %a"
+        pp_addr network
+        Fmt.(option ~none:(unit"default") Ipaddr.pp) netmask
+        Fmt.(option ~none:(unit"default") pp_addr) gateway
+        Fmt.(option ~none:(unit"default") int) metric
+    | Route_gateway, v ->
+      p() "route-gateway %a" Fmt.(option ~none:(unit"default") Ipaddr.pp) v
+    | Tls_auth, (a,b,c,d) ->
+      p() "tls-auth [inline]\n<tls-auth>\n%s\n%a\n%s\n</tls-auth>"
+        "-----BEGIN OpenVPN Static key V1-----"
+        Fmt.(array ~sep:(unit"\n") string)
+        (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
+         | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
+        "-----END OpenVPN Static key V1-----"
+    | Tls_client, () -> p() "tls-client"
+    | Tls_version_min, (ver,or_highest) ->
+      p() "tls-version-min %s%s" (match ver with
+          | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
+        (if or_highest then " or-highest" else "")
+    | Topology, v -> p() "topology %s" (match v with
+          `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
+    | Tun_mtu, int -> p() "tun-mtu %d" int
+    | Verb, int -> p() "verb %d" int
+
   let pp ppf t =
-    let pp ppf (b:b) =
-      let p () = Fmt.pf ppf in
-      let B (k,v) = b in
-      match k,v with
-      | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
-      | Auth_user_pass, (user,pass) ->
-        Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
-      | Bind, true -> p() "bind"
-      | Bind, false -> p() "nobind"
-      | Ca, ca -> p() "ca [inline]\n# CN: %S\n<ca>\n%s</ca>"
-                    (X509.common_name_to_string ca)
-                    (X509.Encoding.Pem.Certificate.to_pem_cstruct1 ca
-                     |> Cstruct.to_string)
-      | Cipher, cipher -> p() "cipher %s" cipher
-      | Comp_lzo, () -> p() "comp-lzo # deprecated"
-      | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
-      | Dev, `Tap i -> p() "dev tap%d" i
-      | Dev, `Tun i -> p() "dev tun%d" i
-      | Dev, `Null -> p() "dev null"
-      | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
-      | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
-      | Dhcp_ntp, ips ->
-        Fmt.(list ~sep:(unit"@.") @@
-             (fun ppf -> pf ppf "dhcp-option ntp %a" Ipaddr.pp )) ppf ips
-      | Dhcp_dns, ips ->
-        Fmt.(list ~sep:(unit"@.") @@
-             (fun ppf -> pf ppf "dhcp-option dns %a" Ipaddr.pp)) ppf ips
-      | Float, () -> p() "float"
-      | Ifconfig, (local,remote) ->
-        p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
-      | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
-      | Keepalive, (low,high) -> p() "keepalive %d %d" low high
-      | Mssfix, int -> p() "mssfix %d" int
-      | Mute_replay_warnings, () -> p() "mute-replay-warnings"
-      | Passtos, () -> p() "passtos"
-      | Persist_key, () -> p() "persist-key"
-      | Ping, i -> p() "ping %d" i
-      | Ping_exit, i -> p() "ping-exit %d" i
-      | Ping_restart, i -> p() "ping-restart %d" i
-      | Proto, `Tcp -> p() "proto tcp"
-      | Proto, `Udp -> p() "proto udp"
-      | Pull, () -> p() "pull"
-      | Remote, lst ->
-        Fmt.(list ~sep:(unit"@.") @@
-             (fun ppf -> pf ppf "remote %a"@@
-               pair ~sep:(unit " ")
-                 (fun ppf -> function
-                    | `Domain name -> Domain_name.pp ppf name
-                    | `IP ip -> Ipaddr.pp ppf ip)
-                 int (*port*))) ppf lst
-      | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
-      | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
-      | Remote_random, () -> p() "remote-random"
-      | Replay_window, (low,high) -> p() "replay-window %d %d" low high
-      | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
-      | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
-      | Route, (network,netmask,gateway,metric) ->
-        let pp_addr ppf v = Fmt.pf ppf "%s" (match v with
-            | `ip ip -> Ipaddr.to_string ip
-            | `net_gateway -> "net_gateway"
-            | `remote_host -> "remote_host"
-            | `vpn_gateway -> "vpn_gateway") in
-        p() "route %a %a %a %a"
-          pp_addr network
-          Fmt.(option ~none:(unit"default") Ipaddr.pp) netmask
-          Fmt.(option ~none:(unit"default") pp_addr) gateway
-          Fmt.(option ~none:(unit"default") int) metric
-      | Route_gateway, v ->
-        p() "route-gateway %a" Fmt.(option ~none:(unit"default") Ipaddr.pp) v
-      | Tls_auth, (a,b,c,d) ->
-        p() "tls-auth [inline]\n<tls-auth>\n%s\n%a\n%s\n</tls-auth>"
-          "-----BEGIN OpenVPN Static key V1-----"
-          Fmt.(array ~sep:(unit"\n") string)
-          (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
-           | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
-          "-----END OpenVPN Static key V1-----"
-      | Tls_client, () -> p() "tls-client"
-      | Tls_version_min, (ver,or_highest) ->
-        p() "tls-version-min %s%s" (match ver with
-            | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
-          (if or_highest then " or-highest" else "")
-      | Topology, v -> p() "topology %s" (match v with
-            `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
-      | Tun_mtu, int -> p() "tun-mtu %d" int
-      | Verb, int -> p() "verb %d" int
-    in
     let minimized_t =
       if mem Tls_client t && mem Pull t then begin
         Fmt.pf ppf "client\n" ; remove Tls_client t |> remove Pull
       end else t
     in
-    Fmt.(pf ppf "%a" (list ~sep:(unit"@.") pp) (bindings minimized_t))
+    Fmt.(pf ppf "%a" (list ~sep:(unit"@.") pp_b) (bindings minimized_t))
 
+end
+
+
+module Defaults = struct
+  let config =
+    let open Conf_map in
+    empty
+    |> add Ping_interval 0
+    |> add Ping_timeout (`Restart 120)
 end
 
 open Conf_map
@@ -199,6 +205,7 @@ type line = [
   | `Entry of b
   | `Blank
   | `Inline of string * string
+  | `Keepalive of int * int (* interval * timeout *)
   | `Proto_force of [ `Tcp | `Udp ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
   | inline_or_path
@@ -207,9 +214,11 @@ type line = [
 let pp_line ppf (x : line) =
   let v = Fmt.pf in
   (match x with
-   | `Entries _ -> v ppf "entries TODO"
-   | `Entry _ -> v ppf "entry TODO"
+   | `Entries bs -> v ppf "entries: @[<v>%a@]"
+                     Fmt.(list ~sep:(unit"@,") pp_b) bs
+   | `Entry b -> v ppf "entry: %a" pp_b b
    | `Blank -> v ppf "#"
+   | `Keepalive (interval, timeout) -> v ppf "keepalive %d %d" interval timeout
    | `Proto_force _ -> v ppf "proto-force"
    | `Socks_proxy _ -> v ppf "socks-proxy"
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
@@ -440,10 +449,15 @@ let a_entry_one_number name =
   string name *> a_whitespace *> a_number
 
 let a_ping =
-  a_entry_one_number "ping" >>| fun n -> `Entry (B(Ping, n))
+  a_entry_one_number "ping" >>| fun n -> `Entry (B(Ping_interval,n))
 
 let a_ping_restart =
-  a_entry_one_number "ping-restart" >>| fun n -> `Entry (B(Ping_restart, n))
+  a_entry_one_number "ping-restart" >>| fun n ->
+  `Entry (B(Ping_timeout,`Restart n))
+
+let a_ping_exit =
+  a_entry_one_number "ping-exit" >>| fun n ->
+  `Entry (B(Ping_timeout,`Exit n))
 
 let a_tun_mtu = a_entry_one_number "tun-mtu" >>| fun x ->
   `Entry (B(Tun_mtu,x))
@@ -461,8 +475,8 @@ let a_connect_retry =
   `Entry (B (Connect_retry,pair))
 
 let a_keepalive =
-  a_entry_two_numbers "keepalive" >>| fun pair ->
-  `Entry (B(Keepalive,pair))
+  a_entry_two_numbers "keepalive" >>| fun (interval, timeout) ->
+  `Keepalive (interval, timeout)
 
 let a_verb =
   a_entry_one_number "verb" >>| fun x -> `Entries [B (Verb, x)]
@@ -633,6 +647,7 @@ let a_config_entry : line A.t =
     a_ca ;
     a_ping ;
     a_ping_restart ;
+    a_ping_exit ;
     a_ifconfig ;
     a_topology ;
     a_route ;
@@ -643,7 +658,7 @@ let a_config_entry : line A.t =
   ]
 
 
-let parse_internal config_str : (line list, 'x) result=
+let parse_internal config_str : (line list, 'x) result =
   let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string
@@ -696,6 +711,8 @@ let eq : eq = { f = fun k v v2 ->
 
 let resolve_conflict (type a) t (k:a key) (v:a)
   : ((a key * a) option, 'a) result =
+  (* when called by merge_push_reply, [v] is the server-provided value,
+     and [t] is the local configuration *)
   let warn () =
     Logs.debug (fun m -> m "Configuration flag appears twice: %a"
                    pp (singleton k v)); Ok None in
@@ -716,6 +733,30 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
       | Remote -> Ok (Some (Remote, (get Remote t @ v)))
+      | Ping_interval ->
+        begin match find Ping_interval t with
+          | Some old when old <> v ->
+            Logs.warn (fun m -> m "Overriding previous interval %d with %d"
+                          old v)
+          | _ -> () end ; Ok (Some (k, v))
+      | Ping_timeout ->
+        let override ~old ~next =
+          if old <> next then
+            Logs.warn (fun m ->
+                m "Overriding previous ping timeout %d with %d" old next) ;
+          Ok (Some (k,v))
+        in
+        begin match v, find Ping_timeout t with
+        | _, None -> Ok (Some (k, v))
+        | `Exit next, Some `Exit old -> override ~old ~next
+        | `Restart next, Some `Restart old -> override ~old ~next
+        | `Exit _, Some `Restart _ ->
+          Error "Remote config tried to change ping timeout \
+                 action from 'restart' to 'exit'"
+        | `Restart _, Some `Exit _ ->
+          Error "Remote config tried to change ping timeout \
+                 action from 'exit' to 'restart'"
+        end
       (* else: *)
       | _ -> Error (Fmt.strf "conflicting keys: %a not in %a"
                       pp (singleton k v) pp t)
@@ -740,8 +781,8 @@ let merge_push_reply ~client push_config =
     | Tls_client, _ -> true
     | Tun_mtu, _ -> true
     | Topology, _ -> true
-    | Ping, _ -> true
-    | Ping_restart, _ -> true
+    | Ping_interval, _ -> true
+    | Ping_timeout, _ -> true
     (* TODO | Redirect_gateway, _ -> true *)
 
     (* TODO should verify IPs: *)
@@ -753,43 +794,43 @@ let merge_push_reply ~client push_config =
   in
   (* let naughty_server = in *)
   let f (type a) (k:a key) (a:a option) (b:a option) =
-    let oks v = Ok (Some v) in
     match k,(a:a option),(b:a option) with
     (* server didn't touch this key: *)
-    | _, Some a, None -> oks a
-    | _, None, None -> Ok None
+    | _, (Some _ as a), None -> a
+    | _, None, None -> None
     (* Client overrides list completely if set: *)
     (* TODO all keys with type 'a list k should probably be listed here,
        can we ensure that statically? *)
-    | Dhcp_dns, Some a, Some _ -> oks a
-    | Dhcp_ntp, Some a, Some _ -> oks a
+    | Dhcp_dns, (Some _ as a), Some _ -> a
+    | Dhcp_ntp, (Some _ as a), Some _ -> a
     (* TODO | Route, Some a, _ -> a*)
     (* try to merge: *)
-    | _, Some a, Some b ->
+    | _, (Some a as some_a), Some b ->
       begin match a, b with
         (* they're equal, use client version: *)
-          _ when eq.f k a b -> oks a
+          _ when eq.f k a b -> some_a
 
         | _ when not (will_accept k b) ->
-          Rresult.R.error_msgf "push-reply: won't accept %a"
-            pp (singleton k b)
+          invalid_arg @@ Fmt.strf
+            "push-reply: won't accept %a" pp (singleton k b)
 
         (* at this point we need to merge them*)
         | a,b -> begin match resolve_conflict (singleton k a) k b with
-            | Ok (Some (_,merged)) -> oks merged
+            | Ok (Some (_,merged)) -> Some merged
             (* client takes precedence if merging fails: *)
-            | _ -> oks a
+            | _ -> some_a
           end
       end
 
     (* try to use server value: *)
     | _, None, Some v ->
       if will_accept k v
-      then Ok b (* <-- use server version *)
-      else Rresult.R.error_msgf "server pushed disallowed: %a"
-          pp (singleton k v)
+      then b (* <-- use server version *)
+      else invalid_arg @@
+        Fmt.strf "server pushed disallowed: %a" pp (singleton k v)
   in
-  merge { f } client push_config
+  try Ok (merge { f } client push_config)
+  with Invalid_argument msg -> Error (`Msg msg)
 
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
@@ -851,6 +892,35 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
         | `Blank -> loop acc tl
         | `Entry b -> retb b
         | `Entries lst -> multib lst
+        | `Keepalive (interval, timeout) ->
+          begin match find Ping_interval acc with
+            | Some old ->
+              Logs.warn (fun m ->
+                  m "keepalive %d %d overrides former ping interval %d"
+                    interval timeout old);
+            | None -> () end ;
+          let acc = add Ping_interval interval acc in
+          let keepalive_action was_old next =
+            let maybe_warn old =
+              if was_old && old <> next then
+                Logs.warn (fun m ->
+                    m "keepalive %d %d overrides former ping timeout %d"
+                      interval timeout old) in
+            function
+            | `Exit old -> maybe_warn old ; `Exit next
+            | `Restart old -> maybe_warn old ; `Restart next
+          in
+          let timeout =
+            let was_old, action = match find Ping_timeout acc with
+            | Some old -> true, old
+            | None ->
+              begin match List.find_opt (function
+                    `Entry (B(Ping_timeout, _)) -> true
+                  | _ -> false) tl with
+              | Some `Entry (B(Ping_timeout, x)) -> false, x
+              | _ -> false, get Ping_timeout Defaults.config end ;
+              in keepalive_action was_old timeout action in
+          loop (add Ping_timeout timeout acc) tl
         | ( `Proto_force _
           | `Socks_proxy _) as line ->
           Logs.warn (fun m -> m"ignoring unimplemented option: %a"
@@ -882,5 +952,9 @@ let parse ~string_of_file config_str : (Conf_map.t, [> Rresult.R.msg]) result =
   in
   parse_begin config_str |> to_msg >>= fun initial ->
   (loop initial : (_,[< R.msg]) result :> (_,[> R.msg]) result)
+  >>| fun parsed_conf ->
+  (* apply default configuration entries, overriding with the parsed config: *)
+  Conf_map.union {f = fun _key _default parsed -> Some parsed }
+    Defaults.config parsed_conf
 
 include Conf_map
