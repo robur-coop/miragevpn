@@ -20,7 +20,7 @@ let openvpn_handler =
   foreign
     ~deps:[abstract nocrypto]
     ~packages
-    "Unikernel.Main" (random @-> pclock @-> stackv4 @-> kv_ro @-> job)
+    "Unikernel.Main" (random @-> pclock @-> mclock @-> stackv4 @-> kv_ro @-> job)
 
 let () =
-  register "client" [openvpn_handler $ default_random $ default_posix_clock $ generic_stackv4 default_network $ data ]
+  register "client" [openvpn_handler $ default_random $ default_posix_clock $ default_monotonic_clock $ generic_stackv4 default_network $ data ]

@@ -4,4 +4,4 @@
   (package openvpn)
   (modules openvpn_client_lwt)
   (libraries openvpn lwt lwt.unix cmdliner fmt.tty logs.fmt logs.cli fmt.cli
-             ipaddr ipaddr.unix ptime.clock.os dns-client-lwt nocrypto.lwt))
+             ipaddr ipaddr.unix ptime.clock.os dns-client-lwt nocrypto.lwt mtime.clock.os))

@@ -38,7 +38,7 @@ depends: [
   "ptime"
   "rresult"
   "tls"
-  "udns-client-lwt"
+  "dns-client-lwt"
   "x509"
-
+  "duration"
 ]

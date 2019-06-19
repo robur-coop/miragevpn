@@ -325,16 +325,3 @@ let decode_tls_data buf =
      | "", "" -> None
      | _ -> Some (u, p)) >>| fun user_pass ->
     { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
-
-(*
-type data = {
-  hmac : Cstruct.t ; (* of cipertext IV + ciphertext if not disabled by --auth none *)
-  ciphertext_iv : Cstruct.t ; (* size is cipher-dependent, if not disabled by --no-iv *)
-  payload : Cstruct.t ;
-}
-
-type tls_data = {
-  packet_id : packet_id ; (* disabled by --no-replay *)
-  payload : Cstruct.t
-}
-  *)

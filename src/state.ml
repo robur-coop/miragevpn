@@ -61,13 +61,14 @@ let pp_keys ppf t =
     t.my_packet_id t.their_packet_id
 
 type t = {
+  config : Openvpn_config.t ;
   linger : Cstruct.t ;
   transport : transport ;
   keys_ctx : keys_ctx option ;
-  authenticator : X509.Authenticator.a ;
-  user_pass : (string * string) option ;
   rng : int -> Cstruct.t ;
   client_state : client_state ;
+  last_received : int64 ;
+  last_sent : int64
 }
 
 let pp ppf t =

@@ -45,19 +45,10 @@ let hmac_and_out key hmac_key header p =
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode (key, p')
 
-let client config now rng () =
+let client config now ts rng () =
   match Openvpn_config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
-    let authenticator = match Openvpn_config.find Ca config with
-      | None ->
-        Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
-        X509.Authenticator.null
-      | Some ca ->
-        Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
-        X509.Authenticator.chain_of_trust ~time:now [ ca ]
-    and user_pass = Openvpn_config.find Auth_user_pass config
-    in
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let transport = {
       key = 0 ;
@@ -73,12 +64,14 @@ let client config now rng () =
     }
     in
     let state = {
+      config ;
       linger = Cstruct.empty ;
       rng ;
-      user_pass ;
-      authenticator ; client_state = Expect_server_reset ;
+      client_state = Expect_server_reset ;
       transport ;
-      keys_ctx = None ;
+      keys_ctx = None ; (* TODO keep in established? *)
+      last_received = ts ;
+      last_sent = ts ;
     } in
     let timestamp = ptime_to_ts_exn now in
     let transport, header = header state.transport timestamp in
@@ -217,14 +210,21 @@ let maybe_push_reply = function
       end
   | None -> Error (`Msg "push request sent, expected data, received nothing")
 
-let incoming_control state op data =
+let incoming_control state now op data =
   Logs.info (fun m -> m "incoming client!!! op %a (state %a)"
                 Packet.pp_operation op pp state);
   match state.client_state, op with
   | Expect_server_reset, Packet.Hard_reset_server ->
     (* we reply with ACK + TLS client hello! *)
     let tls, ch =
-      let authenticator = state.authenticator in
+      let authenticator = match Openvpn_config.find Ca state.config with
+      | None ->
+        Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
+        X509.Authenticator.null
+      | Some ca ->
+        Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
+        X509.Authenticator.chain_of_trust ~time:now [ ca ]
+      in
       Tls.(Engine.client (Config.client ~authenticator ()))
     in
     let state = { state with client_state = TLS_handshake tls } in
@@ -234,7 +234,7 @@ let incoming_control state op data =
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
-    maybe_kex state.rng state.user_pass tls' >>| fun (client_state, data) ->
+    maybe_kex state.rng (Openvpn_config.find Auth_user_pass state.config) tls' >>| fun (client_state, data) ->
     let state = { state with client_state } in
     let out = match tls_response, data with
       | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
@@ -367,7 +367,6 @@ let data_out ctx rng key data =
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
      --> hmac and prepend hash *)
-  Logs.debug (fun m -> m "sending %d bytes data out id %lu" (Cstruct.len data) ctx.my_packet_id);
   let hdr = Cstruct.create 5 in
   Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
   (* byte 4 is compression -- 0xFA is "no compression" *)
@@ -384,21 +383,37 @@ let data_out ctx rng key data =
   let out = Packet.encode (key, `Data (Packet.Data_v2, payload')) in
   (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
   let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
+                 (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
   (ctx', out)
 
-let outgoing state data =
+let outgoing state ts data =
   match state.keys_ctx with
   | None -> Error `Not_ready
   | Some ctx ->
     let keys_ctx, data = data_out ctx state.rng state.transport.key data in
-    Ok ({ state with keys_ctx = Some keys_ctx }, [ data ])
+    Ok ({ state with keys_ctx = Some keys_ctx ; last_sent = ts }, [ data ])
 
 let ping =
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
-(* TODO need a timer and record the timestamp of the most recent sent packet
-   (and send every interval a ping), plus expect every interval at least one
-   packet (otherwise: reconnect!?) *)
+let timer state ts =
+  let interval, timeout =
+    Openvpn_config.(get Ping_interval state.config),
+    match Openvpn_config.(get Ping_timeout state.config) with
+    | `Restart x -> x
+    | `Exit x -> x
+  in
+  let s_since_recv = Duration.to_sec (Int64.sub ts state.last_received) in
+  if s_since_recv > timeout then
+    Logs.warn (fun m -> m "should restart or exit (last_received > timeout)");
+  if Duration.to_sec (Int64.sub ts state.last_sent) > interval then begin
+    Logs.debug (fun m -> m "not enough activity, sending a ping");
+    match outgoing state ts ping with
+    | Error _ -> state, []
+    | Ok (state', data) -> state', data
+  end else
+    state, []
 
 let incoming_data err ctx data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
@@ -449,7 +464,8 @@ let wrap_hmac_control now transport outs =
   in
   transport, List.rev outs
 
-let incoming state now buf =
+let incoming state now ts buf =
+  let state = { state with last_received = ts } in
   let rec multi state buf out appdata =
     match Packet.decode buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
@@ -479,7 +495,7 @@ let incoming state now buf =
            Ok (state', [], [])
          | `Control (typ, (_, _, data)) ->
            (* process control in client state machine -- TODO: should receive partial state *)
-           incoming_control state' typ data >>| fun (state', outs) ->
+           incoming_control state' now typ data >>| fun (state', outs) ->
            (* each control needs to be acked! *)
            let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
            (* now prepare outgoing packets *)

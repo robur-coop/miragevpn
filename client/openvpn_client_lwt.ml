@@ -33,6 +33,8 @@ let read_from_fd fd =
 
 let now () = Ptime_clock.now ()
 
+let ts () = Mtime_clock.now_ns ()
+
 let read_file filename =
   Lwt_unix.stat filename >>= fun stats ->
   let buf = Bytes.create stats.Lwt_unix.st_size in
@@ -74,12 +76,13 @@ let jump _ filename =
             | Ok ip -> Lwt.return (Ipaddr.V4 ip,port)
           end
         | [] -> Lwt.fail_with "no remote"
-      end >>= fun (ip,port) ->
+      end >>= fun (ip, port) ->
       Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
-      begin match Openvpn.client config (now ()) Nocrypto.Rng.generate () with
+      begin match Openvpn.client config (now ()) (ts ()) Nocrypto.Rng.generate () with
       | Error (`Msg msg) -> Lwt.fail_with ("couldn't init client: " ^ msg)
-      | Ok (initial_state, out) ->
-        let dom =
+      | Ok (state, out) ->
+        let s = ref state
+        and dom =
           Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
         and ip = Ipaddr_unix.to_inet_addr ip
         in
@@ -87,20 +90,28 @@ let jump _ filename =
         Lwt_unix.(connect fd (ADDR_INET (ip, port))) >>= fun () ->
         let open Lwt_result in
         write_to_fd fd out >>= fun () ->
-        let rec loop state =
+        let _ =
+          Lwt_engine.on_timer 1. true (fun _ ->
+              let s', out = Openvpn.timer !s (ts ()) in
+              s := s' ;
+              Lwt.async (fun () -> write_multiple_to_fd fd out))
+        in
+        let rec loop () =
           read_from_fd fd >>= fun b ->
-          match Openvpn.(Rresult.R.error_to_msg ~pp_error
-                           (incoming state (now ()) b)) with
+          match
+            Openvpn.(Rresult.R.error_to_msg ~pp_error
+                       (incoming !s (now ()) (ts ()) b))
+          with
           | Error e -> fail e
-          | Ok (next_state, outs, app) ->
+          | Ok (s', outs, app) ->
+            s := s' ;
             List.iter (fun data ->
                 Logs.info (fun m -> m "received OpenVPN payload:@.%a"
                               Cstruct.hexdump_pp data))
               app ;
-            write_multiple_to_fd fd outs
-            >>= fun () -> loop next_state
+            write_multiple_to_fd fd outs >>= loop
         in
-        loop initial_state
+        loop ()
       end
   ) (* <- Lwt_main.run *)
 
