@@ -1,0 +1,7 @@
+(library
+ (name openvpn_mirage)
+ (public_name openvpn.mirage)
+ (libraries openvpn logs mirage-stack-lwt mirage-protocols-lwt ipaddr cstruct
+            rresult tcpip tcpip.icmpv4 tcpip.tcp tcpip.udp tcpip.ipv4
+            mirage-random mirage-clock dns-mirage-client)
+ (wrapped false))

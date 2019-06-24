@@ -10,7 +10,7 @@ let openvpn_handler =
     in
     [
       package "logs" ;
-      package ~pin "openvpn";
+      package ~pin ~sublibs:["mirage"] "openvpn";
       package ~pin:udns "dns";
       package ~pin:udns "dns-client";
       package ~pin:udns "dns-mirage-client";
@@ -20,7 +20,7 @@ let openvpn_handler =
   foreign
     ~deps:[abstract nocrypto]
     ~packages
-    "Unikernel.Main" (random @-> pclock @-> mclock @-> stackv4 @-> kv_ro @-> job)
+    "Unikernel.Main" (random @-> mclock @-> pclock @-> time @-> stackv4 @-> kv_ro @-> job)
 
 let () =
-  register "client" [openvpn_handler $ default_random $ default_posix_clock $ default_monotonic_clock $ generic_stackv4 default_network $ data ]
+  register "client" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4 default_network $ data ]

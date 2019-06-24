@@ -78,7 +78,8 @@ let client config now ts rng () =
     let transport, m_id = next_message_id transport in
     let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
     let out = hmac_and_out transport.key my_hmac header p in
-    Ok ({ state with transport }, out)
+    let remote = Openvpn_config.get Remote config in
+    Ok ({ state with transport }, remote, out)
 
 let pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"

@@ -63,7 +63,7 @@ let jump _ filename =
     with
     | Error `Msg s -> Lwt.fail_with ("config parser: " ^ s)
     | Ok config ->
-      begin match Openvpn_config.(get Remote config) with
+      let resolve = function
         | (`IP ip, port) :: _ -> Lwt.return (ip, port)
         | (`Domain name, port) :: _ ->
           begin
@@ -76,11 +76,12 @@ let jump _ filename =
             | Ok ip -> Lwt.return (Ipaddr.V4 ip,port)
           end
         | [] -> Lwt.fail_with "no remote"
-      end >>= fun (ip, port) ->
-      Logs.info (fun m -> m "connecting to %a" Ipaddr.pp ip) ;
+      in
       begin match Openvpn.client config (now ()) (ts ()) Nocrypto.Rng.generate () with
       | Error (`Msg msg) -> Lwt.fail_with ("couldn't init client: " ^ msg)
-      | Ok (state, out) ->
+      | Ok (state, remote, out) ->
+        resolve remote >>= fun (ip, port) ->
+        Logs.info (fun m -> m "connecting to %a:%d" Ipaddr.pp ip port) ;
         let s = ref state
         and dom =
           Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
