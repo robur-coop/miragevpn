@@ -1,7 +1,7 @@
 type t
 
 val client : Openvpn_config.t -> Ptime.t -> int64 -> (int -> Cstruct.t) -> unit ->
-  (t * ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list * Cstruct.t,
+  (t * ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list * Cstruct.t,
    Rresult.R.msg) result
 
 type error

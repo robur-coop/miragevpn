@@ -27,7 +27,7 @@ depends: [
   "angstrom"
   "cstruct"  { >= "4.0.0" }
   "cmdliner"
-  "domain-name" { >= "0.1.2" & < "0.2.0" }
+  "domain-name" { >= "0.2.0" }
   "fmt"
   "gmap"     { >= "0.3.0"  & < "0.4.0" }
   "hex"      { >= "1.4.0"  & < "1.5.0" }

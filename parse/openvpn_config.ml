@@ -30,7 +30,7 @@ module Conf_map = struct
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
     | Dhcp_ntp: Ipaddr.t list k
-    | Dhcp_domain: Domain_name.t k
+    | Dhcp_domain: [ `host ] Domain_name.t k
     | Float    : flag k
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
@@ -42,7 +42,7 @@ module Conf_map = struct
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
     | Proto    : [`Tcp | `Udp] k
-    | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
+    | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
     | Replay_window : (int * int) k
@@ -520,7 +520,9 @@ let a_domain_name =
   take_till (function '\x00'..'\x1f' | ' ' | '"' | '\'' -> true | _ -> false)
   >>= fun str -> match Domain_name.of_string str with
   | Error `Msg x -> fail (Fmt.strf "Invalid domain name: %s: %S" x str)
-  | Ok x -> return x
+  | Ok x -> match Domain_name.host x with
+    | Error `Msg x -> fail (Fmt.strf "Invalid host name: %s: %S" x str)
+    | Ok x -> return x
 
 let a_ifconfig =
   string "ifconfig" *>

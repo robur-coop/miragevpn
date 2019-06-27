@@ -14,7 +14,7 @@ type 'a k =
   | Dhcp_disable_nbt: flag k
   | Dhcp_dns: Ipaddr.t list k
   | Dhcp_ntp: Ipaddr.t list k
-  | Dhcp_domain: Domain_name.t k
+  | Dhcp_domain: [ `host ] Domain_name.t k
   | Float    : flag k
 
   | Ifconfig : (Ipaddr.t * Ipaddr.t) k
@@ -30,7 +30,7 @@ type 'a k =
   | Ping_timeout : [`Restart of int | `Exit of int] k
   | Pull     : flag k
   | Proto    : [`Tcp | `Udp] k (** TODO should Proto be bound to a remote? *)
-  | Remote : ([`Domain of Domain_name.t | `IP of Ipaddr.t] * int) list k
+  | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
   | Remote_cert_tls : [`Server | `Client] k
   | Remote_random : flag k
   | Replay_window : (int * int) k
