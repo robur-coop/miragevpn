@@ -432,10 +432,14 @@ let incoming_data err ctx data =
   let compression = Cstruct.get_uint8 dec 4 in
   (* if dec[4] == 0xfa, then compression is off *)
   (match compression with
-   | 0xFA -> Ok (Cstruct.shift dec 5)
+   | 0xFA -> Ok (unpad (Cstruct.shift dec 5))
+   | 0x66 ->
+     Lzo.decompress (unpad (Cstruct.shift dec 5)
+                     |> Cstruct.to_string) >>| Cstruct.of_string
+     >>| (fun lz ->
+     Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz); lz)
    | _ -> Rresult.R.error_msgf "unknown compression %#X in packet:@.%a"
-            compression Cstruct.hexdump_pp dec) >>| fun data ->
-  let data' = unpad data in
+            compression Cstruct.hexdump_pp dec) >>| fun data' ->
   if Cstruct.equal data' ping then begin
     Logs.warn (fun m -> m "received ping!");
     (* TODO: should update somewhere a timestamp about last ping received! *)

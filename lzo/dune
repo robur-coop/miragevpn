@@ -1,0 +1,12 @@
+(library
+  (name lzo)
+  (modules lzo)
+  (public_name openvpn.lzo)
+  (libraries fmt logs rresult)
+)
+
+(test
+  (name tests)
+  (modules tests)
+  (libraries alcotest fmt lzo rresult)
+)
