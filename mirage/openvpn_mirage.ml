@@ -41,28 +41,18 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let get_ip t = t.ip_config.Openvpn.ip
 
-  let lift_err ~pp_error v =
-    v >|= Rresult.R.error_to_msg ~pp_error
+  let lift_err ~pp_error v = v >|= Rresult.R.error_to_msg ~pp_error
 
   let send_multiple flow datas =
-    lift_err ~pp_error:TCP.pp_write_error
-      (Lwt_list.fold_left_s (fun r data ->
-           match r with
-           | Ok () ->
-             Log.debug (fun m -> m "writing %d bytes %a" (Cstruct.len data)
-                           Cstruct.hexdump_pp data);
-             TCP.write flow data
-           | Error e -> Lwt.return (Error e))
-          (Ok ()) datas)
+    lift_err ~pp_error:TCP.pp_write_error (TCP.writev flow datas)
 
   let write t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
-    (* plan: if we're active, assemble the packet, encrypt, and output *)
     (* TODO: mostly copied from static_ipv4 *)
     (* TODO: no fragmentation (yet) *)
     match t.client with
     | `Error e -> Lwt.return (Error e)
     | `Active c ->
-      (* no options here, always 20 bytes! *)
+      (* no options here, always 20 bytes IPv4 header size! *)
       let hdr_len = Ipv4_wire.sizeof_ipv4 in
       let hdr =
         let src = match src with None -> get_ip t | Some x -> x in
@@ -82,7 +72,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             Log.err (fun m -> m "headers returned length exceeding size") ;
             invalid_arg "headerf exceeds size"
           end ;
-          Cstruct.concat (b :: bufs)
+          Cstruct.concat (Cstruct.sub b 0 header_len :: bufs)
         end else
           Cstruct.concat bufs
       in
