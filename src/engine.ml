@@ -429,17 +429,16 @@ let incoming_data err ctx data =
        Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
   Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
-  let compression = Cstruct.get_uint8 dec 4 in
+  let data = unpad (Cstruct.shift dec 5) in
   (* if dec[4] == 0xfa, then compression is off *)
-  (match compression with
-   | 0xFA -> Ok (unpad (Cstruct.shift dec 5))
+  (match Cstruct.get_uint8 dec 4 with
+   | 0xFA -> Ok data
    | 0x66 ->
-     Lzo.decompress (unpad (Cstruct.shift dec 5)
-                     |> Cstruct.to_string) >>| Cstruct.of_string
-     >>| (fun lz ->
-     Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz); lz)
-   | _ -> Rresult.R.error_msgf "unknown compression %#X in packet:@.%a"
-            compression Cstruct.hexdump_pp dec) >>| fun data' ->
+     Lzo.decompress (Cstruct.to_string data) >>| Cstruct.of_string >>| fun lz ->
+     Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
+     lz
+   | comp -> Rresult.R.error_msgf "unknown compression %#X in packet:@.%a"
+               comp Cstruct.hexdump_pp dec) >>| fun data' ->
   if Cstruct.equal data' ping then begin
     Logs.warn (fun m -> m "received ping!");
     (* TODO: should update somewhere a timestamp about last ping received! *)
