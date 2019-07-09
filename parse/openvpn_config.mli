@@ -10,7 +10,10 @@ type 'a k =
   | Cipher   : string k
   | Comp_lzo : flag k
   | Connect_retry : (int * int) k
-  | Dev      : [`Null | `Tun of int | `Tap of int] k
+
+  | Dev      : [`Null | `Tun of int option | `Tap of int option] k
+  (** if Tap/Tun is [None], a device must be allocated dynamically. *)
+
   | Dhcp_disable_nbt: flag k
   | Dhcp_dns: Ipaddr.t list k
   | Dhcp_ntp: Ipaddr.t list k
@@ -26,6 +29,7 @@ type 'a k =
   | Mute_replay_warnings : flag k
   | Passtos  : flag k
   | Persist_key : flag k
+  | Persist_tun : flag k
   | Ping_interval : int k
   | Ping_timeout : [`Restart of int | `Exit of int] k
   | Pull     : flag k
@@ -42,7 +46,13 @@ type 'a k =
              * int option) k
   | Route_gateway : Ipaddr.t option k (** [None] -> default to DHCP *)
   | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
-  | Tls_client    : flag k
+  | Tls_cert     : X509.t k
+  | Tls_client   : flag k
+  | Tls_key      : X509.t k
+  (** TODO Tls_key : X509.t * [`Incoming|`Outgoing] k
+      --key-direction governs this for inlined files
+      see comment in {!a_key} *)
+
 
   | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
   (** [v * or_highest]: if [or_highest] then v = the highest version supported

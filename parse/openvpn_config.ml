@@ -5,13 +5,17 @@ open Angstrom
 
 module A = Angstrom
 
-type inlineable = [ `Auth_user_pass | `Ca | `Connection | `Pkcs12 | `Tls_auth ]
+type inlineable =
+  [ `Auth_user_pass | `Ca | `Connection | `Pkcs12
+  | `Tls_auth | `Tls_cert | `Tls_key ]
 let string_of_inlineable = function
   | `Auth_user_pass -> "auth-user-pass"
   | `Ca -> "ca"
   | `Connection -> "connection"
   | `Pkcs12 -> "pkcs12"
   | `Tls_auth -> "tls-auth"
+  | `Tls_cert -> "cert"
+  | `Tls_key -> "key"
 type inline_or_path = [ `Need_inline of inlineable
                       | `Path of string * inlineable ]
 
@@ -26,7 +30,7 @@ module Conf_map = struct
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
-    | Dev      : [`Null | `Tun of int | `Tap of int] k
+    | Dev      : [`Null | `Tun of int option | `Tap of int option] k
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
     | Dhcp_ntp: Ipaddr.t list k
@@ -38,6 +42,7 @@ module Conf_map = struct
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
     | Persist_key : flag k
+    | Persist_tun : flag k
     | Ping_interval : int k
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
@@ -54,7 +59,9 @@ module Conf_map = struct
                * int option) k
     | Route_gateway : Ipaddr.t option k
     | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
-    | Tls_client    : flag k
+    | Tls_cert   : X509.t k
+    | Tls_client : flag k
+    | Tls_key    : X509.t k
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     | Topology : [`net30 | `p2p | `subnet] k
     | Tun_mtu : int k
@@ -97,21 +104,29 @@ module Conf_map = struct
   let pp_b ppf (b:b) =
     let p () = Fmt.pf ppf in
     let B (k,v) = b in
+    let pp_x509 entry_typ cert =
+      p() "%s [inline]\n# CN: %S\n<%s>\n%s</%s>"
+        entry_typ
+        (X509.common_name_to_string cert)
+        entry_typ
+        (X509.Encoding.Pem.Certificate.to_pem_cstruct1 cert
+         |> Cstruct.to_string)
+        entry_typ
+    in
     match k,v with
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
     | Auth_user_pass, (user,pass) ->
       Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
     | Bind, true -> p() "bind"
     | Bind, false -> p() "nobind"
-    | Ca, ca -> p() "ca [inline]\n# CN: %S\n<ca>\n%s</ca>"
-                  (X509.common_name_to_string ca)
-                  (X509.Encoding.Pem.Certificate.to_pem_cstruct1 ca
-                   |> Cstruct.to_string)
+    | Ca, ca -> pp_x509 "ca" ca
     | Cipher, cipher -> p() "cipher %s" cipher
     | Comp_lzo, () -> p() "comp-lzo # deprecated"
     | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
-    | Dev, `Tap i -> p() "dev tap%d" i
-    | Dev, `Tun i -> p() "dev tun%d" i
+    | Dev, `Tap None -> p() "dev tap"
+    | Dev, `Tap Some i -> p() "dev tap%d" i
+    | Dev, `Tun None -> p() "dev tun"
+    | Dev, `Tun Some i -> p() "dev tun%d" i
     | Dev, `Null -> p() "dev null"
     | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
     | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
@@ -132,6 +147,7 @@ module Conf_map = struct
     | Mute_replay_warnings, () -> p() "mute-replay-warnings"
     | Passtos, () -> p() "passtos"
     | Persist_key, () -> p() "persist-key"
+    | Persist_tun, () -> p() "persist-tun"
     | Proto, `Tcp -> p() "proto tcp"
     | Proto, `Udp -> p() "proto udp"
     | Pull, () -> p() "pull"
@@ -169,7 +185,9 @@ module Conf_map = struct
         (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
          | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
         "-----END OpenVPN Static key V1-----"
+    | Tls_cert, cert -> pp_x509 "cert" cert
     | Tls_client, () -> p() "tls-client"
+    | Tls_key, key -> pp_x509 "key" key
     | Tls_version_min, (ver,or_highest) ->
       p() "tls-version-min %s%s" (match ver with
           | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
@@ -288,13 +306,17 @@ let a_client =
   return (`Entries [ B (Tls_client,()) ; B (Pull,()) ])
 
 let a_dev =
-  Logs.warn (fun m ->
-      m "TODO: 'dev tun' is also valid, according to the manpage: \
-         'tunX - X can be omitted for a dynamic device'");
   let a_device_name =
     choice [
-      (string "tun" *> a_number_range 0 128 >>| fun x -> `Tun x) ;
-      (string "tap" *> a_number_range 0 128 >>| fun x -> `Tap x) ;
+      (string "tun" *>
+       choice
+         [ (a_number_range 0 128 >>| fun x -> `Tun (Some x)) ;
+           (return (`Tun None))] );
+      (string "tap" *>
+       choice
+         [ (a_number_range 0 128 >>| fun x -> `Tap (Some x)) ;
+           (return (`Tap None)) ;
+         ]) ;
       string "null" *> return `Null ;
     ]
   in
@@ -320,9 +342,10 @@ let a_resolv_retry =
          ] >>| fun i -> `Entry (B(Resolv_retry,i))
 
 let a_filepath kind =
+  (* TODO handle quoted strings *)
   choice [
     string "[inline]" *> return (`Need_inline kind);
-    (take_while1 (function '\x00'..'\x1f' -> false
+    (take_while1 (function '\x00'..'\x20' -> false
                          | _ -> true) >>| fun p -> `Path (p,kind)) ;
   ]
 
@@ -330,25 +353,43 @@ let a_option_with_single_path name kind =
   string name *> a_whitespace *>
   a_filepath kind
 
-let a_ca = a_option_with_single_path "ca" `Ca
-
-let a_ca_payload str =
+let a_x509_cert_payload ctx constructor str =
+  Logs.debug (fun m -> m "x509 cert: %s" ctx);
   match X509.Encoding.Pem.parse (Cstruct.of_string str) with
   | ("CERTIFICATE", x)::[] ->
     begin match X509.Encoding.parse x with
-      | Some cert -> Ok (B (Ca, cert))
-      | None -> Error "CA: invalid certificate"
+      | Some cert -> Ok (constructor cert)
+      | None -> Error (Fmt.strf "%s: invalid certificate" ctx)
     end
   | exception Invalid_argument _ ->
-    Error "CA: Error parsing PEM container"
-  | _ -> Error "CA: PEM does not consist of a single certificate"
+    Error (Fmt.strf "%s: Error parsing PEM container" ctx)
+  | _ -> Error (Fmt.strf "%s: PEM does not consist of a single certificate" ctx)
+
+let a_ca = a_option_with_single_path "ca" `Ca
+let a_ca_payload str =
+  a_x509_cert_payload "CA" (fun c -> B(Ca,c)) str
+
+let a_cert = a_option_with_single_path "cert" `Tls_cert
+let a_cert_payload str =
+  a_x509_cert_payload "cert" (fun c -> B(Tls_cert,c)) str
+
+let a_key = a_option_with_single_path "key" `Tls_key
+let a_key_payload str =
+  a_x509_cert_payload "key" (fun c -> B(Tls_key,c)) str
 
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 
-let a_tls_auth = a_option_with_single_path "tls-auth" `Tls_auth
+let a_tls_auth =
+  a_option_with_single_path "tls-auth" `Tls_auth
+  (* TODO --key-direction or the optional arg here:
+     0 -> CN_OUTGOING
+     1 -> CN_INCOMING
+  *)
+  <* choice [ a_whitespace *> a_number_range 0 1 *> return () ; return () ]
 
 let a_tls_auth_payload =
   let abort s = fail ("Invalid TLS AUTH HMAC key: " ^ s) in
+  Angstrom.skip_many (a_whitespace_or_comment *> end_of_line) *>
   (string "-----BEGIN OpenVPN Static key V1-----\n"
    <|> abort "Missing Static key V1 -----BEGIN mark") *>
   many_till ( take_while (function | 'a'..'f'|'A'..'F'|'0'..'9' -> true
@@ -414,6 +455,7 @@ let a_flag =
     string "remote-random" *> r Remote_random () ;
     string "tls-client" *> r Tls_client () ;
     string "persist-key" *> r Persist_key () ;
+    string "persist-tun" *> r Persist_tun () ;
     string "comp-lzo" *> r Comp_lzo () ; (* TODO warn! *)
     string "passtos" *> r Passtos () ;
     string "mute-replay-warnings" *> r Mute_replay_warnings () ;
@@ -647,6 +689,8 @@ let a_config_entry : line A.t =
     a_pkcs12 ;
     a_flag ;
     a_ca ;
+    a_cert ;
+    a_key ;
     a_ping ;
     a_ping_restart ;
     a_ping_exit ;
@@ -699,6 +743,8 @@ let parse_inline str = let open Rresult in
        proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
     parse_string a_remote str
   | `Ca -> a_ca_payload str
+  | `Tls_cert -> a_cert_payload str
+  | `Tls_key -> a_key_payload str
   | kind -> Error ("config-parser: not sure how to parse inline " ^
                    (string_of_inlineable kind))
 
@@ -724,7 +770,8 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       (* idempotent, as most of the flags - not a failure, emit warn: *)
       | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
       | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
-      | Passtos -> warn () | Persist_key -> warn () | Pull -> warn ()
+      | Passtos -> warn () | Persist_key -> warn () | Persist_tun -> warn ()
+      | Pull -> warn ()
       | Remote_random -> warn ()
       (* adding wouldn't change anything: *)
       | _ when v = v2 -> (* TODO polymorphic comparison *)
@@ -858,9 +905,8 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               (* TODO ensure returned B matches kind? *)
               R.reword_error (fun x -> "failed parsing provided file: " ^ x)
                 (parse_inline content kind) >>= retb
-            | Some `File (name, _) ->
-              Error ("config-parser: got unrequested file contents for " ^ name)
-            | None -> Ok (`Need_file (wanted_name, (hd::tl, acc)))
+            | _ ->
+              Ok (`Need_file (wanted_name, (hd::tl, acc)))
           end
         | `Need_inline kind ->
           let looking_for = string_of_inlineable kind in
