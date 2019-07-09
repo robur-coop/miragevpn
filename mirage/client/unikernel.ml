@@ -43,5 +43,5 @@ module Main (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
      let cb = cb i in
      Lwt_result.ok (reader ~tcp:(cb ~proto:6) ~udp:(cb ~proto:17) ~default:cb t)) >|= function
     | Ok () -> Logs.warn (fun m -> m "reader finished without error...");
-    | Error e -> Logs.err (fun m -> m "error %a" O.pp_error e)
+    | Error (`Msg e) -> Logs.err (fun m -> m "error %s" e)
 end
