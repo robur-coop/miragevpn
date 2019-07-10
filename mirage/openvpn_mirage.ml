@@ -33,7 +33,6 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   type t = {
     mutable client : [ `Active of Openvpn.t | `Error of error ] ;
-    config : Openvpn_config.t ;
     ip_config : Openvpn.ip_config ;
     flow : TCP.flow ;
     mutable linger : Cstruct.t list ;
@@ -180,7 +179,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     lift_err ~pp_error:TCP.pp_error (TCP.create_connection (S.tcpv4 s) remote) >>= fun flow ->
     lift_err ~pp_error:TCP.pp_write_error (TCP.write flow data) >>= fun () ->
     establish_tunnel client flow >|= fun (client', ip_config, linger) ->
-    let t = { flow ; client = `Active client' ; config ; ip_config ; linger } in
+    let t = { flow ; client = `Active client' ; ip_config ; linger } in
     Lwt.async (fun () -> ping t);
     t, read_and_process
 

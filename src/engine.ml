@@ -46,7 +46,7 @@ let hmac_and_out key hmac_key header p =
   Packet.encode (key, p')
 
 let client config now ts rng () =
-  match Openvpn_config.find Tls_auth config with
+  match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
@@ -78,7 +78,7 @@ let client config now ts rng () =
     let transport, m_id = next_message_id transport in
     let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
     let out = hmac_and_out transport.key my_hmac header p in
-    let remote = Openvpn_config.get Remote config in
+    let remote = Config.get Remote config in
     Ok ({ state with transport }, remote, out)
 
 let pp_tls_error ppf = function
@@ -202,9 +202,9 @@ let maybe_push_reply = function
       begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
         | Some ("", opts) ->
           let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
-          Openvpn_config.parse ~string_of_file:(fun _ ->
+          Config.parse ~string_of_file:(fun _ ->
               Rresult.R.error_msgf "string of file is not available") opts >>| fun config ->
-          Logs.info (fun m -> m "received push reply %a" Openvpn_config.pp config);
+          Logs.info (fun m -> m "received push reply %a" Config.pp config);
           config
         | _ ->
           Error (`Msg (Fmt.strf "push request sent, expected push_reply, got: %S" str);)
@@ -218,7 +218,7 @@ let incoming_control state now op data =
   | Expect_server_reset, Packet.Hard_reset_server ->
     (* we reply with ACK + TLS client hello! *)
     let tls, ch =
-      let authenticator = match Openvpn_config.find Ca state.config with
+      let authenticator = match Config.find Ca state.config with
       | None ->
         Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
         X509.Authenticator.null
@@ -235,7 +235,7 @@ let incoming_control state now op data =
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
-    maybe_kex state.rng (Openvpn_config.find Auth_user_pass state.config) tls' >>| fun (client_state, data) ->
+    maybe_kex state.rng (Config.find Auth_user_pass state.config) tls' >>| fun (client_state, data) ->
     let state = { state with client_state } in
     let out = match tls_response, data with
       | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
@@ -265,11 +265,11 @@ let incoming_control state now op data =
     maybe_push_reply d >>| fun config ->
     (* TODO validate config *)
     let ip, prefix =
-        match Openvpn_config.(get Ifconfig config) with
+        match Config.(get Ifconfig config) with
           | V4 ip, V4 mask -> ip, Ipaddr.V4.Prefix.of_netmask mask ip
           | _ -> assert false
     and gateway =
-      match Openvpn_config.(get Route_gateway config) with
+      match Config.(get Route_gateway config) with
       | Some V4 ip -> ip
       | _ -> assert false
     in
@@ -400,8 +400,8 @@ let ping =
 
 let timer state ts =
   let interval, timeout =
-    Openvpn_config.(get Ping_interval state.config),
-    match Openvpn_config.(get Ping_timeout state.config) with
+    Config.(get Ping_interval state.config),
+    match Config.(get Ping_timeout state.config) with
     | `Restart x -> x
     | `Exit x -> x
   in

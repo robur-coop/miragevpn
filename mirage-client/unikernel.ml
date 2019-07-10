@@ -19,8 +19,8 @@ module Main (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Ok data ->
       let open Rresult.R.Infix in
       let string_of_file _ = Error (`Msg "not supported") in
-      Openvpn_config.parse ~string_of_file data >>= fun config ->
-      Openvpn_config.is_valid_client_config config >>| fun () ->
+      Openvpn.Config.parse ~string_of_file data >>= fun config ->
+      Openvpn.Config.is_valid_client_config config >>| fun () ->
       config
 
   let cb icmp ~proto ~src ~dst buf =

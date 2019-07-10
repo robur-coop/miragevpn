@@ -1,6 +1,6 @@
 (library
   (name openvpn)
   (public_name openvpn)
-  (libraries fmt logs rresult cstruct ptime astring lzo openvpn.config nocrypto tls x509 duration)
-  (wrapped true)
-)
+  (libraries fmt logs rresult cstruct ptime astring lzo nocrypto tls x509
+             duration angstrom hex domain-name ipaddr gmap)
+  (wrapped true))

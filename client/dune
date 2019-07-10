@@ -1,7 +1,0 @@
-(executable
-  (name openvpn_client_lwt)
-  (public_name openvpn-client-lwt)
-  (package openvpn)
-  (modules openvpn_client_lwt)
-  (libraries openvpn lwt lwt.unix cmdliner fmt.tty logs.fmt logs.cli fmt.cli
-             ipaddr ipaddr.unix ptime.clock.os dns-client-lwt nocrypto.lwt mtime.clock.os))

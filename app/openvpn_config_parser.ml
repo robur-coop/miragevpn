@@ -1,5 +1,5 @@
 open Rresult
-open Openvpn_config
+open Openvpn.Config
 
 let read_config_file fn =
   let str fn =

@@ -4,7 +4,7 @@ _build/
 *.install
 *.swp
 .mirage.config
-mirage/*/Makefile*
+mirage*/Makefile*
 _build-solo5-hvt
 *hvt
 key_gen.ml

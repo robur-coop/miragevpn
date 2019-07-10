@@ -61,7 +61,7 @@ let pp_keys ppf t =
     t.my_packet_id t.their_packet_id
 
 type t = {
-  config : Openvpn_config.t ;
+  config : Config.t ;
   linger : Cstruct.t ;
   transport : transport ;
   keys_ctx : keys_ctx option ;
