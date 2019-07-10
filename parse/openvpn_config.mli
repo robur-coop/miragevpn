@@ -5,7 +5,26 @@ type flag = unit
 type 'a k =
   | Auth_retry : [`Nointeract] k
   | Auth_user_pass : (string * string) k (** username, password*)
-  | Bind     : bool k
+
+  | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
+                             | `IP of Ipaddr.t] option) option k
+  (** local [port],[host] to bind to.
+      Defaults to [Some (None, None)], see [--bind] in [man openvpn].
+
+      [None] if [nobind].
+
+      [port] is [Some p] if [lport p] was specified.
+      Only numeric ports are accepted by this implementation
+      ([openvpn] also allows [lport x]
+      where [x] matches a port name from [/etc/services]).
+
+      [host] is governed by [--local] and defaults to [None]
+      (meaning "bind all interfaces").
+
+      [bind ipv6only] is unimplemented.
+  *)
+
+
   | Ca       : X509.t k
   | Cipher   : string k
   | Comp_lzo : flag k
@@ -37,6 +56,7 @@ type 'a k =
   | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
   | Remote_cert_tls : [`Server | `Client] k
   | Remote_random : flag k
+  | Renegotiate_seconds : int k (* reneg-sec *)
   | Replay_window : (int * int) k
   | Resolv_retry  : [`Infinite | `Seconds of int] k
   | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
@@ -47,12 +67,15 @@ type 'a k =
   | Route_gateway : Ipaddr.t option k (** [None] -> default to DHCP *)
   | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
   | Tls_cert     : X509.t k
-  | Tls_client   : flag k
+
+  | Tls_mode   : [`Client | `Server] k
+  (** Governed by the [tls-client] and [tls-server] directives.
+      Indirectly also by [client].*)
+
   | Tls_key      : X509.t k
   (** TODO Tls_key : X509.t * [`Incoming|`Outgoing] k
       --key-direction governs this for inlined files
       see comment in {!a_key} *)
-
 
   | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
   (** [v * or_highest]: if [or_highest] then v = the highest version supported

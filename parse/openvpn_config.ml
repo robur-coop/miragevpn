@@ -25,7 +25,8 @@ module Conf_map = struct
   type 'a k =
     | Auth_retry : [`Nointeract] k
     | Auth_user_pass : (string * string) k
-    | Bind     : bool k
+    | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
+                               | `IP of Ipaddr.t] option) option k
     | Ca       : X509.t k
     | Cipher   : string k
     | Comp_lzo : flag k
@@ -50,6 +51,7 @@ module Conf_map = struct
     | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
+    | Renegotiate_seconds : int k
     | Replay_window : (int * int) k
     | Resolv_retry : [`Infinite | `Seconds of int] k
     | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
@@ -60,7 +62,7 @@ module Conf_map = struct
     | Route_gateway : Ipaddr.t option k
     | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert   : X509.t k
-    | Tls_client : flag k
+    | Tls_mode : [`Client | `Server] k
     | Tls_key    : X509.t k
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     | Topology : [`net30 | `p2p | `subnet] k
@@ -87,7 +89,9 @@ module Conf_map = struct
     let open Rresult in
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
       ( ensure_mem Remote "does not have a remote"  >>=fun()->
-        ensure_mem Tls_client "is not a TLS client" >>=fun()->
+        (match find Tls_mode t with
+         | None | Some `Server -> Error "is not a TLS client"
+         | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
         (* TODO
            ensure_not Comp_lzo "LZO compression is deprecated upstream, and not implemented in this library" >>=fun() -> *)
@@ -105,10 +109,10 @@ module Conf_map = struct
     let p () = Fmt.pf ppf in
     let B (k,v) = b in
     let pp_x509 entry_typ cert =
-      p() "%s [inline]\n# CN: %S\n<%s>\n%s</%s>"
+      p() "%s [inline]\n<%s>\n# CN: %S\n%s</%s>"
+        entry_typ
         entry_typ
         (X509.common_name_to_string cert)
-        entry_typ
         (X509.Encoding.Pem.Certificate.to_pem_cstruct1 cert
          |> Cstruct.to_string)
         entry_typ
@@ -117,8 +121,16 @@ module Conf_map = struct
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
     | Auth_user_pass, (user,pass) ->
       Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
-    | Bind, true -> p() "bind"
-    | Bind, false -> p() "nobind"
+    | Bind, None -> p() "nobind"
+    | Bind, Some opts ->
+      p() "bind" ;
+      begin match fst opts with
+      | Some port -> p () "@.lport %d" port
+      | None -> () end ;
+      begin match snd opts with
+        | None -> ()
+        | Some `Domain n -> p() "@.local %a" Domain_name.pp n
+        | Some `IP ip -> p() "@.local %a" Ipaddr.pp ip end
     | Ca, ca -> pp_x509 "ca" ca
     | Cipher, cipher -> p() "cipher %s" cipher
     | Comp_lzo, () -> p() "comp-lzo # deprecated"
@@ -162,6 +174,7 @@ module Conf_map = struct
     | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
     | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
     | Remote_random, () -> p() "remote-random"
+    | Renegotiate_seconds, i -> p() "reneg-sec %d" i
     | Replay_window, (low,high) -> p() "replay-window %d %d" low high
     | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
     | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
@@ -186,12 +199,13 @@ module Conf_map = struct
          | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
         "-----END OpenVPN Static key V1-----"
     | Tls_cert, cert -> pp_x509 "cert" cert
-    | Tls_client, () -> p() "tls-client"
     | Tls_key, key -> pp_x509 "key" key
     | Tls_version_min, (ver,or_highest) ->
       p() "tls-version-min %s%s" (match ver with
           | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
         (if or_highest then " or-highest" else "")
+    | Tls_mode, `Server -> p() "tls-server"
+    | Tls_mode, `Client -> p() "tls-client"
     | Topology, v -> p() "topology %s" (match v with
           `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
     | Tun_mtu, int -> p() "tun-mtu %d" int
@@ -199,8 +213,8 @@ module Conf_map = struct
 
   let pp ppf t =
     let minimized_t =
-      if mem Tls_client t && mem Pull t then begin
-        Fmt.pf ppf "client\n" ; remove Tls_client t |> remove Pull
+      if find Tls_mode t = Some `Client && mem Pull t then begin
+        Fmt.pf ppf "client\n" ; remove Tls_mode t |> remove Pull
       end else t
     in
     Fmt.(pf ppf "%a" (list ~sep:(unit"@.") pp_b) (bindings minimized_t))
@@ -214,6 +228,8 @@ module Defaults = struct
     empty
     |> add Ping_interval 0
     |> add Ping_timeout (`Restart 120)
+    |> add Renegotiate_seconds 3600
+    |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
 end
 
 open Conf_map
@@ -224,6 +240,7 @@ type line = [
   | `Blank
   | `Inline of string * string
   | `Keepalive of int * int (* interval * timeout *)
+  | `Rport of int (* remote port number used by --remote option *)
   | `Proto_force of [ `Tcp | `Udp ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
   | inline_or_path
@@ -237,7 +254,9 @@ let pp_line ppf (x : line) =
    | `Entry b -> v ppf "entry: %a" pp_b b
    | `Blank -> v ppf "#"
    | `Keepalive (interval, timeout) -> v ppf "keepalive %d %d" interval timeout
-   | `Proto_force _ -> v ppf "proto-force"
+   | `Rport d -> v ppf "rport %d" d
+   | `Proto_force `Tcp -> v ppf "proto-force tcp"
+   | `Proto_force `Udp -> v ppf "proto-force udp"
    | `Socks_proxy _ -> v ppf "socks-proxy"
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
    | `Path (fn, _) -> v ppf "inline-or-path: %s" fn
@@ -303,7 +322,7 @@ let a_number_range min' max' =
 let a_client =
   (* alias for --tls-client --pull *)
   string "client" *> a_ign_whitespace *>
-  return (`Entries [ B (Tls_client,()) ; B (Pull,()) ])
+  return (`Entries [ B (Tls_mode,`Client) ; B (Pull,()) ])
 
 let a_dev =
   let a_device_name =
@@ -342,11 +361,9 @@ let a_resolv_retry =
          ] >>| fun i -> `Entry (B(Resolv_retry,i))
 
 let a_filepath kind =
-  (* TODO handle quoted strings *)
   choice [
     string "[inline]" *> return (`Need_inline kind);
-    (take_while1 (function '\x00'..'\x20' -> false
-                         | _ -> true) >>| fun p -> `Path (p,kind)) ;
+    a_single_param >>| fun p -> `Path (p,kind) ;
   ]
 
 let a_option_with_single_path name kind =
@@ -449,11 +466,12 @@ let a_socks_proxy =
 let a_flag =
   let r k v = return (B (k,v)) in
   choice [
-    string "bind" *> r Bind true ;
-    string "nobind" *> r Bind false ;
+    string "bind" *> r Bind (Some (None,None)) ;
+    string "nobind" *> r Bind None ;
     string "float" *> r Float () ;
     string "remote-random" *> r Remote_random () ;
-    string "tls-client" *> r Tls_client () ;
+    string "tls-client" *> r Tls_mode `Client ;
+    string "tls-server" *> r Tls_mode `Server ;
     string "persist-key" *> r Persist_key () ;
     string "persist-tun" *> r Persist_tun () ;
     string "comp-lzo" *> r Comp_lzo () ; (* TODO warn! *)
@@ -489,6 +507,57 @@ let a_tls_version_min =
 
 let a_entry_one_number name =
   string name *> a_whitespace *> a_number
+
+let a_reneg_sec =
+  a_entry_one_number "reneg-sec" >>| fun n -> `Entry (B(Renegotiate_seconds,n))
+
+let a_lport =
+  a_entry_one_number "lport" >>| fun n -> `Entry (B(Bind, Some (Some n, None)))
+
+let a_ipv4_dotted_quad =
+  take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
+  match Ipaddr.V4.of_string ip with
+  | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %s: %S" x ip)
+  | Ok ip -> return ip
+
+let a_ipv6_coloned_hex =
+  take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
+                                 | _ -> false) >>= fun ip ->
+  match Ipaddr.V6.of_string ip with
+  | Error `Msg x -> fail (Fmt.strf "Invalid IPv6: %s: %S" x ip)
+  | Ok ip -> return ip
+
+let a_ip =
+  (a_ipv4_dotted_quad >>| fun v4 -> Ipaddr.V4 v4)
+  <|> (a_ipv6_coloned_hex >>| fun v6 -> Ipaddr.V6 v6)
+
+let a_domain_name =
+  take_till (function '\x00'..'\x1f' | ' ' | '"' | '\'' -> true | _ -> false)
+  >>= fun str -> match Domain_name.of_string str with
+  | Error `Msg x -> fail (Fmt.strf "Invalid domain name: %s: %S" x str)
+  | Ok x -> match Domain_name.host x with
+    | Error `Msg x -> fail (Fmt.strf "Invalid host name: %s: %S" x str)
+    | Ok x -> return x
+
+let a_domain_or_ip =
+  a_single_param >>= fun param ->
+  Angstrom.parse_string
+    (choice ~failure_msg:"not a hostname nor an IP" [
+        (a_ip >>| fun ip -> `IP ip) ;
+        (a_domain_name >>| fun dns -> `Domain dns)])
+    param |> function Ok x-> return x
+                    | Error s -> fail s
+
+let a_local =
+  string "local" *> a_whitespace *> a_domain_or_ip >>| fun dom ->
+  `Entry (B(Bind,(Some (None, Some dom))))
+
+let a_rport =
+  fail "rport not implemented TODO"
+  (*
+  a_entry_one_number "rport" >>| fun n ->
+  Logs.warn (fun m -> m "rport directive seen. \
+                         This is not properly implemented."); `Rport n*)
 
 let a_ping =
   a_entry_one_number "ping" >>| fun n -> `Entry (B(Ping_interval,n))
@@ -541,31 +610,6 @@ let a_replay_window =
     (string "replay-window" *> a_whitespace *> a_number)
     (option 15 (a_whitespace *> a_number))
 
-let a_ipv4_dotted_quad =
-  take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
-  match Ipaddr.V4.of_string ip with
-  | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %s: %S" x ip)
-  | Ok ip -> return ip
-
-let a_ipv6_coloned_hex =
-  take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
-                                 | _ -> false) >>= fun ip ->
-  match Ipaddr.V6.of_string ip with
-  | Error `Msg x -> fail (Fmt.strf "Invalid IPv6: %s: %S" x ip)
-  | Ok ip -> return ip
-
-let a_ip =
-  (a_ipv4_dotted_quad >>| fun v4 -> Ipaddr.V4 v4)
-  <|> (a_ipv6_coloned_hex >>| fun v6 -> Ipaddr.V6 v6)
-
-let a_domain_name =
-  take_till (function '\x00'..'\x1f' | ' ' | '"' | '\'' -> true | _ -> false)
-  >>= fun str -> match Domain_name.of_string str with
-  | Error `Msg x -> fail (Fmt.strf "Invalid domain name: %s: %S" x str)
-  | Ok x -> match Domain_name.host x with
-    | Error `Msg x -> fail (Fmt.strf "Invalid host name: %s: %S" x str)
-    | Ok x -> return x
-
 let a_ifconfig =
   string "ifconfig" *>
   a_whitespace *> a_ip >>= fun local ->
@@ -577,13 +621,7 @@ let a_ifconfig =
 let a_remote =
   let remote a b = B (Remote, [a,b]) in
   lift2 remote
-    (string "remote" *> a_whitespace *>
-     choice [
-       (a_ipv4_dotted_quad >>| fun i -> `IP (Ipaddr.V4 i)) ;
-       (a_ipv6_coloned_hex >>| fun i -> `IP (Ipaddr.V6 i)) ;
-       (a_domain_name >>| fun dns -> `Domain dns)
-     ]
-    )
+    (string "remote" *> a_whitespace *> a_domain_or_ip)
     (option 1194 (a_whitespace *> a_number))
 
 let a_remote_entry = a_remote >>| fun b -> `Entry b
@@ -628,12 +666,13 @@ let a_route_gateway =
     (a_ip >>| fun x -> Some x) ] >>| fun x -> `Entry (B(Route_gateway,x))
 
 let a_inline =
-  (* TODO strip trailing newlines inside block ?*)
   char '<' *> take_while1 (function 'a'..'z' |'-' -> true
                                              | _  -> false)
   <* char '>' <* char '\n' >>= fun tag ->
+  skip_many (a_whitespace_or_comment *> end_of_line) *>
   take_till (function '<' -> true | _ -> false) >>= fun x ->
   return (`Inline (tag, x))
+  <* skip_many end_of_line
   <* char '<' <* char '/' <* string tag <* char '>'
 
 let a_dhcp_option =
@@ -650,9 +689,11 @@ let a_not_implemented =
   (choice
      [ string "sndbuf" ;
        string "rcvbuf" ;
+       string "inactive" ;
        string "ip-win32" ;
        string "socket-flags" ;
        string "remote-cert-ku" ;
+       string "rport" ;
        (* TODO: *)
        string "dhcp-option";
        string "redirect-gateway" ;
@@ -667,6 +708,7 @@ let a_config_entry : line A.t =
   Angstrom.choice [
     a_client ;
     a_dev ;
+    a_local ;
     a_dhcp_option ;
     a_proto ;
     a_proto_force ;
@@ -686,6 +728,9 @@ let a_config_entry : line A.t =
     a_cipher ;
     a_replay_window ;
     a_remote_entry ;
+    a_reneg_sec ;
+    a_lport ;
+    a_rport ;
     a_pkcs12 ;
     a_flag ;
     a_ca ;
@@ -768,7 +813,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
   | None -> Ok (Some (k,v))
   | Some v2 -> begin match k with
       (* idempotent, as most of the flags - not a failure, emit warn: *)
-      | Tls_client -> warn () | Comp_lzo -> warn () | Float -> warn ()
+      | Comp_lzo -> warn () | Float -> warn ()
       | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
       | Passtos -> warn () | Persist_key -> warn () | Persist_tun -> warn ()
       | Pull -> warn ()
@@ -779,6 +824,26 @@ let resolve_conflict (type a) t (k:a key) (v:a)
             m "Config key %a was supplied multiple times with same value"
               pp (singleton k v)) ; Ok None
       (* can coalesce: *)
+      | Bind -> begin match v, v2 with
+          | None, None -> Ok (Some (Bind, None))
+          | Some _, None
+          | None, Some _ -> Error "Conflicting [bind] directives."
+          | Some v, Some v2 ->
+            let open Rresult in
+            begin match fst v, fst v2 with (* coalesce port binding *)
+              | (Some _ as x), None -> Ok x
+              | None, (Some _ as x) -> Ok x
+              | v1, v2 when v1 = v2 -> Ok v1
+              | _ -> Error "conflicting [port] options in [bind] directives"
+            end >>= fun (port: int option) ->
+            begin match snd v, snd v2 with (* coalesce host/ip binding *)
+              | (Some _ as x), None -> Ok x
+              | None, (Some _ as x) -> Ok x
+              | v1, v2 when v1 = v2 -> Ok v1
+              | _ -> Error "conflicting [host] options in [bind] directives"
+            end >>= fun (host: _ option) ->
+            Ok (Some (Bind, Some (port, host)))
+        end
       | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
       | Remote -> Ok (Some (Remote, (get Remote t @ v)))
@@ -827,11 +892,12 @@ let merge_push_reply ~client push_config =
     | Dhcp_disable_nbt, _ -> true
     | Dhcp_domain, _ -> true
     | Mssfix, _ -> true
-    | Tls_client, _ -> true
+    | Tls_mode, `Client -> true
     | Tun_mtu, _ -> true
     | Topology, _ -> true
-    | Ping_interval, _ -> true
-    | Ping_timeout, _ -> true
+    | Renegotiate_seconds, n when n > 0 -> true
+    | Ping_interval, n when n >= 0 -> true
+    | Ping_timeout, `Restart n when n >= 0 -> true
     (* TODO | Redirect_gateway, _ -> true *)
 
     (* TODO should verify IPs: *)
@@ -938,6 +1004,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           else begin Logs.warn (fun m ->
               m "Inline block %S seems to be redundant" fname); [] end
         | `Blank -> loop acc tl
+        | `Rport _ -> Error "TODO rport"
         | `Entry b -> retb b
         | `Entries lst -> multib lst
         | `Keepalive (interval, timeout) ->
