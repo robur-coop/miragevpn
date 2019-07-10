@@ -262,8 +262,8 @@ let incoming_control state now op data =
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
-    maybe_push_reply d >>| fun config ->
-    (* TODO validate config *)
+    maybe_push_reply d >>= fun config ->
+    Config.merge_push_reply ~client:state.config config >>| fun config ->
     let ip, prefix =
         match Config.(get Ifconfig config) with
           | V4 ip, V4 mask -> ip, Ipaddr.V4.Prefix.of_netmask mask ip
@@ -275,7 +275,7 @@ let incoming_control state now op data =
     in
     let ctx = { ip ; prefix ; gateway } in
     let client_state = Established (tls', ctx) in
-    { state with client_state }, []
+    { state with config ; client_state }, []
   | _ -> Error (`No_transition (state, op, data))
 
 let expected_packet (state : transport) data =
