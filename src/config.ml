@@ -903,6 +903,7 @@ let merge_push_reply ~client push_config =
     (* TODO should verify IPs: *)
     | Dhcp_dns, _ -> true
     | Dhcp_ntp, _ -> true
+    | Ifconfig, _ -> true
     | Route, _ -> true
     | Route_gateway, _ -> true
     | _ -> false
