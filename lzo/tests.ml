@@ -2,9 +2,10 @@ let () = Printexc.record_backtrace true
 module Lzo_tests = struct
   let regression_01 () =
     (* this used to hang *)
-    Alcotest.check_raises "index out of bounds"
-      (Invalid_argument "Buffer.add_substring/add_subbytes")
-      (fun () -> ignore @@ Lzo.decompress "\x00\x00\x11\x00\x00")
+    Alcotest.check_raises "ensure it raises exception"
+      (Invalid_argument "fail")
+      (fun () -> try ignore @@ Lzo.decompress "\x00\x00\x11\x00\x00"
+        with _ -> invalid_arg "fail")
 
   let regression_02 () =
     (* receiving end of `ping -s 10000 46.246.35.243` *)
@@ -18,19 +19,51 @@ module Lzo_tests = struct
       (Ok (""))
       (Lzo.decompress ("\x11\x00\x00"))
 
+  let regression_04 () =
+    (* seen on the wire *)
+    Alcotest.check Alcotest.(result pass reject) "dig/DNS: don't crash"
+      (Ok "")
+      (Lzo.decompress
+    "\000,E\000\000\178\181\212\000\0002\017ix\178\000d\253.\246\"\251\250\211\0005\000\158,\250\226k\001 \000\001\000\000\000\000\000\001\nabcdefghij\n1234567890 7W\000\000\000\001`\015\000\003)\016\000\000\000\000\000\000\012\000\n\000\bN\205\220\221\194u%\152\017\000\000")
+
   let short_literals () =
-    Alcotest.check Alcotest.(result string reject) "is 0x00"
-      (Ok "\x00")
-      (Lzo.decompress "\x12\x00\x11\x00\x00") ;
-    Alcotest.check Alcotest.(result string reject) "is 0x00 0x00"
-      (Ok "\x00\x00")
-      (Lzo.decompress "\x13\x00\x00\x11\x00\x00") ;
+    Alcotest.check Alcotest.(result string reject) "is empty"
+      (Ok "")
+      (Lzo.decompress "\x11\x00\x00") ;
+    Alcotest.check Alcotest.(result string reject) "is 0x31"
+      (Ok "\x31")
+      (Lzo.decompress "\x12\x31\x11\x00\x00") ;
+    Alcotest.check Alcotest.(result string reject) "is 0x31 0x32"
+      (Ok "\x31\x32")
+      (Lzo.decompress "\x13\x31\x32\x11\x00\x00") ;
     Alcotest.check Alcotest.(result string reject) "is A B C"
       (Ok "ABC")
       (Lzo.decompress "\x14ABC\x11\x00\x00") ;
     Alcotest.check Alcotest.(result string reject) "is A B C D"
       (Ok "ABCD")
-      (Lzo.decompress "\x15ABCD\x11\x00\x00")
+      (Lzo.decompress "\x15ABCD\x11\x00\x00") ;
+    (Alcotest.check Alcotest.(result string reject) "is A B C D E"
+       (Ok ("\x41\x42\x43\x44\x45"))
+       (Lzo.decompress ("\x16\x41\x42\x43\x44\x45\x11\x00\x00"))) ;
+    (Alcotest.check Alcotest.(result string reject) "is A B C D E F"
+       (Ok ("\x41\x42\x43\x44\x45\x46"))
+       (Lzo.decompress (
+           "\x17\x41\x42\x43\x44\x45\x46\x11\x00\x00"))) ;
+    (Alcotest.check Alcotest.(result string reject) "is A B C D E F G"
+       (Ok (
+           "\x41\x42\x43\x44\x45\x46\x47"))
+       (Lzo.decompress (
+           "\x18\x41\x42\x43\x44\x45\x46\x47\x11\x00\x00"))) ;
+    (Alcotest.check Alcotest.(result string reject) "is a lot of 1s"
+       (Ok ("1111111111111111111111111111111"))
+       (Lzo.decompress
+          ("\x30\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+           ^ "\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+           ^ "\x11\x00\x00"
+          )))
+
+
+
 
   let quick_brown ()=
     Alcotest.check Alcotest.(result string reject)
@@ -1609,22 +1642,75 @@ module Lzo_tests = struct
     ^ "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
     ^ "\x00\x00\x00\x11\x00\x00")))
 
+  let more_short () =
+    (Alcotest.check Alcotest.(result string reject) "short"
+       (Ok ("\x33\x33\x33\x33\x33\x30\x33\x33\x33\x33\x33\x30"))
+       (Lzo.decompress ("\x1d\x33\x33\x33\x33\x33\x30\x33\x33\x33\x33\x33\x30"
+                        ^ "\x11\x00\x00"))) ;
+    (Alcotest.check Alcotest.(result string reject) "Description"
+       (Ok ("\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+            ^ "\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x32"
+           ))
+       (Lzo.decompress
+          ("\x02\x31\x31\x31\x31\x31\x2a\x10\x00\x0c\x31\x31\x31\x31\x31\x31"
+           ^ "\x31\x31\x31\x31\x31\x31\x31\x31\x32\x11\x00\x00"))) ;
+    (Alcotest.check Alcotest.(result string reject) "33 bytes into 29 bytes"
+       (Ok ("\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30"
+            ^ "\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30"
+            ^ "\x30"))
+       (Lzo.decompress (
+           "\x02\x30\x30\x30\x30\x30\x2a\x10\x00\x0d\x30\x30\x30\x30\x30\x30"
+           ^ "\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x11\x00\x00")))
+
+  let compression_01 () =
+    (* compressed 71 bytes into 40 bytes *)
+(Alcotest.check Alcotest.(result string reject) "Description"
+  (Ok (
+    "\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30"
+    ^ "\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30"
+    ^ "\x30\x30\x30\x30\x30\x30\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+    ^ "\x31\x61\x61\x61\x62\x62\x62\x62\x31\x31\x31\x31\x31\x31\x63\x63"
+    ^ "\x63\x31\x31\x31\x31\x31\x31"))
+  (Lzo.decompress (
+    "\x02\x30\x30\x30\x30\x30\x3f\x11\x00\x31\x28\x00\x00\x00\x04\x61"
+    ^ "\x61\x61\x62\x62\x62\x62\x31\x31\x31\x31\x31\x31\x63\x63\x63\x31"
+    ^ "\x31\x31\x31\x31\x31\x11\x00\x00")))
+
+  let compression_02 () =
+    (* compressed 79 bytes into 38 bytes *)
+    (Alcotest.check Alcotest.(result string reject) "Description"
+       (Ok (
+           "\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+           ^ "\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+           ^ "\x31\x31\x31\x31\x31\x31\x31\x61\x61\x61\x62\x62\x62\x62\x31\x31"
+           ^ "\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"
+           ^ "\x31\x31\x63\x63\x63\x31\x31\x31\x31\x31\x31\x31\x31\x31\x31"))
+       (Lzo.decompress (
+           "\x02\x31\x31\x31\x31\x31\x20\x01\x10\x00\x04\x61\x61\x61\x62\x62"
+           ^ "\x62\x62\x32\xa0\x00\x0a\x63\x63\x63\x31\x31\x31\x31\x31\x31\x31"
+           ^ "\x31\x31\x31\x11\x00\x00")))
 
   let lzo_suite : _ Alcotest.test_case list =
     [ "short literals", `Quick, short_literals
+    ; "more short", `Quick, more_short
     ; "regression 01", `Slow, regression_01
     ; "regression 02", `Quick, regression_02
     ; "regression 03", `Quick, regression_03
     ; "actual compression", `Quick, quick_brown
     ; "short yoyoyo", `Quick, yoyoyo
     ; "random short", `Quick, random_short
+    ; "compression 01", `Quick, compression_01
+    ; "compression 02", `Quick, compression_02
     ; "random 00", `Quick, random_00
     ; "random 01", `Quick, random_01
     ; "random 02", `Quick, random_02
+    ; "regression 04", `Quick, regression_04
     ]
 end
 
 let () =
+  Logs.set_reporter @@ Logs_fmt.reporter ~dst:Format.std_formatter () ;
+  Logs.(set_level @@ Some Debug);
   Alcotest.run "openvpn LZO decompression tests"
     [ "LZO tests", Lzo_tests.lzo_suite
     ]

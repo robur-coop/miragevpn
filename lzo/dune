@@ -8,5 +8,5 @@
 (test
   (name tests)
   (modules tests)
-  (libraries alcotest fmt lzo rresult)
+  (libraries alcotest fmt logs.fmt lzo rresult)
 )

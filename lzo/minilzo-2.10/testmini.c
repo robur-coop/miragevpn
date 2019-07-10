@@ -28,7 +28,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-
+#include <string.h>
 
 /*************************************************************************
 // This program shows the basic usage of the LZO library.
@@ -75,7 +75,7 @@ static HEAP_ALLOC(wrkmem, LZO1X_1_MEM_COMPRESS);
 void printhex(unsigned char *s, size_t len){
         for(size_t i = 0; i < len;i++){
             printf("\\x%02x", s[i]);
-            if(i && ((i == 0xf) && i!=len-1)){ printf("\"\n    ^ \"");}
+            if(i && (((i&0xf) == 0xf) && i!=len-1)){ printf("\"\n    ^ \"");}
         }
 }
 
