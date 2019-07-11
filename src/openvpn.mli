@@ -104,8 +104,6 @@ module Config : sig
   val eq : eq
   (** [eq] is an implementation of [cmp] for use with [{!equal} cmp t t2] *)
 
-  val is_valid_client_config : t -> (unit,  [> R.msg]) result
-
   val client_generate_connect_options : t -> (string, R.msg) result
   (** Exports the excerpts from the client configuration sent to the server
       when the client initially connects. *)
@@ -128,7 +126,8 @@ module Config : sig
   val parse_client : string_of_file:(string -> (string, R.msg) result) ->
     string -> (t, [> R.msg]) result
   (** Parses a configuration string, looking up references to external files
-      as needed. Default client options are applied. *)
+      as needed. Validates the client configuration. Default client options are
+      applied. *)
 end
 
 type t
