@@ -22,14 +22,11 @@ let header state timestamp =
   let packet_id = state.my_packet_id
   and their_last_acked_message_id = state.their_message_id
   in
-  { state with their_last_acked_message_id ; my_packet_id = Int32.succ packet_id },
+  let my_packet_id = Int32.succ packet_id in
+  { state with their_last_acked_message_id ; my_packet_id },
   { Packet.local_session = state.my_session_id ;
     hmac = Cstruct.create_unsafe Packet.hmac_len ;
-    packet_id = packet_id ;
-    timestamp ;
-    ack_message_ids ;
-    remote_session
-  }
+    packet_id ; timestamp ; ack_message_ids ; remote_session }
 
 let ptime_to_ts_exn now =
   match Ptime.(Span.to_int_s (to_span now)) with
@@ -64,14 +61,10 @@ let client config now ts rng () =
     }
     in
     let state = {
-      config ;
-      linger = Cstruct.empty ;
-      rng ;
-      client_state = Expect_server_reset ;
-      transport ;
+      config ; linger = Cstruct.empty ; rng ;
+      client_state = Expect_server_reset ; transport ;
       keys_ctx = None ; (* TODO keep in established? *)
-      last_received = ts ;
-      last_sent = ts ;
+      last_received = ts ; last_sent = ts ;
     } in
     let timestamp = ptime_to_ts_exn now in
     let transport, header = header state.transport timestamp in
@@ -155,11 +148,10 @@ let maybe_kex rng config tls =
     let pre_master, random1, random2 = rng 48, rng 32, rng 32 in
     Config.client_generate_connect_options config >>= fun options ->
     let user_pass = Config.find Auth_user_pass config in
-    let tls_data = Packet.{ pre_master ; random1 ; random2 ;
-                            options ; user_pass }
+    let td = { Packet.pre_master ; random1 ; random2 ; options ; user_pass }
     and key_source = { State.pre_master ; random1 ; random2 }
     in
-    match Tls.Engine.send_application_data tls [Packet.encode_tls_data tls_data] with
+    match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
     | None -> Error (`Msg "Tls.send application data failed for tls_data")
     | Some (tls', payload) ->
       let client_state = TLS_established (tls', key_source) in
@@ -168,8 +160,7 @@ let maybe_kex rng config tls =
     Ok (TLS_handshake tls, None)
 
 let maybe_kdf transport key = function
-  | None ->
-    Error (`Msg "TLS established, expected data, received nothing");
+  | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
     Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
     Packet.decode_tls_data data >>= fun tls_data ->
@@ -179,11 +170,12 @@ let maybe_kdf transport key = function
                   Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
     (* TODO parse options with config parser and configure accordingly *)
     (* TODO offsets and length depend on some configuration parameters, no? *)
+    let my_key, their_key = Cstruct.sub keys 0 32, Cstruct.sub keys 128 32 in
     let keys_ctx = {
-      my_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 0 32) ;
+      my_key = Nocrypto.Cipher_block.AES.CBC.of_secret my_key ;
       my_hmac = Cstruct.sub keys 64 20 ;
       my_packet_id = 1l ;
-      their_key = Nocrypto.Cipher_block.AES.CBC.of_secret (Cstruct.sub keys 128 32) ;
+      their_key = Nocrypto.Cipher_block.AES.CBC.of_secret their_key ;
       their_hmac = Cstruct.sub keys 192 20 ;
       their_packet_id = 1l ;
     } in
@@ -208,9 +200,9 @@ let maybe_push_reply config = function
           Logs.info (fun m -> m "received push reply %a" Config.pp config);
           config
         | _ ->
-          Error (`Msg (Fmt.strf "push request sent, expected push_reply, got: %S" str);)
+          Error (`Msg (Fmt.strf "push request expected push_reply, got %S" str))
       end
-  | None -> Error (`Msg "push request sent, expected data, received nothing")
+  | None -> Error (`Msg "push request expected data, received no data")
 
 let incoming_control state now op data =
   Logs.info (fun m -> m "incoming client!!! op %a (state %a)"
@@ -221,23 +213,22 @@ let incoming_control state now op data =
     let tls, ch =
       let authenticator = match Config.find Ca state.config with
       | None ->
-        Logs.warn (fun m -> m "no CA certificate in config, not verifying peer certificate");
+        Logs.warn (fun m -> m "not authenticating certificate (missing CA)");
         X509.Authenticator.null
       | Some ca ->
-        Logs.info (fun m -> m "authenticating against %s" (X509.common_name_to_string ca));
+        Logs.info (fun m -> m "authenticating using %s"
+                      (X509.common_name_to_string ca));
         X509.Authenticator.chain_of_trust ~time:now [ ca ]
       in
       Tls.(Engine.client (Config.client ~authenticator ()))
     in
-    let state = { state with client_state = TLS_handshake tls } in
-    Ok (state, [ch])
+    Ok ({ state with client_state = TLS_handshake tls }, [ ch ])
   | TLS_handshake tls, Packet.Control ->
     (* we reply with ACK + maybe TLS response *)
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
     maybe_kex state.rng state.config tls' >>| fun (client_state, data) ->
-    let state = { state with client_state } in
     let out = match tls_response, data with
       | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
       | None, Some data -> [ data ]
@@ -246,7 +237,7 @@ let incoming_control state now op data =
         Logs.warn (fun m -> m "tls handshake response and application data");
         [ res ; data ]
     in
-    state, out
+    { state with client_state }, out
   | TLS_established (tls, key), Packet.Control ->
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     maybe_kdf state.transport key d >>= fun keys_ctx ->
@@ -256,28 +247,22 @@ let incoming_control state now op data =
     let state' = { state with client_state ; keys_ctx = Some keys_ctx } in
     (* first send an ack for the received key data packet (this needs to be
        a separate packet from the PUSH_REQUEST for unknown reasons) *)
-    let tls_out = match tls_response with None -> [] | Some x -> (* warn here as well? *) [x] in
+    let tls_out = match tls_response with None -> [] | Some x -> [x] in (* warn here as well? *)
     (state', tls_out @ [ Cstruct.empty ; out ])
   | Push_request_sent tls, Packet.Control ->
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     (match tls_response with
      | None -> ()
-     | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
-    (maybe_push_reply state.config d
-     >>| fun config -> {state with config}) >>| fun state ->
-    let config = state.config in
-    let ip, prefix =
-        match Config.(get Ifconfig config) with
-          | V4 ip, V4 mask -> ip, Ipaddr.V4.Prefix.of_netmask mask ip
-          | _ -> assert false
-    and gateway =
-      match Config.(get Route_gateway config) with
-      | Some V4 ip -> ip
+     | Some _ -> Logs.err (fun m -> m "unexpected TLS response (pr sent)"));
+    maybe_push_reply state.config d >>| fun config' ->
+    let ctx =
+      match Config.(get Ifconfig config', get Route_gateway config') with
+      | (V4 ip, V4 mask), Some V4 gateway ->
+        { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway }
       | _ -> assert false
     in
-    let ctx = { ip ; prefix ; gateway } in
     let client_state = Established (tls', ctx) in
-    { state with config ; client_state }, []
+    { state with config = config' ; client_state }, []
   | _ -> Error (`No_transition (state, op, data))
 
 let expected_packet (state : transport) data =
@@ -427,7 +412,7 @@ let incoming_data err ctx data =
   let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
   guard (Cstruct.len dec > 5)
-    (Rresult.R.msgf "payload %a too short (need at least 5 bytes)"
+    (Rresult.R.msgf "payload %a too short (need 5 bytes)"
        Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
   Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
@@ -443,18 +428,15 @@ let incoming_data err ctx data =
                comp Cstruct.hexdump_pp dec) >>| fun data' ->
   if Cstruct.equal data' ping then begin
     Logs.warn (fun m -> m "received ping!");
-    (* TODO: should update somewhere a timestamp about last ping received! *)
     None
   end else
     Some data'
 
 let check_control_integrity err key p hmac_key =
   let computed_mac, packet_mac =
-    compute_hmac key p hmac_key,
-    Packet.((header p).hmac)
+    compute_hmac key p hmac_key, Packet.((header p).hmac)
   in
-  guard (Cstruct.equal computed_mac packet_mac)
-    (err computed_mac) >>| fun () ->
+  guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
   Logs.info (fun m -> m "mac good")
 
 let wrap_hmac_control now transport outs =
@@ -482,7 +464,7 @@ let incoming state now ts buf =
        | `Data (_, data) ->
          begin match state.keys_ctx with
            | None ->
-             Logs.warn (fun m -> m "received some data, but session is not keyed yet");
+             Logs.warn (fun m -> m "received data, but session is not keyed yet");
              Ok (state, [], [])
            | Some keys ->
              incoming_data bad_mac keys data >>| fun data ->
@@ -505,11 +487,11 @@ let incoming state now ts buf =
            (* each control needs to be acked! *)
            let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
            (* now prepare outgoing packets *)
-           let transport, enc_outs = wrap_hmac_control now state'.transport outs in
+           let transport, encs = wrap_hmac_control now state'.transport outs in
            let state'' = { state' with transport } in
-           (state'', enc_outs, [])) >>= fun (state', outs, app) ->
+           (state'', encs, [])) >>= fun (state', outs, app) ->
       Logs.debug (fun m -> m "out state is %a" State.pp state');
-      Logs.debug (fun m -> m "number of outgoing packets is %d" (List.length outs));
-      multi state' linger (out@outs) (appdata@app)
+      Logs.debug (fun m -> m "%d outgoing packets" (List.length outs));
+      multi state' linger (out @ outs) (appdata @ app)
   in
   multi state (Cstruct.append state.linger buf) [] []

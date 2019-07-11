@@ -280,8 +280,9 @@ let encode_tls_data t =
       Cstruct.BE.set_uint16 p_l 0 (succ (String.length p));
       Cstruct.concat [ u_l ; Cstruct.of_string u ; null ;
                        p_l ; Cstruct.of_string p ; null ]
+  and opt = Cstruct.of_string t.options
   in
-  Cstruct.concat [ prefix ; key_source ; opt_len ; Cstruct.of_string t.options ; null ; u_p ]
+  Cstruct.concat [ prefix ; key_source ; opt_len ; opt ; null ; u_p ]
 
 let decode_tls_data buf =
   guard (Cstruct.len buf >= 7 + 64) `Partial >>= fun () ->
