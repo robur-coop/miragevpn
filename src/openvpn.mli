@@ -55,7 +55,11 @@ module Config : sig
     | Ping_interval : int k
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
-    | Proto    : [`Tcp | `Udp] k (** TODO should Proto be bound to a remote? *)
+
+    | Proto    : ([`IPv6 | `IPv4] option
+                  * [`Udp | `Tcp of [`Server | `Client] option]) k
+    (** TODO should Proto be bound to a remote? *)
+
     | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
@@ -102,23 +106,29 @@ module Config : sig
 
   val is_valid_client_config : t -> (unit,  [> R.msg]) result
 
-  val valid_server_options : client:t -> t -> (unit, [> R.msg]) result
-  (** [valid_server_options client_config server_config] is a success if
+  val client_generate_connect_options : t -> (string, R.msg) result
+  (** Exports the excerpts from the client configuration sent to the server
+      when the client initially connects. *)
+
+  val client_merge_server_config : t -> string -> (t, R.msg) result
+  (** Apply config excerpt from server received upon initial connection.
+      [client_merge_server_config client_config server_config] is a success if
       [server_config] does not conflict with [client_config].
       TODO return conflicting subset as error
+      - atm: do what validate_server_options did, returning unmodified.
   *)
 
-  val merge_push_reply : client:t -> t -> (t, [> R.msg]) result
+  val merge_push_reply : t -> string -> (t, [> R.msg]) result
   (** [merge_push_reply client_config push_config] is a successful
       merge of [client_config] and [push_config] if [push_config] does not
       conflict with [client_config].
       TODO return conflicting subset as error
   *)
 
-  val parse : string_of_file:(string -> (string, R.msg) result) ->
+  val parse_client : string_of_file:(string -> (string, R.msg) result) ->
     string -> (t, [> R.msg]) result
   (** Parses a configuration string, looking up references to external files
-      as needed.*)
+      as needed. Default client options are applied. *)
 end
 
 type t

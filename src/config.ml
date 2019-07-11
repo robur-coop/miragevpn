@@ -47,7 +47,10 @@ module Conf_map = struct
     | Ping_interval : int k
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
-    | Proto    : [`Tcp | `Udp] k
+    | Proto    : ([`IPv6 | `IPv4] option
+                  * [`Udp | `Tcp of [`Server | `Client] option]) k
+    (* see socket.c:static const struct proto_names proto_names[] *)
+
     | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
@@ -105,7 +108,7 @@ module Conf_map = struct
            Error "remote-cert-tls is not SERVER?!" else Ok ())
       )
 
-  let pp_b ppf (b:b) =
+  let pp_b ?(sep=Fmt.unit "@.") ppf (b:b) =
     let p () = Fmt.pf ppf in
     let B (k,v) = b in
     let pp_x509 entry_typ cert =
@@ -125,15 +128,15 @@ module Conf_map = struct
     | Bind, Some opts ->
       p() "bind" ;
       begin match fst opts with
-      | Some port -> p () "@.lport %d" port
+      | Some port -> p () "%alport %d" sep() port
       | None -> () end ;
       begin match snd opts with
         | None -> ()
-        | Some `Domain n -> p() "@.local %a" Domain_name.pp n
-        | Some `IP ip -> p() "@.local %a" Ipaddr.pp ip end
+        | Some `Domain n -> p() "%alocal %a" sep() Domain_name.pp n
+        | Some `IP ip -> p() "%alocal %a" sep() Ipaddr.pp ip end
     | Ca, ca -> pp_x509 "ca" ca
     | Cipher, cipher -> p() "cipher %s" cipher
-    | Comp_lzo, () -> p() "comp-lzo # deprecated"
+    | Comp_lzo, () -> p() "comp-lzo"
     | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
     | Dev, `Tap None -> p() "dev tap"
     | Dev, `Tap Some i -> p() "dev tap%d" i
@@ -143,10 +146,10 @@ module Conf_map = struct
     | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
     | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
     | Dhcp_ntp, ips ->
-      Fmt.(list ~sep:(unit"@.") @@
+      Fmt.(list ~sep @@
            (fun ppf -> pf ppf "dhcp-option ntp %a" Ipaddr.pp )) ppf ips
     | Dhcp_dns, ips ->
-      Fmt.(list ~sep:(unit"@.") @@
+      Fmt.(list ~sep @@
            (fun ppf -> pf ppf "dhcp-option dns %a" Ipaddr.pp)) ppf ips
     | Float, () -> p() "float"
     | Ifconfig, (local,remote) ->
@@ -160,11 +163,16 @@ module Conf_map = struct
     | Passtos, () -> p() "passtos"
     | Persist_key, () -> p() "persist-key"
     | Persist_tun, () -> p() "persist-tun"
-    | Proto, `Tcp -> p() "proto tcp"
-    | Proto, `Udp -> p() "proto udp"
+    | Proto, (ip_v, kind) ->
+      p() "proto %s%s%s"
+        (match kind with `Udp -> "udp" | `Tcp _ -> "tcp")
+        (match ip_v with Some `IPv4 -> "4" | Some `IPv6 -> "6" | None -> "")
+        (match kind with | `Tcp Some `Client -> "-client"
+                         | `Tcp Some `Server -> "-server"
+                         | `Tcp None | `Udp -> "")
     | Pull, () -> p() "pull"
     | Remote, lst ->
-      Fmt.(list ~sep:(unit"@.") @@
+      Fmt.(list ~sep @@
            (fun ppf -> pf ppf "remote %a"@@
              pair ~sep:(unit " ")
                (fun ppf -> function
@@ -211,13 +219,15 @@ module Conf_map = struct
     | Tun_mtu, int -> p() "tun-mtu %d" int
     | Verb, int -> p() "verb %d" int
 
-  let pp ppf t =
+  let pp_with_sep ?(sep=Fmt.unit "@.") ppf t =
     let minimized_t =
       if find Tls_mode t = Some `Client && mem Pull t then begin
         Fmt.pf ppf "client\n" ; remove Tls_mode t |> remove Pull
       end else t
     in
-    Fmt.(pf ppf "%a" (list ~sep:(unit"@.") pp_b) (bindings minimized_t))
+    Fmt.(pf ppf "%a" (list ~sep pp_b) (bindings minimized_t))
+
+  let pp ppf t = pp_with_sep ppf t
 
 end
 
@@ -251,7 +261,7 @@ let pp_line ppf (x : line) =
   (match x with
    | `Entries bs -> v ppf "entries: @[<v>%a@]"
                      Fmt.(list ~sep:(unit"@,") pp_b) bs
-   | `Entry b -> v ppf "entry: %a" pp_b b
+   | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b
    | `Blank -> v ppf "#"
    | `Keepalive (interval, timeout) -> v ppf "keepalive %d %d" interval timeout
    | `Rport d -> v ppf "rport %d" d
@@ -344,8 +354,16 @@ let a_dev =
 
 let a_proto =
   string "proto" *> a_whitespace *> choice [
-    string "tcp" *> return `Tcp ;
-    string "udp" *> return `Udp
+    string "tcp6-client" *> return (Some `IPv6, `Tcp (Some `Client));
+    string "tcp6-server" *> return (Some `IPv6, `Tcp (Some `Server));
+    string "tcp6" *> return (Some `IPv6, `Tcp None);
+    string "tcp4-client" *> return (Some `IPv4, `Tcp (Some `Client));
+    string "tcp4-server" *> return (Some `IPv4, `Tcp (Some `Server));
+    string "tcp4" *> return (Some `IPv4, `Tcp None);
+    string "tcp" *> return (None, `Tcp None);
+    string "udp6" *> return (Some `IPv6, `Udp);
+    string "udp4" *> return (Some `IPv4, `Udp);
+    string "udp" *> return (None, `Udp);
   ] >>| fun prot -> `Entry (B(Proto,prot))
 
 let a_proto_force =
@@ -885,69 +903,6 @@ let valid_server_options ~client:_ _server_t =
   Logs.err (fun m -> m "TODO valid_server_options is not implemented") ;
   Ok ()
 
-let merge_push_reply ~client push_config =
-  let will_accept (type a) (k:a key) (v:a) =
-    match k,v with
-    (* whitelist keys we are willing to accept from server: *)
-    | Dhcp_disable_nbt, _ -> true
-    | Dhcp_domain, _ -> true
-    | Mssfix, _ -> true
-    | Tls_mode, `Client -> true
-    | Tun_mtu, _ -> true
-    | Topology, _ -> true
-    | Renegotiate_seconds, n when n > 0 -> true
-    | Ping_interval, n when n >= 0 -> true
-    | Ping_timeout, `Restart n when n >= 0 -> true
-    (* TODO | Redirect_gateway, _ -> true *)
-
-    (* TODO should verify IPs: *)
-    | Dhcp_dns, _ -> true
-    | Dhcp_ntp, _ -> true
-    | Ifconfig, _ -> true
-    | Route, _ -> true
-    | Route_gateway, _ -> true
-    | _ -> false
-  in
-  (* let naughty_server = in *)
-  let f (type a) (k:a key) (a:a option) (b:a option) =
-    match k,(a:a option),(b:a option) with
-    (* server didn't touch this key: *)
-    | _, (Some _ as a), None -> a
-    | _, None, None -> None
-    (* Client overrides list completely if set: *)
-    (* TODO all keys with type 'a list k should probably be listed here,
-       can we ensure that statically? *)
-    | Dhcp_dns, (Some _ as a), Some _ -> a
-    | Dhcp_ntp, (Some _ as a), Some _ -> a
-    (* TODO | Route, Some a, _ -> a*)
-    (* try to merge: *)
-    | _, (Some a as some_a), Some b ->
-      begin match a, b with
-        (* they're equal, use client version: *)
-          _ when eq.f k a b -> some_a
-
-        | _ when not (will_accept k b) ->
-          invalid_arg @@ Fmt.strf
-            "push-reply: won't accept %a" pp (singleton k b)
-
-        (* at this point we need to merge them*)
-        | a,b -> begin match resolve_conflict (singleton k a) k b with
-            | Ok (Some (_,merged)) -> Some merged
-            (* client takes precedence if merging fails: *)
-            | _ -> some_a
-          end
-      end
-
-    (* try to use server value: *)
-    | _, None, Some v ->
-      if will_accept k v
-      then b (* <-- use server version *)
-      else invalid_arg @@
-        Fmt.strf "server pushed disallowed: %a" pp (singleton k v)
-  in
-  try Ok (merge { f } client push_config)
-  with Invalid_argument msg -> Error (`Msg msg)
-
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
   let open Rresult in
   let rec loop (acc:Conf_map.t) : line list -> (parser_state,'b) result =
@@ -1068,9 +1023,107 @@ let parse ~string_of_file config_str : (Conf_map.t, [> Rresult.R.msg]) result =
   in
   parse_begin config_str |> to_msg >>= fun initial ->
   (loop initial : (_,[< R.msg]) result :> (_,[> R.msg]) result)
-  >>| fun parsed_conf ->
+
+let parse_client ~string_of_file config_str =
+  let open Rresult in
+  parse ~string_of_file config_str >>= fun parsed_conf ->
   (* apply default configuration entries, overriding with the parsed config: *)
-  Conf_map.union {f = fun _key _default parsed -> Some parsed }
-    Defaults.config parsed_conf
+  let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
+      Defaults.config parsed_conf in
+  is_valid_client_config merged >>| fun () -> merged
+
+let merge_push_reply client (push_config:string) =
+  let open Rresult in
+  Astring.String.(concat ~sep:"\n" (cuts ~sep:"," push_config))
+  |> parse ~string_of_file:(fun _ ->
+      Rresult.R.error_msgf "string of file is not available")
+  >>= fun push_config ->
+  let will_accept (type a) (k:a key) (v:a) =
+    match k,v with
+    (* whitelist keys we are willing to accept from server: *)
+    | Dhcp_disable_nbt, _ -> true
+    | Dhcp_domain, _ -> true
+    | Mssfix, _ -> true
+    | Tls_mode, `Client -> true
+    | Tun_mtu, _ -> true
+    | Topology, _ -> true
+    | Renegotiate_seconds, n when n > 0 -> true
+    | Ping_interval, n when n >= 0 -> true
+    | Ping_timeout, `Restart n when n >= 0 -> true
+    (* TODO | Redirect_gateway, _ -> true *)
+
+    (* TODO should verify IPs: *)
+    | Dhcp_dns, _ -> true
+    | Dhcp_ntp, _ -> true
+    | Ifconfig, _ -> true
+    | Route, _ -> true
+    | Route_gateway, _ -> true
+    | _ -> false
+  in
+  (* let naughty_server = in *)
+  let f (type a) (k:a key) (a:a option) (b:a option) =
+    match k,(a:a option),(b:a option) with
+    (* server didn't touch this key: *)
+    | _, (Some _ as a), None -> a
+    | _, None, None -> None
+    (* Client overrides list completely if set: *)
+    (* TODO all keys with type 'a list k should probably be listed here,
+       can we ensure that statically? *)
+    | Dhcp_dns, (Some _ as a), Some _ -> a
+    | Dhcp_ntp, (Some _ as a), Some _ -> a
+    (* TODO | Route, Some a, _ -> a*)
+    (* try to merge: *)
+    | _, (Some a as some_a), Some b ->
+      begin match a, b with
+        (* they're equal, use client version: *)
+          _ when eq.f k a b -> some_a
+
+        | _ when not (will_accept k b) ->
+          invalid_arg @@ Fmt.strf
+            "push-reply: won't accept %a" pp (singleton k b)
+
+        (* at this point we need to merge them*)
+        | a,b -> begin match resolve_conflict (singleton k a) k b with
+            | Ok (Some (_,merged)) -> Some merged
+            (* client takes precedence if merging fails: *)
+            | _ -> some_a
+          end
+      end
+
+    (* try to use server value: *)
+    | _, None, Some v ->
+      if will_accept k v
+      then b (* <-- use server version *)
+      else invalid_arg @@
+        Fmt.strf "server pushed disallowed: %a" pp (singleton k v)
+  in
+  try Ok (merge { f } client push_config)
+  with Invalid_argument msg -> Error (`Msg msg)
+
+let client_generate_connect_options t =
+  (* TODO the format we generate does probably not match the intended one: *)
+  (*   Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-client" *)
+  let open Rresult in
+  Conf_map.is_valid_client_config t >>= fun () ->
+  let excerpt = Conf_map.filter (function
+      | B (Cipher, _) -> true
+      | B (Comp_lzo, _) -> true
+      | B (Tun_mtu, _) -> true
+      | B (Pull, _) -> true
+      | B (Tls_mode, `Client) -> true
+      | _ -> false) t in
+  let serialized = (Fmt.strf "%a" (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
+  Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
+                serialized) ;
+  Ok serialized
+
+let client_merge_server_config client server_str =
+  (* TODO: Mutate client config,
+     for instance choosing [tun-mtu = min (server,client)].
+  *)
+  let open Rresult in
+  parse ~string_of_file:(fun fn ->
+      Rresult.R.error_msgf "Server requested client to read %S" fn)
+    server_str >>= valid_server_options ~client >>| fun () -> client
 
 include Conf_map

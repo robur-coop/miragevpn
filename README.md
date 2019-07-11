@@ -94,7 +94,15 @@ remote-random
 auth-retry nointeract
 
 proto tcp
+proto tcp4
+proto tcp4-server
+proto tcp4-client
+proto tcp6
+proto tcp6-server
+proto tcp6-client
 proto udp
+proto udp4
+proto udp6
 
 pull
 client

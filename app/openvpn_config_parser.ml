@@ -15,7 +15,7 @@ let read_config_file fn =
     in loop st_size ;
     Bytes.to_string buf
   in
-  parse ~string_of_file:(fun fn -> Ok (str fn)) (str fn)
+  parse_client ~string_of_file:(fun fn -> Ok (str fn)) (str fn)
 
 let () =
   if not !Sys.interactive then begin
@@ -29,7 +29,7 @@ let () =
       Logs.info (fun m -> m "Read %d entries!"
                     (cardinal rules)) ;
       begin match
-          parse ~string_of_file:(fun _fn -> assert false)
+          parse_client ~string_of_file:(fun _fn -> assert false)
             (Fmt.strf "%a" pp rules) with
       | Error `Msg s->
         Logs.err (fun m ->m "self-test failed to parse: %s" s);

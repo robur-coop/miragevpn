@@ -56,10 +56,8 @@ let jump _ filename =
     Nocrypto_entropy_lwt.initialize () >>= fun () ->
     read_file filename >>= fun str ->
     match
-      let open Rresult.R.Infix in
       let string_of_file fn = Ok (Lwt_main.run (read_file fn)) in
-      Openvpn.Config.parse ~string_of_file str >>= fun config ->
-      Openvpn.Config.is_valid_client_config config >>| fun () -> config
+      Openvpn.Config.parse_client ~string_of_file str
     with
     | Error `Msg s -> Lwt.fail_with ("config parser: " ^ s)
     | Ok config ->

@@ -150,10 +150,13 @@ let incoming_tls tls data =
       Error (`Tls e)
     | `Ok tls' -> Ok (tls', out, d)
 
-let maybe_kex rng user_pass tls =
+let maybe_kex rng config tls =
   if Tls.Engine.can_handle_appdata tls then
     let pre_master, random1, random2 = rng 48, rng 32, rng 32 in
-    let tls_data = Packet.{ pre_master ; random1 ; random2 ; options ; user_pass }
+    Config.client_generate_connect_options config >>= fun options ->
+    let user_pass = Config.find Auth_user_pass config in
+    let tls_data = Packet.{ pre_master ; random1 ; random2 ;
+                            options ; user_pass }
     and key_source = { State.pre_master ; random1 ; random2 }
     in
     match Tls.Engine.send_application_data tls [Packet.encode_tls_data tls_data] with
@@ -192,7 +195,7 @@ let push_request tls =
   | None -> Error (`Msg "Tls.send application data failed for push request")
   | Some (tls', payload) -> Ok (tls', payload)
 
-let maybe_push_reply = function
+let maybe_push_reply config = function
   | Some data ->
     if Cstruct.len data = 0 then
       Error (`Msg "push request sent: empty TLS reply")
@@ -201,9 +204,7 @@ let maybe_push_reply = function
       Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
       begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
         | Some ("", opts) ->
-          let opts = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," opts)) in
-          Config.parse ~string_of_file:(fun _ ->
-              Rresult.R.error_msgf "string of file is not available") opts >>| fun config ->
+          Config.merge_push_reply config opts >>| fun config ->
           Logs.info (fun m -> m "received push reply %a" Config.pp config);
           config
         | _ ->
@@ -235,7 +236,7 @@ let incoming_control state now op data =
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
-    maybe_kex state.rng (Config.find Auth_user_pass state.config) tls' >>| fun (client_state, data) ->
+    maybe_kex state.rng state.config tls' >>| fun (client_state, data) ->
     let state = { state with client_state } in
     let out = match tls_response, data with
       | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
@@ -262,8 +263,9 @@ let incoming_control state now op data =
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "received TLS response while established"));
-    maybe_push_reply d >>= fun config ->
-    Config.merge_push_reply ~client:state.config config >>| fun config ->
+    (maybe_push_reply state.config d
+     >>| fun config -> {state with config}) >>| fun state ->
+    let config = state.config in
     let ip, prefix =
         match Config.(get Ifconfig config) with
           | V4 ip, V4 mask -> ip, Ipaddr.V4.Prefix.of_netmask mask ip

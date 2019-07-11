@@ -263,10 +263,6 @@ let pp_tls_data ppf t =
            (prefix (unit "user: ") (pair ~sep:(unit ", pass") string string)))
     t.user_pass
 
-(* TODO produce this from config *)
-let options =
-  "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-client"
-
 let key_method = 0x02
 
 let encode_tls_data t =
