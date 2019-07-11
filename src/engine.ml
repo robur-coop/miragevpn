@@ -274,29 +274,26 @@ let incoming_control state now op data =
 let expected_packet (state : transport) data =
   (* expects monotonic packet + message id, session ids matching *)
   (* TODO track ack'ed message ids from them (only really important for UDP) *)
-  match data with
-  | `Data (_, _) -> Ok state
-  | _ ->
-    let hdr = Packet.header data
-    and msg_id = Packet.message_id data
-    in
-    guard (Int32.equal state.their_packet_id hdr.Packet.packet_id)
-      (`Non_monotonic_packet_id (state, hdr)) >>= fun () ->
-    opt_guard (Int32.equal state.their_message_id) msg_id
-      (`Non_monotonic_message_id (state, msg_id, hdr)) >>= fun () ->
-    guard (Int64.equal state.their_session_id 0L ||
-           Int64.equal state.their_session_id hdr.Packet.local_session)
-      (`Mismatch_their_session_id (state, hdr)) >>= fun () ->
-    opt_guard (Int64.equal state.my_session_id) hdr.Packet.remote_session
-      (`Mismatch_my_session_id (state, hdr)) >>| fun () ->
-    (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
-    let their_message_id = match msg_id with
-      | None -> state.their_message_id
-      | Some x -> Int32.succ x
-    in
-    { state with their_session_id = hdr.Packet.local_session ;
-                 their_packet_id = Int32.succ hdr.Packet.packet_id ;
-                 their_message_id }
+  let hdr = Packet.header data
+  and msg_id = Packet.message_id data
+  in
+  guard (Int32.equal state.their_packet_id hdr.Packet.packet_id)
+    (`Non_monotonic_packet_id (state, hdr)) >>= fun () ->
+  opt_guard (Int32.equal state.their_message_id) msg_id
+    (`Non_monotonic_message_id (state, msg_id, hdr)) >>= fun () ->
+  guard (Int64.equal state.their_session_id 0L ||
+         Int64.equal state.their_session_id hdr.Packet.local_session)
+    (`Mismatch_their_session_id (state, hdr)) >>= fun () ->
+  opt_guard (Int64.equal state.my_session_id) hdr.Packet.remote_session
+    (`Mismatch_my_session_id (state, hdr)) >>| fun () ->
+  (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
+  let their_message_id = match msg_id with
+    | None -> state.their_message_id
+    | Some x -> Int32.succ x
+  in
+  { state with their_session_id = hdr.Packet.local_session ;
+               their_packet_id = Int32.succ hdr.Packet.packet_id ;
+               their_message_id }
 
 type error = [
     Packet.error
@@ -491,7 +488,7 @@ let incoming state now ts buf =
        | (`Ack _ | `Control _) as d ->
          check_control_integrity bad_mac key p state.transport.their_hmac >>= fun () ->
          (* _first_ update state with last_received_message_id and packet_id *)
-         expected_packet state.transport p >>= fun transport ->
+         expected_packet state.transport d >>= fun transport ->
          let state' = { state with transport } in
          match d with
          | `Ack _ ->
