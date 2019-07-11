@@ -64,6 +64,7 @@ let pp_keys ppf t =
 type t = {
   config : Config.t ;
   linger : Cstruct.t ;
+  compress : bool ;
   transport : transport ;
   keys_ctx : keys_ctx option ;
   rng : int -> Cstruct.t ;

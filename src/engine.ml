@@ -61,7 +61,7 @@ let client config now ts rng () =
     }
     in
     let state = {
-      config ; linger = Cstruct.empty ; rng ;
+      config ; linger = Cstruct.empty ; compress = false ; rng ;
       client_state = Expect_server_reset ; transport ;
       keys_ctx = None ; (* TODO keep in established? *)
       last_received = ts ; last_sent = ts ;
@@ -202,10 +202,7 @@ let maybe_push_reply config = function
       let str = Cstruct.(to_string (sub data 0 (pred (len data)))) in
       Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
       begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
-        | Some ("", opts) ->
-          Config.merge_push_reply config opts >>| fun config ->
-          Logs.info (fun m -> m "received push reply %a" Config.pp config);
-          config
+        | Some ("", opts) -> Config.merge_push_reply config opts
         | _ ->
           Error (`Msg (Fmt.strf "push request expected push_reply, got %S" str))
       end
@@ -270,7 +267,8 @@ let incoming_control state now op data =
     in
     Logs.info (fun m -> m "IP configured %a" pp_ip_config ctx);
     let client_state = Established (tls', ctx) in
-    { state with config = config' ; client_state }, []
+    let compress = Config.mem Comp_lzo config' in
+    { state with config = config' ; client_state ; compress }, []
   | _ -> Error (`No_transition (state, op, data))
 
 let expected_packet (state : transport) data =
@@ -352,21 +350,25 @@ let pad block_size cs =
   Cstruct.memset out pad_len;
   Cstruct.append cs out
 
-(* TODO check for amount <= block_size && amount <= l! *)
-let unpad cs =
+let unpad block_size cs =
   let l = Cstruct.len cs in
   let amount = Cstruct.get_uint8 cs (pred l) in
-  Cstruct.sub cs 0 (l - amount)
+  let len = l - amount in
+  if len >= 0 && amount <= block_size then
+    Ok (Cstruct.sub cs 0 len)
+  else
+    Error (`Msg "bad padding")
 
-let data_out ctx rng key data =
+let data_out ctx compress rng key data =
   (* output is: packed_id 0xfa data, then wrap openvpn partial header
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
      --> hmac and prepend hash *)
-  let hdr = Cstruct.create 5 in
+  let hdr = Cstruct.create (4 + if compress then 1 else 0) in
   Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
-  (* byte 4 is compression -- 0xFA is "no compression" *)
-  Cstruct.set_uint8 hdr 4 0xfa;
+  if compress then
+    (* byte 4 is compression -- 0xFA is "no compression" *)
+    Cstruct.set_uint8 hdr 4 0xfa;
   let block_size = 16 in
   let iv = rng block_size
   and data = pad block_size (Cstruct.append hdr data)
@@ -383,12 +385,12 @@ let data_out ctx rng key data =
                  (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
   (ctx', out)
 
-let outgoing state ts data =
-  match state.keys_ctx with
+let outgoing ({ compress ; rng ; keys_ctx ; transport ; _ } as s) ts data =
+  match keys_ctx with
   | None -> Error `Not_ready
   | Some ctx ->
-    let keys_ctx, data = data_out ctx state.rng state.transport.key data in
-    Ok ({ state with keys_ctx = Some keys_ctx ; last_sent = ts }, [ data ])
+    let keys_ctx, data = data_out ctx compress rng transport.key data in
+    Ok ({ s with keys_ctx = Some keys_ctx ; last_sent = ts }, [ data ])
 
 let ping =
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
@@ -411,7 +413,7 @@ let timer state ts =
   end else
     state, []
 
-let incoming_data err ctx data =
+let incoming_data err ctx compress data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
   let hmac, data = Cstruct.split data Packet.hmac_len in
   let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
@@ -419,21 +421,28 @@ let incoming_data err ctx data =
   let iv, data = Cstruct.split data 16 in
   let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-  guard (Cstruct.len dec > 5)
+  let hdr_len = 4 + if compress then 1 else 0 in
+  guard (Cstruct.len dec >= hdr_len)
     (Rresult.R.msgf "payload %a too short (need 5 bytes)"
        Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
   Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
-  let data = unpad (Cstruct.shift dec 5) in
-  (* if dec[4] == 0xfa, then compression is off *)
-  (match Cstruct.get_uint8 dec 4 with
-   | 0xFA -> Ok data
-   | 0x66 ->
-     Lzo.decompress (Cstruct.to_string data) >>| Cstruct.of_string >>| fun lz ->
-     Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
-     lz
-   | comp -> Rresult.R.error_msgf "unknown compression %#X in packet:@.%a"
-               comp Cstruct.hexdump_pp dec) >>| fun data' ->
+  let block_size = 16 in
+  unpad block_size (Cstruct.shift dec hdr_len) >>= fun data ->
+  begin
+    if compress then
+      (* if dec[4] == 0xfa, then compression is off *)
+      match Cstruct.get_uint8 dec 4 with
+      | 0xFA -> Ok data
+      | 0x66 ->
+        Lzo.decompress (Cstruct.to_string data) >>| Cstruct.of_string >>| fun lz ->
+        Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
+        lz
+      | comp -> Rresult.R.error_msgf "unknown compression %#X in packet:@.%a"
+                  comp Cstruct.hexdump_pp dec
+    else
+      Ok data
+  end >>| fun data' ->
   if Cstruct.equal data' ping then begin
     Logs.warn (fun m -> m "received ping!");
     None
@@ -475,7 +484,7 @@ let incoming state now ts buf =
              Logs.warn (fun m -> m "received data, but session is not keyed yet");
              Ok (state, [], [])
            | Some keys ->
-             incoming_data bad_mac keys data >>| fun data ->
+             incoming_data bad_mac keys state.compress data >>| fun data ->
              let data = match data with None -> [] | Some x -> [ x ] in
              state, [], data
          end
