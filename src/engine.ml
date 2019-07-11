@@ -159,16 +159,23 @@ let maybe_kex rng config tls =
   else
     Ok (TLS_handshake tls, None)
 
-let maybe_kdf transport key = function
+let maybe_kdf config transport key = function
   | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
     Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
-    Packet.decode_tls_data data >>= fun tls_data ->
+    Packet.decode_tls_data data >>| fun tls_data ->
+    let config' =
+      match Config.client_merge_server_config config tls_data.options with
+      | Ok config -> config
+      | Error `Msg msg ->
+        Logs.err (fun m -> m "server options (%S) failure: %s"
+                     tls_data.options msg);
+        config
+    in
     (* TODO need to preserve master secret (for subsequent key updates)!? *)
     let keys = derive_keys transport key tls_data in
     Logs.info (fun m -> m "received tls data %a@.key block %a"
                   Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
-    (* TODO parse options with config parser and configure accordingly *)
     (* TODO offsets and length depend on some configuration parameters, no? *)
     let my_key, their_key = Cstruct.sub keys 0 32, Cstruct.sub keys 128 32 in
     let keys_ctx = {
@@ -179,7 +186,7 @@ let maybe_kdf transport key = function
       their_hmac = Cstruct.sub keys 192 20 ;
       their_packet_id = 1l ;
     } in
-    Ok keys_ctx
+    (config', keys_ctx)
 
 let push_request tls =
   let data = Cstruct.of_string "PUSH_REQUEST\x00" in
@@ -240,11 +247,11 @@ let incoming_control state now op data =
     { state with client_state }, out
   | TLS_established (tls, key), Packet.Control ->
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
-    maybe_kdf state.transport key d >>= fun keys_ctx ->
+    maybe_kdf state.config state.transport key d >>= fun (config, keys_ctx) ->
     (* now we send a PUSH_REQUEST\0 and see what happens *)
     push_request tls' >>| fun (tls'', out) ->
     let client_state = Push_request_sent tls'' in
-    let state' = { state with client_state ; keys_ctx = Some keys_ctx } in
+    let state' = { state with client_state ; keys_ctx = Some keys_ctx ; config } in
     (* first send an ack for the received key data packet (this needs to be
        a separate packet from the PUSH_REQUEST for unknown reasons) *)
     let tls_out = match tls_response with None -> [] | Some x -> [x] in (* warn here as well? *)
@@ -261,6 +268,7 @@ let incoming_control state now op data =
         { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway }
       | _ -> assert false
     in
+    Logs.info (fun m -> m "IP configured %a" pp_ip_config ctx);
     let client_state = Established (tls', ctx) in
     { state with config = config' ; client_state }, []
   | _ -> Error (`No_transition (state, op, data))

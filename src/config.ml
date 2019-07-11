@@ -1122,8 +1122,9 @@ let client_merge_server_config client server_str =
      for instance choosing [tun-mtu = min (server,client)].
   *)
   let open Rresult in
+  let str = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," server_str)) in
   parse ~string_of_file:(fun fn ->
       Rresult.R.error_msgf "Server requested client to read %S" fn)
-    server_str >>= valid_server_options ~client >>| fun () -> client
+    str >>= valid_server_options ~client >>| fun () -> client
 
 include Conf_map

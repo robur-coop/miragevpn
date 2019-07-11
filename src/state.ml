@@ -12,7 +12,8 @@ type ip_config = {
 }
 
 let pp_ip_config ppf { ip ; prefix ; gateway } =
-  Fmt.pf ppf "ip %a prefix %a gateway %a" Ipaddr.V4.pp ip Ipaddr.V4.Prefix.pp prefix Ipaddr.V4.pp gateway
+  Fmt.pf ppf "ip %a prefix %a gateway %a"
+    Ipaddr.V4.pp ip Ipaddr.V4.Prefix.pp prefix Ipaddr.V4.pp gateway
 
 type client_state =
   | Expect_server_reset
