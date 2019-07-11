@@ -284,8 +284,13 @@ let encode_tls_data t =
   in
   Cstruct.concat [ prefix ; key_source ; opt_len ; opt ; null ; u_p ]
 
+let maybe_string buf off = function
+  | 0 | 1 -> ""
+  | x -> Cstruct.(to_string (sub buf off (pred x)))
+
 let decode_tls_data buf =
-  guard (Cstruct.len buf >= 7 + 64) `Partial >>= fun () ->
+  let opt_start = 7 + 64 in
+  guard (Cstruct.len buf >= opt_start) `Partial >>= fun () ->
   guard (Cstruct.BE.get_uint32 buf 0 = 0l)
     (`Malformed "tls data must start with 32 bit 0") >>= fun () ->
   guard (Cstruct.get_uint8 buf 4 = key_method)
@@ -295,30 +300,31 @@ let decode_tls_data buf =
   and random2 = Cstruct.sub buf (32 + 5) 32
   in
   let opt_len = Cstruct.BE.get_uint16 buf (64 + 5) in
-  guard (Cstruct.len buf >= 7 + 64 + opt_len) `Partial >>= fun () ->
-  let options = match opt_len with 0 | 1 -> "" | _ -> Cstruct.(to_string (sub buf (7 + 64) (pred opt_len))) in
-  guard (Cstruct.get_uint8 buf (pred (7 + 64 + opt_len)) = 0)
+  guard (Cstruct.len buf >= opt_start + opt_len) `Partial >>= fun () ->
+  let options = maybe_string buf opt_start opt_len in
+  guard (Cstruct.get_uint8 buf (pred (opt_start + opt_len)) = 0)
     (`Malformed "tls data option not null-terminated") >>= fun () ->
-  (if Cstruct.len buf = 7 + 64 + opt_len then
-     Ok None
-   else
-     guard (Cstruct.len buf >= 7 + 64 + opt_len + 4) `Partial >>= fun () ->
-     let u_len = Cstruct.BE.get_uint16 buf (7 + 64 + opt_len) in
-     guard (Cstruct.len buf >= 7 + 64 + opt_len + 4 + u_len) `Partial >>= fun () ->
-     let u = match u_len with 0 | 1 -> "" | _ -> Cstruct.(to_string (sub buf (7 + 64 + opt_len + 2) (pred u_len))) in
-     guard (u_len = 0 || Cstruct.get_uint8 buf (pred (7 + 64 + opt_len + 2 + u_len)) = 0)
-       (`Malformed "tls data username not null-terminated") >>= fun () ->
-     let p_len = Cstruct.BE.get_uint16 buf (7 + 64 + opt_len) in
-     guard (Cstruct.len buf >= 7 + 64 + opt_len + 4 + u_len + p_len) `Partial >>= fun () ->
-     let p = match p_len with 0 | 1 -> "" | _ -> Cstruct.(to_string (sub buf (7 + 64 + opt_len + 4 + u_len) (pred p_len))) in
-     let end_of_data = 7 + 64 + opt_len + 4 + u_len + p_len in
-     guard (p_len = 0 || Cstruct.get_uint8 buf (pred end_of_data) = 0)
-       (`Malformed "tls data password not null-terminated") >>| fun () ->
-     (* for some reason there may be some slack here... *)
-     if Cstruct.len buf > end_of_data then
-       Logs.warn (fun m -> m "slack at end of tls_data %a"
-                     Cstruct.hexdump_pp (Cstruct.shift buf end_of_data));
-     match u, p with
-     | "", "" -> None
-     | _ -> Some (u, p)) >>| fun user_pass ->
-    { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
+  begin if Cstruct.len buf = opt_start + opt_len then
+      Ok None
+    else
+      let u_start = opt_start + opt_len in
+      guard (Cstruct.len buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial >>= fun () ->
+      let u_len = Cstruct.BE.get_uint16 buf (opt_start + opt_len) in
+      guard (Cstruct.len buf >= u_start + 4 + u_len) `Partial >>= fun () ->
+      let u = maybe_string buf (u_start + 2) u_len in
+      guard (u_len = 0 || Cstruct.get_uint8 buf (pred (u_start + 2 + u_len)) = 0)
+        (`Malformed "tls data username not null-terminated") >>= fun () ->
+      let p_start = u_start + 2 + u_len in
+      let p_len = Cstruct.BE.get_uint16 buf p_start in
+      guard (Cstruct.len buf >= p_start + 2 + u_len + p_len) `Partial >>= fun () ->
+      let p = maybe_string buf (p_start + 2) p_len in
+      let end_of_data = p_start + 2 + p_len in
+      guard (p_len = 0 || Cstruct.get_uint8 buf (pred end_of_data) = 0)
+        (`Malformed "tls data password not null-terminated") >>| fun () ->
+      (* for some reason there may be some slack here... *)
+      if Cstruct.len buf > end_of_data then
+        Logs.warn (fun m -> m "slack at end of tls_data %a"
+                      Cstruct.hexdump_pp (Cstruct.shift buf end_of_data));
+      match u, p with "", "" -> None | _ -> Some (u, p)
+  end >>| fun user_pass ->
+  { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
