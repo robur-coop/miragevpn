@@ -97,7 +97,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     lift_err ~pp_error:TCP.pp_error (TCP.read flow) >>= function
     | `Eof -> Lwt.return (Error (`Msg "received eof"))
     | `Data b ->
-      Log.debug (fun m -> m "read %d bytes %a" (Cstruct.len b) Cstruct.hexdump_pp b);
+      Log.debug (fun m -> m "read %d bytes" (*" %a"*) (Cstruct.len b) (* Cstruct.hexdump_pp b *));
       match client () with
       | Error e -> Log.err (fun m -> m "read_react error state %a" pp_error e) ; Lwt.return (Error e)
       | Ok client ->

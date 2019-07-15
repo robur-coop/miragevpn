@@ -410,6 +410,7 @@ let outgoing s ts data =
   match keys_opt s.channel with
   | None -> Error `Not_ready
   | Some ctx ->
+    Logs.debug (fun m -> m "out key %d" s.channel.keyid);
     let ctx, data = data_out ctx s.compress s.rng s.channel.keyid data in
     let channel = set_keys s.channel ctx in
     Ok ({ s with channel ; last_sent = ts }, [ data ])
@@ -498,6 +499,7 @@ let incoming state now ts buf =
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out, appdata)
     | Ok (key, p, linger) ->
+      Logs.debug (fun m -> m "in key %d" key);
       (* ok, at first find proper channel for key (or create a fresh channel) *)
       match
         match channel_of_keyid key state with
@@ -524,8 +526,8 @@ let incoming state now ts buf =
         Logs.err (fun m -> m "no channel, continue") ;
         Ok (state, [], [])
       | Ok (ch, set_ch) ->
-        Logs.debug (fun m -> m "channel %a - received %a"
-                       pp_channel ch Packet.pp (key, p));
+        Logs.debug (fun m -> m "channel %a" (* "- received %a" *)
+                       pp_channel ch (* Packet.pp (key, p) *));
         let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
         (match p with
          | `Data (_, data) ->
