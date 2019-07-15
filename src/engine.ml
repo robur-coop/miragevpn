@@ -46,7 +46,7 @@ let hmac_and_out key hmac_key header p =
 let client config now ts rng () =
   match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
-  | Some (_, my_hmac, _, _) ->
+  | Some (_TODO_direction, _, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let transport = init_transport in
     let my_session_id = Randomconv.int64 rng in

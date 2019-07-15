@@ -47,6 +47,7 @@ module Config : sig
               fied as a DNS or /etc/hosts file resolvable name.*)
 
     | Ifconfig_nowarn : flag k
+    | Link_mtu : int k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
@@ -67,20 +68,34 @@ module Config : sig
     | Replay_window : (int * int) k
     | Resolv_retry  : [`Infinite | `Seconds of int] k
     | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
-               * Ipaddr.t option
+               * Ipaddr.Prefix.t option
                * [`ip of Ipaddr.t | `net_gateway | `remote_host
                  | `vpn_gateway] option
-               * int option) k
-    | Route_gateway : Ipaddr.t option k (** [None] -> default to DHCP *)
-    | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+               * [`Default | `Metric of int]) list k
+    (** Route consists of: network , netmask , gateway , metric *)
+
+    | Route_delay : (int * int) k
+    (** [n,w] seconds to wait after connection establishment before adding
+        routes to the routing table. *)
+
+    | Route_gateway : [ `IP of Ipaddr.t
+                      | `Default
+                      | `DHCP ] k
+    (** DHCP: should be executed on the encrypted VPN LAN interface *)
+
+    | Route_metric : [`Default | `Metric of int] k
+    (** Default metric for [Route _] directives *)
+
+    | Tls_auth : ([`Incoming | `Outgoing] option
+                  * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert     : X509.t k
 
     | Tls_mode   : [`Client | `Server] k
     (** Governed by the [tls-client] and [tls-server] directives.
         Indirectly also by [client]. *)
 
-    | Tls_key      : X509.t k
-    (** TODO Tls_key : X509.t * [`Incoming|`Outgoing] k
+    | Tls_key      : X509.private_key k
+    (** TODO Tls_key : X509.private_key * [`Incoming|`Outgoing] k
         --key-direction governs this for inlined files
         see comment in {!a_key} *)
 

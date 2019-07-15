@@ -7,13 +7,14 @@ module A = Angstrom
 
 type inlineable =
   [ `Auth_user_pass | `Ca | `Connection | `Pkcs12
-  | `Tls_auth | `Tls_cert | `Tls_key ]
+  | `Tls_auth of [`Incoming | `Outgoing] option
+  | `Tls_cert | `Tls_key ]
 let string_of_inlineable = function
   | `Auth_user_pass -> "auth-user-pass"
   | `Ca -> "ca"
   | `Connection -> "connection"
   | `Pkcs12 -> "pkcs12"
-  | `Tls_auth -> "tls-auth"
+  | `Tls_auth _ -> "tls-auth"
   | `Tls_cert -> "cert"
   | `Tls_key -> "key"
 type inline_or_path = [ `Need_inline of inlineable
@@ -39,6 +40,7 @@ module Conf_map = struct
     | Float    : flag k
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
+    | Link_mtu : int k
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
@@ -58,15 +60,20 @@ module Conf_map = struct
     | Replay_window : (int * int) k
     | Resolv_retry : [`Infinite | `Seconds of int] k
     | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
-               * Ipaddr.t option
+               * Ipaddr.Prefix.t option
                * [`ip of Ipaddr.t | `net_gateway | `remote_host
                  | `vpn_gateway] option
-               * int option) k
-    | Route_gateway : Ipaddr.t option k
-    | Tls_auth : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+               * [`Default | `Metric of int]) list k
+    | Route_delay : (int * int) k
+    | Route_gateway : [ `IP of Ipaddr.t
+                      | `Default
+                      | `DHCP ] k
+    | Route_metric : [`Default | `Metric of int] k
+    | Tls_auth : ([ `Incoming | `Outgoing] option
+                  * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert   : X509.t k
     | Tls_mode : [`Client | `Server] k
-    | Tls_key    : X509.t k
+    | Tls_key    : X509.private_key k
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     | Topology : [`net30 | `p2p | `subnet] k
     | Tun_mtu : int k
@@ -112,13 +119,27 @@ module Conf_map = struct
     let p () = Fmt.pf ppf in
     let B (k,v) = b in
     let pp_x509 entry_typ cert =
-      p() "%s [inline]\n<%s>\n# CN: %S\n%s</%s>"
+      p() "%s [inline]\n<%s>\n# CN: %S\n\
+           # Expiry: %a\n# Hosts: %a\n\
+           # Cert fingerprint (sha256): %a\n\
+           # Key fingerprint (sha256): %a\n%s</%s>"
         entry_typ
         entry_typ
         (X509.common_name_to_string cert)
+        (Fmt.(pair ~sep:(unit" -> ") Ptime.(pp_human()) Ptime.(pp_human()))
+        ) (X509.validity cert)
+        Fmt.(list ~sep:(unit " ") string) (X509.hostnames cert)
+        Hex.pp (Hex.of_cstruct (X509.fingerprint `SHA256 cert))
+        Hex.pp (Hex.of_cstruct (X509.key_fingerprint ~hash:`SHA256
+                                  (X509.public_key cert)))
         (X509.Encoding.Pem.Certificate.to_pem_cstruct1 cert
          |> Cstruct.to_string)
         entry_typ
+    in
+    let pp_x509_private_key key =
+      p() "key [inline]\n<key>\n%s</key>"
+        (X509.Encoding.Pem.Private_key.to_pem_cstruct1 key
+         |> Cstruct.to_string)
     in
     match k,v with
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
@@ -155,6 +176,7 @@ module Conf_map = struct
     | Ifconfig, (local,remote) ->
       p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
     | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
+    | Link_mtu, i -> p() "link-mtu %d" i
     | Ping_interval, n -> p() "ping %d" n
     | Ping_timeout, `Exit timeout -> p() "ping-exit %d" timeout
     | Ping_timeout, `Restart timeout -> p() "ping-restart %d" timeout
@@ -186,28 +208,39 @@ module Conf_map = struct
     | Replay_window, (low,high) -> p() "replay-window %d %d" low high
     | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
     | Resolv_retry, `Seconds i -> p() "resolv-retry %d" i
-    | Route, (network,netmask,gateway,metric) ->
-      let pp_addr ppf v = Fmt.pf ppf "%s" (match v with
-          | `ip ip -> Ipaddr.to_string ip
-          | `net_gateway -> "net_gateway"
-          | `remote_host -> "remote_host"
-          | `vpn_gateway -> "vpn_gateway") in
-      p() "route %a %a %a %a"
-        pp_addr network
-        Fmt.(option ~none:(unit"default") Ipaddr.pp) netmask
-        Fmt.(option ~none:(unit"default") pp_addr) gateway
-        Fmt.(option ~none:(unit"default") int) metric
-    | Route_gateway, v ->
-      p() "route-gateway %a" Fmt.(option ~none:(unit"default") Ipaddr.pp) v
-    | Tls_auth, (a,b,c,d) ->
-      p() "tls-auth [inline]\n<tls-auth>\n%s\n%a\n%s\n</tls-auth>"
-        "-----BEGIN OpenVPN Static key V1-----"
+    | Route, routes ->
+      routes |> List.iter
+        begin fun (network,netmask,gateway,metric) ->
+          let pp_addr ppf v = Fmt.pf ppf "%s" (match v with
+              | `ip ip -> Ipaddr.to_string ip
+              | `net_gateway -> "net_gateway"
+              | `remote_host -> "remote_host"
+              | `vpn_gateway -> "vpn_gateway") in
+          p() "route %a %a %a %s"
+            pp_addr network
+            Fmt.(option ~none:(unit"default") Ipaddr.Prefix.pp) netmask
+            Fmt.(option ~none:(unit"default") pp_addr) gateway
+            (match metric with `Default -> "default"
+                             | `Metric i -> string_of_int i)
+        end
+    | Route_delay, (n,w) -> p() "route-delay %d %d" n w
+    | Route_gateway, `Default -> p() "route-gateway default"
+    | Route_gateway, `DHCP ->  p() "route-gateway dhcp"
+    | Route_gateway, `IP ip -> p() "route-gateway %a" Ipaddr.pp ip
+    | Tls_auth, (direction, a,b,c,d) ->
+      p() "tls-auth [inline]%s\n<tls-auth>\n\
+           -----BEGIN OpenVPN Static key V1-----\n\
+           %a\n%s\n</tls-auth>"
+        (match direction with
+         | Some `Incoming -> " 1" | Some `Outgoing -> " 0" | None -> "")
         Fmt.(array ~sep:(unit"\n") string)
         (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
          | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
         "-----END OpenVPN Static key V1-----"
+    | Route_metric, `Metric i -> p() "route-metric %d" i
+    | Route_metric, `Default -> p() "route-metric default"
     | Tls_cert, cert -> pp_x509 "cert" cert
-    | Tls_key, key -> pp_x509 "key" key
+    | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver,or_highest) ->
       p() "tls-version-min %s%s" (match ver with
           | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
@@ -410,19 +443,35 @@ let a_cert_payload str =
 
 let a_key = a_option_with_single_path "key" `Tls_key
 let a_key_payload str =
-  a_x509_cert_payload "key" (fun c -> B(Tls_key,c)) str
+  let open Rresult in
+  a_x509_cert_payload "key"
+    (let open X509.Encoding in
+     fun x -> cs_of_cert x |>
+              Pem.Private_key.of_pem_cstruct
+    ) str >>= function
+  | k::tl ->
+    if tl <> [] then
+      Logs.warn (fun m -> m "extra keys found in x509 tls-key, will use first");
+    Ok (B(Tls_key,k))
+  | [] -> Error "no key found in x509 tls-key"
 
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 
 let a_tls_auth =
-  a_option_with_single_path "tls-auth" `Tls_auth
-  (* TODO --key-direction or the optional arg here:
+  a_option_with_single_path "tls-auth" () >>= fun source ->
+  (* --key-direction or the optional arg here:
      0 -> CN_OUTGOING
      1 -> CN_INCOMING
   *)
-  <* choice [ a_whitespace *> a_number_range 0 1 *> return () ; return () ]
+  choice [ a_whitespace *> string "0" *> return (Some `Outgoing) ;
+           a_whitespace *> string "1" *> return (Some `Incoming) ;
+           return None
+         ] >>| fun direction ->
+  match source with
+  | `Need_inline () -> `Need_inline (`Tls_auth direction)
+  | `Path (path, ()) -> `Path (path, `Tls_auth direction)
 
-let a_tls_auth_payload =
+let a_tls_auth_payload direction =
   let abort s = fail ("Invalid TLS AUTH HMAC key: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line) *>
   (string "-----BEGIN OpenVPN Static key V1-----\n"
@@ -440,7 +489,8 @@ let a_tls_auth_payload =
         abort @@ "Wrong size ("^(string_of_int sz)^"); need exactly 256 bytes")
   >>| Cstruct.concat >>| fun cs ->
   B (Tls_auth,
-     Cstruct.(sub cs 0        64,
+     Cstruct.(direction,
+              sub cs 0        64,
               sub cs 64       64,
               sub cs 128      64,
               sub cs (128+64) 64))
@@ -588,6 +638,9 @@ let a_ping_exit =
   a_entry_one_number "ping-exit" >>| fun n ->
   `Entry (B(Ping_timeout,`Exit n))
 
+let a_link_mtu = a_entry_one_number "link-mtu" >>| fun x ->
+  `Entry (B(Link_mtu,x))
+
 let a_tun_mtu = a_entry_one_number "tun-mtu" >>| fun x ->
   `Entry (B(Tun_mtu,x))
 
@@ -655,33 +708,41 @@ let a_route =
   string "route" *> a_whitespace *> a_network_or_gateway >>= fun network ->
   let some x = Some x in
 
-  option (some @@ Ipaddr.of_string_exn "255.255.255.255", None, None)
+  option (some @@ Ipaddr.Prefix.of_string_exn "255.255.255.255/32", None, `Default)
     ( (a_whitespace *>
-       (((string "default" *> return
-           (some @@ Ipaddr.of_string_exn "255.255.255.255"))
-       ) <|> (a_ip >>| fun x -> some x))) >>= fun netmask ->
-      option (None,None)
+       (
+         (a_ip >>= fun ip -> (char '/' *> a_number_range 0 32) >>= fun mask ->
+          match Ipaddr.Prefix.of_string (Fmt.strf "%a/%d" Ipaddr.pp ip mask)
+          with Error `Msg err -> fail err | Ok n -> return n)
+         <|> (choice
+                [ string "default" *>
+                  return (Ipaddr.of_string_exn "255.255.255.255")
+                ; a_ip] >>| Ipaddr.Prefix.of_addr)  >>| some)
+      ) >>= fun netmask ->
+      option (None,`Default)
         (a_whitespace *>
          ((string "default" *>
            ((return None)) <|> (a_network_or_gateway >>| some))
          ) >>= fun gateway ->
 
-         option None
+         (* read metric: *)
+         option `Default
            (a_whitespace *>
-            ((string "default" *> return None) <|>
-             (a_number_range 0 255 >>| fun n -> some n))
+            ((string "default" *> return `Default) <|>
+             (a_number_range 0 255 >>| fun i -> `Metric i))
            ) >>| fun metric -> gateway,metric
         ) >>| (fun (gateway,metric) -> netmask,gateway,metric)
       (* <* end_of_input*)
     ) >>| fun (netmask,gateway,metric) ->
-  `Entry (B (Route, (network,netmask,gateway,metric)))
+  `Entry (B (Route, [network,netmask,gateway,metric]))
 
 let a_route_gateway =
   (string "route-gateway" *> a_whitespace) *>
   choice [
-    (a_single_param >>= function "dhcp" -> return None
-                               | _ -> fail "not 'dhcp'") ;
-    (a_ip >>| fun x -> Some x) ] >>| fun x -> `Entry (B(Route_gateway,x))
+    (a_single_param >>= function "dhcp" -> return `DHCP
+                               | "default" -> return `Default
+                               | _ -> fail "not dhcp|default|ip") ;
+    (a_ip >>| fun x -> `IP x) ] >>| fun x -> `Entry (B(Route_gateway,x))
 
 let a_inline =
   char '<' *> take_while1 (function 'a'..'z' |'-' -> true
@@ -715,6 +776,8 @@ let a_not_implemented =
        (* TODO: *)
        string "dhcp-option";
        string "redirect-gateway" ;
+       string "up" ;
+       string "dh" ;
      ] <* a_whitespace >>= fun key ->
    take_while (function '\n' -> false | _ -> true) >>| fun rest ->
    Logs.warn (fun m ->m "IGNORING %S %S" key rest)
@@ -742,6 +805,7 @@ let a_config_entry : line A.t =
     a_keepalive ;
     a_socks_proxy ;
     a_auth_user_pass ;
+    a_link_mtu ;
     a_tun_mtu ;
     a_cipher ;
     a_replay_window ;
@@ -796,7 +860,7 @@ let parse_inline str = let open Rresult in
   | `Auth_user_pass ->
     (* TODO openvpn doesn't seem to allow inlining passwords, we do.. *)
     parse_string a_auth_user_pass_payload str
-  | `Tls_auth -> parse_string a_tls_auth_payload str
+  | `Tls_auth direction -> parse_string (a_tls_auth_payload direction) str
   | `Connection ->
     (* TODO entries can sometimes be nested, like in <connection> blocks:
        The following OpenVPN options may be used inside of  a  <connection> block:
@@ -1101,18 +1165,30 @@ let merge_push_reply client (push_config:string) =
   with Invalid_argument msg -> Error (`Msg msg)
 
 let client_generate_connect_options t =
-  (* TODO the format we generate does probably not match the intended one: *)
-  (*   Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-client" *)
+  (* This uses a different format, notably config directives are separated by
+     commas instead of newlines.
+     These are used by the server when it is run with --opt-verify
+  *)
+  (*   Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,\
+       keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,\
+       key-method 2" *)
   let open Rresult in
   Conf_map.is_valid_client_config t >>= fun () ->
   let excerpt = Conf_map.filter (function
       | B (Cipher, _) -> true
       | B (Comp_lzo, _) -> true
       | B (Tun_mtu, _) -> true
+      | B (Link_mtu, _) -> true
       | B (Pull, _) -> true
       | B (Tls_mode, `Client) -> true
       | _ -> false) t in
-  let serialized = (Fmt.strf "V4,%a" (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
+  let serialized =
+    (Fmt.strf "V4,tls-client,%s%a"
+       (match Conf_map.find Dev t with
+        | Some `Tun _ -> "dev-type tun,"
+        | Some `Tap _ -> "dev-type tap,"
+        | _ -> "")
+       (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
   Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
                 serialized) ;
   Ok serialized
