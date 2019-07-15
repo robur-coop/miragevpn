@@ -82,7 +82,7 @@ let pp_ip ppf { ip ; prefix ; gateway } =
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with
-  | (V4 ip, V4 mask), Some V4 gateway ->
+  | (V4 ip, V4 mask), `IP (V4 gateway) ->
     { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway }
   | _ -> assert false
 

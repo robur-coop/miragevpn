@@ -1,17 +1,30 @@
 open Lwt.Infix
 
-let open_tun {Openvpn.ip ; gateway ; prefix } =
+let open_tun config {Openvpn.ip ; gateway ; prefix } : (Lwt_unix.file_descr,[> `Msg of string]) Lwt_result.t =
+  let open Lwt_result.Infix in
   let netmask =
     (* openvpn solves this problem by modifying the routing table: *)
     if Ipaddr.V4.Prefix.mem gateway prefix
     then Ipaddr.V4.Prefix.of_addr ip
     else prefix in
-  let fd , dev = Tuntap.opentun () in
-  (* pray to god we don't get raced re: tun dev teardown+creation here;
-     TODO should patch Tuntap to operate on fd instead of dev name:*)
-  Tuntap.set_ipv4 ~netmask dev ip ;
-  Logs.debug (fun m -> m "allocated TUN interface %s" dev);
-  Lwt_unix.of_unix_file_descr fd
+  begin match Openvpn.Config.find Dev config with
+    | None | Some `Tun None -> Ok None
+    | Some `Tun (Some n) -> Ok (Some ("tun" ^ string_of_int n))
+    | Some `Null -> Error (`Msg "TODO what is this")
+    | Some `Tap _ -> Error (`Msg "using a TAP interface is not supported")
+  end |> Lwt_result.lift >>= fun devname ->
+  try begin
+    let fd , dev = Tuntap.opentun ?devname () in
+    (* pray to god we don't get raced re: tun dev teardown+creation here;
+       TODO should patch Tuntap to operate on fd instead of dev name:*)
+    Tuntap.set_ipv4 ~netmask dev ip ;
+    Logs.debug (fun m -> m "allocated TUN interface %s" dev);
+    Lwt_result.return (Lwt_unix.of_unix_file_descr fd)
+  end with
+  | Failure msg ->
+    Lwt_result.fail
+      (Rresult.R.msgf "%s: Failed to allocate TUN interface: %s"
+         (match devname with None -> "dynamic" | Some dev -> dev) msg)
 
 let rec write_to_fd fd data =
   if Cstruct.len data = 0 then
@@ -129,8 +142,7 @@ let jump _ filename =
           | incoming_data ->
             match Openvpn.ready !s with
             | Some ip_config ->
-              let tun_fd = open_tun ip_config in
-              Lwt.return (Ok (tun_fd, incoming_data))
+              open_tun config ip_config >|= fun tun_fd -> tun_fd, incoming_data
             | None ->
               if incoming_data <> [] then
                 Logs.err (fun m ->
