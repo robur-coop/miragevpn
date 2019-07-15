@@ -1,5 +1,18 @@
 open Lwt.Infix
 
+let open_tun {Openvpn.ip ; gateway ; prefix } =
+  let netmask =
+    (* openvpn solves this problem by modifying the routing table: *)
+    if Ipaddr.V4.Prefix.mem gateway prefix
+    then Ipaddr.V4.Prefix.of_addr ip
+    else prefix in
+  let fd , dev = Tuntap.opentun () in
+  (* pray to god we don't get raced re: tun dev teardown+creation here;
+     TODO should patch Tuntap to operate on fd instead of dev name:*)
+  Tuntap.set_ipv4 ~netmask dev ip ;
+  Logs.debug (fun m -> m "allocated TUN interface %s" dev);
+  Lwt_unix.of_unix_file_descr fd
+
 let rec write_to_fd fd data =
   if Cstruct.len data = 0 then
     Lwt_result.return ()
@@ -87,6 +100,11 @@ let jump _ filename =
         in
         let fd = Lwt_unix.(socket dom SOCK_STREAM 0) in
         Lwt_unix.(connect fd (ADDR_INET (ip, port))) >>= fun () ->
+
+
+        (* TODO here we should learn MTU from unix.getsockopt fd IP_MTU
+           ... which Unix doesn't expose. *)
+
         let open Lwt_result in
         write_to_fd fd out >>= fun () ->
         let _ =
@@ -95,7 +113,7 @@ let jump _ filename =
               s := s' ;
               Lwt.async (fun () -> write_multiple_to_fd fd out))
         in
-        let rec loop () =
+        let read_and_handle () =
           read_from_fd fd >>= fun b ->
           match
             Openvpn.(Rresult.R.error_to_msg ~pp_error
@@ -104,13 +122,45 @@ let jump _ filename =
           | Error e -> fail e
           | Ok (s', outs, app) ->
             s := s' ;
-            List.iter (fun data ->
-                Logs.info (fun m -> m "received OpenVPN payload:@.%a"
-                              Cstruct.hexdump_pp data))
-              app ;
-            write_multiple_to_fd fd outs >>= loop
+            write_multiple_to_fd fd outs >|= fun () ->
+            app
         in
-        loop ()
+        let rec establish () =
+          read_and_handle () >>= function
+          | incoming_data ->
+            match Openvpn.ready !s with
+            | Some ip_config ->
+              let tun_fd = open_tun ip_config in
+              Lwt.return (Ok (tun_fd, incoming_data))
+            | None -> establish ()
+        in
+        establish () >>= fun (tun_fd, app_data) ->
+        let rec process_incoming app_data =
+          ( let open Lwt.Infix in
+            Lwt_list.for_all_p (fun pkt ->
+                Lwt_cstruct.write tun_fd pkt >|= function
+                | written when written = Cstruct.len pkt -> true
+                | _ -> false
+              ) app_data >>= begin function
+              | true -> Lwt_result.return ()
+              | false -> Lwt_result.fail (`Msg "")
+            end) >>= fun () ->
+          let open Lwt_result.Infix in
+          read_and_handle () >>= process_incoming
+        in
+        let rec process_outgoing tun_fd ()=
+          let buf = Cstruct.create 1500 in
+          Lwt_cstruct.read tun_fd buf |> Lwt_result.ok
+          >|= Cstruct.sub buf 0 >>= fun buf ->
+          match Openvpn.outgoing !s (ts()) buf with
+          | Error `Not_ready -> failwith ""
+          | Ok (s', outs) ->
+            s := s';
+            write_multiple_to_fd fd outs
+            >>= process_outgoing tun_fd
+        in
+        Lwt.pick [ process_incoming app_data
+                 ; process_outgoing tun_fd () ]
       end
   ) (* <- Lwt_main.run *)
 

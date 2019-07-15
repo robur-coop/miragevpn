@@ -5,7 +5,7 @@
   (modules openvpn_client_lwt)
   (libraries openvpn lwt lwt.unix cmdliner fmt.tty logs.fmt logs.cli fmt.cli
              ipaddr ipaddr.unix ptime.clock.os dns-client-lwt nocrypto.lwt
-             mtime.clock.os))
+             mtime.clock.os tuntap))
 
 (executable
   (name openvpn_config_parser)
