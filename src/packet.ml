@@ -67,8 +67,8 @@ type header = {
 let pp_header ppf hdr =
   Fmt.pf ppf "local %Lu packet_id %ld timestamp %ld hmac %a ack %a remote %a"
     hdr.local_session hdr.packet_id hdr.timestamp Cstruct.hexdump_pp hdr.hmac
-    Fmt.(list ~sep:(unit ", ") int32) hdr.ack_message_ids
-    Fmt.(option ~none:(unit " ") int64) hdr.remote_session
+    Fmt.(list ~sep:(unit ", ") uint32) hdr.ack_message_ids
+    Fmt.(option ~none:(unit " ") uint64) hdr.remote_session
 
 let decode_header buf =
   guard (Cstruct.len buf >= hdr_len) `Partial >>= fun () ->
@@ -265,6 +265,7 @@ let pp_tls_data ppf t =
 
 let key_method = 0x02
 
+(* this is client only (since there's a pre_master!) *)
 let encode_tls_data t =
   let prefix = Cstruct.create 5 in
   Cstruct.set_uint8 prefix 4 key_method;
@@ -288,6 +289,7 @@ let maybe_string buf off = function
   | 0 | 1 -> ""
   | x -> Cstruct.(to_string (sub buf off (pred x)))
 
+(* this is client only (parsing a server tls_data -- there's no pre_master!) *)
 let decode_tls_data buf =
   let opt_start = 7 + 64 in
   guard (Cstruct.len buf >= opt_start) `Partial >>= fun () ->

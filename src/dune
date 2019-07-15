@@ -2,5 +2,5 @@
   (name openvpn)
   (public_name openvpn)
   (libraries fmt logs rresult cstruct ptime astring lzo nocrypto tls x509
-             duration angstrom hex domain-name ipaddr gmap)
+             duration angstrom hex domain-name ipaddr gmap randomconv)
   (wrapped true))

@@ -4,27 +4,28 @@ open Rresult.R.Infix
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
 
-let ready f = match f.client_state with Established (_, ip) -> Some ip | _ -> None
+let ready f = match f.session.state with
+    Ready ip | Rekeying (ip, _) -> Some ip | _ -> None
 
 let next_message_id state =
   { state with my_message_id = Int32.succ state.my_message_id },
   state.my_message_id
 
-let header state timestamp =
+let header session transport timestamp =
   let rec acked_message_ids id =
-    if state.their_message_id = id then
+    if transport.their_message_id = id then
       []
     else
       id :: acked_message_ids (Int32.succ id)
   in
-  let ack_message_ids = acked_message_ids state.their_last_acked_message_id in
-  let remote_session = match ack_message_ids with [] -> None | _ -> Some state.their_session_id in
-  let packet_id = state.my_packet_id
-  and their_last_acked_message_id = state.their_message_id
+  let ack_message_ids = acked_message_ids transport.their_last_acked_message_id in
+  let remote_session = match ack_message_ids with [] -> None | _ -> Some session.their_session_id in
+  let packet_id = session.my_packet_id
+  and their_last_acked_message_id = transport.their_message_id
   in
   let my_packet_id = Int32.succ packet_id in
-  { state with their_last_acked_message_id ; my_packet_id },
-  { Packet.local_session = state.my_session_id ;
+  { session with my_packet_id }, { transport with their_last_acked_message_id },
+  { Packet.local_session = session.my_session_id ;
     hmac = Cstruct.create_unsafe Packet.hmac_len ;
     packet_id ; timestamp ; ack_message_ids ; remote_session }
 
@@ -47,32 +48,35 @@ let client config now ts rng () =
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
-    let transport = {
-      key = 0 ;
-      my_hmac ;
-      my_session_id = 0xF00DBEEFL ;
+    let transport = init_transport in
+    let my_session_id = Randomconv.int64 rng in
+    let session = {
+      state = Connecting ;
+      my_session_id ;
       my_packet_id = 1l ;
-      my_message_id = 0l ;
-      their_hmac = my_hmac ;
       their_session_id = 0L ;
       their_packet_id = 1l ;
-      their_message_id = 0l ;
-      their_last_acked_message_id = 0l ;
-    }
-    in
+      my_hmac ;
+      their_hmac = my_hmac ;
+    } in
+    let channel = {
+      keyid = 0 ;
+      channel_st = Expect_server_reset ;
+      transport ;
+    } in
     let state = {
       config ; linger = Cstruct.empty ; compress = false ; rng ;
-      client_state = Expect_server_reset ; transport ;
-      keys_ctx = None ; (* TODO keep in established? *)
+      session ; channel ; lame_duck = None ;
       last_received = ts ; last_sent = ts ;
     } in
     let timestamp = ptime_to_ts_exn now in
-    let transport, header = header state.transport timestamp in
+    let session, transport, header = header session transport timestamp in
     let transport, m_id = next_message_id transport in
     let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
-    let out = hmac_and_out transport.key my_hmac header p in
+    let out = hmac_and_out channel.keyid my_hmac header p in
     let remote = Config.get Remote config in
-    Ok ({ state with transport }, remote, out)
+    let channel = { channel with transport } in
+    Ok ({ state with channel ; session }, remote, out)
 
 let pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"
@@ -119,7 +123,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
   in
   Nocrypto.Uncommon.Cs.xor md5 sha
 
-let derive_keys (s : State.transport) (key_source : State.key_source) (tls_data : Packet.tls_data) =
+let derive_keys session (key_source : State.key_source) (tls_data : Packet.tls_data) =
   let master_key =
     prf ~label:"OpenVPN master secret" ~secret:key_source.pre_master
       ~client_random:key_source.random1 ~server_random:tls_data.random1 48
@@ -127,7 +131,7 @@ let derive_keys (s : State.transport) (key_source : State.key_source) (tls_data 
   let keys =
     prf ~label:"OpenVPN key expansion" ~secret:master_key
       ~client_random:key_source.random2 ~server_random:tls_data.random2
-      ~sids:(s.my_session_id, s.their_session_id)
+      ~sids:(session.my_session_id, session.their_session_id)
       (4 * 64)
   in
   keys
@@ -208,31 +212,32 @@ let maybe_push_reply config = function
       end
   | None -> Error (`Msg "push request expected data, received no data")
 
-let incoming_control state now op data =
-  Logs.info (fun m -> m "incoming client!!! op %a (state %a)"
-                Packet.pp_operation op pp state);
-  match state.client_state, op with
-  | Expect_server_reset, Packet.Hard_reset_server ->
+let incoming_control config rng session channel now op data =
+  Logs.info (fun m -> m "incoming client!!! op %a (channel %a)"
+                Packet.pp_operation op pp_channel channel);
+  match channel.channel_st, op with
+  | Expect_server_reset, (Packet.Hard_reset_server | Packet.Soft_reset) ->
+    (* for rekey, allow soft_reset as well *)
     (* we reply with ACK + TLS client hello! *)
     let tls, ch =
-      let authenticator = match Config.find Ca state.config with
-      | None ->
-        Logs.warn (fun m -> m "not authenticating certificate (missing CA)");
-        X509.Authenticator.null
-      | Some ca ->
-        Logs.info (fun m -> m "authenticating using %s"
-                      (X509.common_name_to_string ca));
-        X509.Authenticator.chain_of_trust ~time:now [ ca ]
+      let authenticator = match Config.find Ca config with
+        | None ->
+          Logs.warn (fun m -> m "not authenticating certificate (missing CA)");
+          X509.Authenticator.null
+        | Some ca ->
+          Logs.info (fun m -> m "authenticating using %s"
+                        (X509.common_name_to_string ca));
+          X509.Authenticator.chain_of_trust ~time:now [ ca ]
       in
       Tls.(Engine.client (Config.client ~authenticator ()))
     in
-    Ok ({ state with client_state = TLS_handshake tls }, [ ch ])
+    Ok (false, config, { channel with channel_st = TLS_handshake tls }, [ ch ])
   | TLS_handshake tls, Packet.Control ->
     (* we reply with ACK + maybe TLS response *)
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
-    maybe_kex state.rng state.config tls' >>| fun (client_state, data) ->
+    maybe_kex rng config tls' >>| fun (channel_st, data) ->
     let out = match tls_response, data with
       | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
       | None, Some data -> [ data ]
@@ -241,59 +246,70 @@ let incoming_control state now op data =
         Logs.warn (fun m -> m "tls handshake response and application data");
         [ res ; data ]
     in
-    { state with client_state }, out
+    false, config, { channel with channel_st }, out
   | TLS_established (tls, key), Packet.Control ->
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
-    maybe_kdf state.config state.transport key d >>= fun (config, keys_ctx) ->
-    (* now we send a PUSH_REQUEST\0 and see what happens *)
-    push_request tls' >>| fun (tls'', out) ->
-    let client_state = Push_request_sent tls'' in
-    let state' = { state with client_state ; keys_ctx = Some keys_ctx ; config } in
-    (* first send an ack for the received key data packet (this needs to be
-       a separate packet from the PUSH_REQUEST for unknown reasons) *)
+    maybe_kdf config session key d >>= fun (config, keys) ->
     let tls_out = match tls_response with None -> [] | Some x -> [x] in (* warn here as well? *)
-    (state', tls_out @ [ Cstruct.empty ; out ])
-  | Push_request_sent tls, Packet.Control ->
+    (* ok, two options:
+       - initial handshake done, we need push request / reply
+       - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
+    *)
+    (* this may be a bit too early since tls_response...  *)
+    begin match Config.(find Ifconfig config) with
+      | Some _ ->
+        Ok (true, config, { channel with channel_st = Established (tls', keys) }, tls_out)
+      | None ->
+       (* now we send a PUSH_REQUEST\0 and see what happens *)
+       push_request tls' >>| fun (tls'', out) ->
+       let channel_st = Push_request_sent (tls'', keys) in
+       (* first send an ack for the received key data packet (this needs to be
+          a separate packet from the PUSH_REQUEST for unknown reasons) *)
+       (false, config, { channel with channel_st }, tls_out @ [ Cstruct.empty ; out ])
+    end
+  | Push_request_sent (tls, keys), Packet.Control ->
+    Logs.debug (fun m -> m "in push request sent");
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "unexpected TLS response (pr sent)"));
-    maybe_push_reply state.config d >>| fun config' ->
-    let ctx =
-      match Config.(get Ifconfig config', get Route_gateway config') with
-      | (V4 ip, V4 mask), Some V4 gateway ->
-        { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway }
-      | _ -> assert false
-    in
-    Logs.info (fun m -> m "IP configured %a" pp_ip_config ctx);
-    let client_state = Established (tls', ctx) in
-    let compress = Config.mem Comp_lzo config' in
-    { state with config = config' ; client_state ; compress }, []
-  | _ -> Error (`No_transition (state, op, data))
+    maybe_push_reply config d >>| fun config' ->
+    let channel_st = Established (tls', keys) in
+    Logs.info (fun m -> m "channel %d is established now!!!" channel.keyid);
+    true, config', { channel with channel_st }, []
+  | _ -> Error (`No_transition (channel, op, data))
 
-let expected_packet (state : transport) data =
+let expected_packet session transport data =
   (* expects monotonic packet + message id, session ids matching *)
   (* TODO track ack'ed message ids from them (only really important for UDP) *)
+  (* there may be rekeying, if this is the case we setup a fresh transport
+     (with new key id, msg id, etc.) and don't accept any further messages with
+     the old one. we also require to set the client_state so it'll output
+     packets... *)
   let hdr = Packet.header data
   and msg_id = Packet.message_id data
   in
-  guard (Int32.equal state.their_packet_id hdr.Packet.packet_id)
-    (`Non_monotonic_packet_id (state, hdr)) >>= fun () ->
-  opt_guard (Int32.equal state.their_message_id) msg_id
-    (`Non_monotonic_message_id (state, msg_id, hdr)) >>= fun () ->
-  guard (Int64.equal state.their_session_id 0L ||
-         Int64.equal state.their_session_id hdr.Packet.local_session)
-    (`Mismatch_their_session_id (state, hdr)) >>= fun () ->
-  opt_guard (Int64.equal state.my_session_id) hdr.Packet.remote_session
-    (`Mismatch_my_session_id (state, hdr)) >>| fun () ->
-  (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
+  guard (Int32.equal session.their_packet_id hdr.Packet.packet_id)
+    (`Non_monotonic_packet_id (transport, hdr)) >>= fun () ->
+  guard (Int64.equal session.their_session_id 0L ||
+         Int64.equal session.their_session_id hdr.Packet.local_session)
+    (`Mismatch_their_session_id (transport, hdr)) >>= fun () ->
+  opt_guard (Int64.equal session.my_session_id) hdr.Packet.remote_session
+    (`Mismatch_my_session_id (transport, hdr)) >>= fun () ->
+  opt_guard (Int32.equal transport.their_message_id) msg_id
+    (`Non_monotonic_message_id (transport, msg_id, hdr)) >>| fun () ->
+  let session = {
+    session with
+    their_session_id = hdr.Packet.local_session ;
+    their_packet_id = Int32.succ hdr.Packet.packet_id
+  } in
   let their_message_id = match msg_id with
-    | None -> state.their_message_id
+    | None -> transport.their_message_id
     | Some x -> Int32.succ x
   in
-  { state with their_session_id = hdr.Packet.local_session ;
-               their_packet_id = Int32.succ hdr.Packet.packet_id ;
-               their_message_id }
+  (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
+  let transport = { transport with their_message_id } in
+  session, transport
 
 type error = [
     Packet.error
@@ -301,8 +317,10 @@ type error = [
   | `Non_monotonic_message_id of transport * int32 option * Packet.header
   | `Mismatch_their_session_id of transport * Packet.header
   | `Mismatch_my_session_id of transport * Packet.header
+  | `Msg_id_required_in_fresh_key of transport * int * Packet.header
+  | `Different_message_id_expected_fresh_key of transport * int * Packet.header
   | `Bad_mac of t * Cstruct.t * Packet.t
-  | `No_transition of t * Packet.operation * Cstruct.t
+  | `No_transition of channel * Packet.operation * Cstruct.t
   | `Tls of [ `Alert of Tls.Packet.alert_type | `Eof | `Fail of Tls.Engine.failure ]
   | `Msg of string
 ]
@@ -321,22 +339,28 @@ let pp_error ppf = function
   | `Mismatch_my_session_id (state, hdr) ->
     Fmt.pf ppf "mismatched my session id in %a@ (state %a)"
       Packet.pp_header hdr pp_transport state
+  | `Msg_id_required_in_fresh_key (state, key, hdr) ->
+    Fmt.pf ppf "no message id in a fresh key (%d) message %a@ (state %a)"
+      key Packet.pp_header hdr pp_transport state
+  | `Different_message_id_expected_fresh_key (state, key, hdr) ->
+    Fmt.pf ppf "different message id expected for fresh key (%d) message %a@ (state %a)"
+      key Packet.pp_header hdr pp_transport state
   | `Bad_mac (state, computed, data) ->
     Fmt.pf ppf "bad mac: computed %a, data %a@ (state %a)"
       Cstruct.hexdump_pp computed Packet.pp data pp state
-  | `No_transition (state, op, data) ->
-    Fmt.pf ppf "no transition found for typ %a (state %a)@.data %a"
-      Packet.pp_operation op pp state Cstruct.hexdump_pp data
+  | `No_transition (channel, op, data) ->
+    Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
+      Packet.pp_operation op pp_channel channel Cstruct.hexdump_pp data
   | `Tls tls_e -> pp_tls_error ppf tls_e
   | `Msg msg -> Fmt.string ppf msg
 
-let wrap_openvpn transport ts out =
-  let transport, header = header transport ts in
+let wrap_openvpn session transport ts out =
+  let session, transport, header = header session transport ts in
   if Cstruct.equal Cstruct.empty out then
-    transport, (header, `Ack header)
+    session, transport, (header, `Ack header)
   else
     let transport, m_id = next_message_id transport in
-    transport, (header, `Control (Packet.Control, (header, m_id, out)))
+    session, transport, (header, `Control (Packet.Control, (header, m_id, out)))
 
 let pad block_size cs =
   let pad_len =
@@ -356,7 +380,7 @@ let unpad block_size cs =
   else
     Error (`Msg "bad padding")
 
-let data_out ctx compress rng key data =
+let data_out (ctx : keys) compress rng key data =
   (* output is: packed_id 0xfa data, then wrap openvpn partial header
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
@@ -382,12 +406,13 @@ let data_out ctx compress rng key data =
                  (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
   (ctx', out)
 
-let outgoing ({ compress ; rng ; keys_ctx ; transport ; _ } as s) ts data =
-  match keys_ctx with
+let outgoing s ts data =
+  match keys_opt s.channel with
   | None -> Error `Not_ready
   | Some ctx ->
-    let keys_ctx, data = data_out ctx compress rng transport.key data in
-    Ok ({ s with keys_ctx = Some keys_ctx ; last_sent = ts }, [ data ])
+    let ctx, data = data_out ctx s.compress s.rng s.channel.keyid data in
+    let channel = set_keys s.channel ctx in
+    Ok ({ s with channel ; last_sent = ts }, [ data ])
 
 let ping =
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
@@ -410,7 +435,7 @@ let timer state ts =
   end else
     state, []
 
-let incoming_data err ctx compress data =
+let incoming_data err (ctx : keys) compress data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
   let hmac, data = Cstruct.split data Packet.hmac_len in
   let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
@@ -453,18 +478,18 @@ let check_control_integrity err key p hmac_key =
   guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
   Logs.info (fun m -> m "mac good")
 
-let wrap_hmac_control now transport outs =
+let wrap_hmac_control now session key transport outs =
   let ts = ptime_to_ts_exn now in
-  let transport, outs =
-    List.fold_left (fun (transport, acc) out ->
+  let session, transport, outs =
+    List.fold_left (fun (session, transport, acc) out ->
         (* add the OpenVPN header *)
-        let transport, (hdr, p) = wrap_openvpn transport ts out in
+        let session, transport, (hdr, p) = wrap_openvpn session transport ts out in
         (* hmac each outgoing frame and encode *)
-        let out = hmac_and_out transport.key transport.my_hmac hdr p in
-        transport, out :: acc)
-      (transport, []) outs
+        let out = hmac_and_out key session.my_hmac hdr p in
+        session, transport, out :: acc)
+      (session, transport, []) outs
   in
-  transport, List.rev outs
+  session, transport, List.rev outs
 
 let incoming state now ts buf =
   let state = { state with last_received = ts } in
@@ -473,39 +498,89 @@ let incoming state now ts buf =
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out, appdata)
     | Ok (key, p, linger) ->
-      let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
-      (match p with
-       | `Data (_, data) ->
-         begin match state.keys_ctx with
-           | None ->
-             Logs.warn (fun m -> m "received data, but session is not keyed yet");
-             Ok (state, [], [])
-           | Some keys ->
-             incoming_data bad_mac keys state.compress data >>| fun data ->
-             let data = match data with None -> [] | Some x -> [ x ] in
-             state, [], data
-         end
-       | (`Ack _ | `Control _) as d ->
-         check_control_integrity bad_mac key p state.transport.their_hmac >>= fun () ->
-         (* _first_ update state with last_received_message_id and packet_id *)
-         expected_packet state.transport d >>= fun transport ->
-         let state' = { state with transport } in
-         match d with
-         | `Ack _ ->
-           (* TODO nothing to do for an ack, should bump ack number *)
-           Logs.info (fun m -> m "ignoring acknowledgement");
-           Ok (state', [], [])
-         | `Control (typ, (_, _, data)) ->
-           (* process control in client state machine -- TODO: should receive partial state *)
-           incoming_control state' now typ data >>| fun (state', outs) ->
-           (* each control needs to be acked! *)
-           let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
-           (* now prepare outgoing packets *)
-           let transport, encs = wrap_hmac_control now state'.transport outs in
-           let state'' = { state' with transport } in
-           (state'', encs, [])) >>= fun (state', outs, app) ->
-      Logs.debug (fun m -> m "out state is %a" State.pp state');
-      Logs.debug (fun m -> m "%d outgoing packets" (List.length outs));
-      multi state' linger (out @ outs) (appdata @ app)
+      (* ok, at first find proper channel for key (or create a fresh channel) *)
+      match
+        match channel_of_keyid key state with
+        | None ->
+          begin match state.session.state with
+            | Rekeying _ | Connecting ->
+              Logs.warn (fun m -> m "ignoring bad packet (key %d) in %a"
+                            key pp state);
+              Error ()
+            | Ready ip ->
+              let channel = {
+                keyid = key ;
+                channel_st = Expect_server_reset ;
+                transport = init_transport
+              }
+              in
+              Ok (channel, fun s ch ->
+                  let session = { s.session with state = Rekeying (ip, ch) } in
+                  { s with session })
+          end
+        | Some (ch, set_ch) -> Ok (ch, set_ch)
+      with
+      | Error () ->
+        Logs.err (fun m -> m "no channel, continue") ;
+        Ok (state, [], [])
+      | Ok (ch, set_ch) ->
+        Logs.debug (fun m -> m "channel %a - received %a"
+                       pp_channel ch Packet.pp (key, p));
+        let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
+        (match p with
+         | `Data (_, data) ->
+           begin match keys_opt ch with
+             | None ->
+               Logs.warn (fun m -> m "received data, but session is not keyed yet");
+               Ok (state, [], [])
+             | Some keys ->
+               incoming_data bad_mac keys state.compress data >>| fun data ->
+               let data = match data with None -> [] | Some x -> [ x ] in
+               state, [], data
+           end
+         | (`Ack _ | `Control _) as d ->
+           check_control_integrity bad_mac key p state.session.their_hmac >>= fun () ->
+           (* _first_ update state with last_received_message_id and packet_id *)
+           expected_packet state.session ch.transport d >>= fun (session, transport) ->
+           let state' = { state with session }
+           and ch' = { ch with transport }
+           in
+           match d with
+           | `Ack _ ->
+             (* TODO nothing to do for an ack, should bump ack number *)
+             Logs.info (fun m -> m "ignoring acknowledgement");
+             Ok (set_ch state' ch', [], [])
+           | `Control (typ, (_, _, data)) ->
+             (* process control in client state machine -- TODO: should receive partial state *)
+             incoming_control state.config state.rng state.session ch' now typ data >>| fun (est, config', ch'', outs) ->
+             Logs.debug (fun m -> m "out channel %a, pkts %d"
+                            pp_channel ch'' (List.length outs));
+             (* each control needs to be acked! *)
+             let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
+             (* now prepare outgoing packets *)
+             let session, transport, encs =
+               wrap_hmac_control now state'.session key ch''.transport outs
+             in
+             let ch''' = { ch'' with transport } in
+             let state' = { state' with config = config' ; session } in
+             let s' = if est then
+                 match session.state with
+                 | Connecting ->
+                   let ip = ip_from_config state'.config in
+                   let session = { session with state = Ready ip } in
+                   let compress = match Config.find Comp_lzo config' with None -> false | Some () -> true in
+                   { state' with compress ; session ; channel = ch''' }
+                 | Rekeying (ip, _) ->
+                   let session = { session with state = Ready ip } in
+                   { state' with session ; channel = ch''' ; lame_duck = Some state'.channel }
+                 | Ready _ -> assert false
+               else
+                 set_ch { state' with config = config' } ch'''
+             in
+             s', encs, [])
+        >>= fun (state', outs, app) ->
+        Logs.debug (fun m -> m "out state is %a" State.pp state');
+        Logs.debug (fun m -> m "%d outgoing packets" (List.length outs));
+        multi state' linger (out @ outs) (appdata @ app)
   in
   multi state (Cstruct.append state.linger buf) [] []
