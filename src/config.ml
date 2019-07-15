@@ -1112,7 +1112,7 @@ let client_generate_connect_options t =
       | B (Pull, _) -> true
       | B (Tls_mode, `Client) -> true
       | _ -> false) t in
-  let serialized = (Fmt.strf "%a" (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
+  let serialized = (Fmt.strf "V4,%a" (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
   Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
                 serialized) ;
   Ok serialized
@@ -1122,9 +1122,13 @@ let client_merge_server_config client server_str =
      for instance choosing [tun-mtu = min (server,client)].
   *)
   let open Rresult in
-  let str = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," server_str)) in
+  Logs.warn (fun m -> m "Config.client_merge_server_config \
+                         @[<v>is not implemented@ %S@]"
+                server_str);
+  Ok client
+  (*let str = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," server_str)) in
   parse ~string_of_file:(fun fn ->
       Rresult.R.error_msgf "Server requested client to read %S" fn)
-    str >>= valid_server_options ~client >>| fun () -> client
+    str >>= valid_server_options ~client >>| fun () -> client*)
 
 include Conf_map
