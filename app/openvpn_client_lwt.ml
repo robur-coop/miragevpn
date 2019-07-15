@@ -18,8 +18,7 @@ let rec write_to_fd fd data =
     Lwt_result.return ()
   else
     Lwt.catch (fun () ->
-        Lwt_unix.write fd (Cstruct.to_bytes data) 0 (Cstruct.len data)
-        >|= Cstruct.shift data >>= write_to_fd fd)
+        Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
       (fun e ->
          Lwt_result.lift
            (Rresult.R.error_msgf "write error %s" (Printexc.to_string e)))
@@ -132,19 +131,29 @@ let jump _ filename =
             | Some ip_config ->
               let tun_fd = open_tun ip_config in
               Lwt.return (Ok (tun_fd, incoming_data))
-            | None -> establish ()
+            | None ->
+              if incoming_data <> [] then
+                Logs.err (fun m ->
+                    m "Got incoming %d data before connection ready:@,%a"
+                      (List.length incoming_data)
+                      Fmt.(list ~sep:(unit"@,")
+                             Cstruct.hexdump_pp) incoming_data);
+              establish ()
         in
         establish () >>= fun (tun_fd, app_data) ->
         let rec process_incoming app_data =
           ( let open Lwt.Infix in
             Lwt_list.for_all_p (fun pkt ->
+                (* not using write_to_fd here because partial writes to
+                   a tun interface are semantically different from
+                   single write()s: *)
                 Lwt_cstruct.write tun_fd pkt >|= function
                 | written when written = Cstruct.len pkt -> true
                 | _ -> false
-              ) app_data >>= begin function
+              ) app_data >>= function
               | true -> Lwt_result.return ()
-              | false -> Lwt_result.fail (`Msg "")
-            end) >>= fun () ->
+              | false -> Lwt_result.fail (`Msg "partial write to tun interface")
+          ) >>= fun () ->
           let open Lwt_result.Infix in
           read_and_handle () >>= process_incoming
         in
