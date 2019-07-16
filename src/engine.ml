@@ -434,8 +434,7 @@ let maybe_timeout state ts =
     Logs.warn (fun m -> m "should restart or exit (last_received > timeout)")
 
 let maybe_init_rekey state now ts =
-  (* if there's a rekey in process we don't do anything (NB: may need a timeout
-     for TLS handshake) *)
+  (* if there's a rekey in process we don't do anything *)
   match state.session.state with
   | Connecting | Rekeying _ -> state, []
   | Ready ip ->
@@ -468,8 +467,15 @@ let maybe_rekey state now ts =
       deadlines are always met?
   *)
   let should_rekey =
-    match Config.(find Renegotiate_seconds state.config) with
-    | Some y -> y <= Duration.to_sec (Int64.sub ts state.channel.started)
+    match
+      Config.(find Renegotiate_seconds state.config,
+              find Renegotiate_bytes state.config,
+              find Renegotiate_packets state.config)
+
+    with
+    | Some y, _, _ when y <= Duration.to_sec (Int64.sub ts state.channel.started) -> true
+    | _, Some b, _ when b <= state.channel.bytes -> true
+    | _, _, Some p when p <= state.channel.packets -> true
     | _ -> false
   in
   if should_rekey then maybe_init_rekey state now ts else state, []
