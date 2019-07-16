@@ -109,6 +109,8 @@ dhcp-option domain DOMAIN
 dhcp-option ntp IP
 dhcp-option dns IP
 
+hand-window SECONDS
+tran-window SECONDS
 
 ping SECONDS
 ping-exit SECONDS

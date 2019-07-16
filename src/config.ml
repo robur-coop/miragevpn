@@ -38,6 +38,7 @@ module Conf_map = struct
     | Dhcp_ntp: Ipaddr.t list k
     | Dhcp_domain: [ `host ] Domain_name.t k
     | Float    : flag k
+    | Handshake_window : int k
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
     | Link_mtu : int k
@@ -76,6 +77,7 @@ module Conf_map = struct
     | Tls_key    : X509.private_key k
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     | Topology : [`net30 | `p2p | `subnet] k
+    | Transition_window : int k
     | Tun_mtu : int k
     | Verb : int k
 
@@ -173,6 +175,7 @@ module Conf_map = struct
       Fmt.(list ~sep @@
            (fun ppf -> pf ppf "dhcp-option dns %a" Ipaddr.pp)) ppf ips
     | Float, () -> p() "float"
+    | Handshake_window, seconds -> p() "hand-window %d" seconds
     | Ifconfig, (local,remote) ->
       p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
     | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
@@ -249,6 +252,7 @@ module Conf_map = struct
     | Tls_mode, `Client -> p() "tls-client"
     | Topology, v -> p() "topology %s" (match v with
           `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
+    | Transition_window, seconds -> p() "tran-window %d" seconds
     | Tun_mtu, int -> p() "tun-mtu %d" int
     | Verb, int -> p() "verb %d" int
 
@@ -266,13 +270,15 @@ end
 
 
 module Defaults = struct
-  let config =
+  let client_config =
     let open Conf_map in
     empty
     |> add Ping_interval 0
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
     |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
+    |> add Handshake_window 60
+    |> add Transition_window 3600
 end
 
 open Conf_map
@@ -644,6 +650,16 @@ let a_link_mtu = a_entry_one_number "link-mtu" >>| fun x ->
 let a_tun_mtu = a_entry_one_number "tun-mtu" >>| fun x ->
   `Entry (B(Tun_mtu,x))
 
+let a_hand_window =
+  string "hand-window" *> a_whitespace *>
+  a_number_range 0 86400 >>| fun seconds ->
+  `Entry (B(Handshake_window, seconds))
+
+let a_tran_window =
+  string "tran-window" *> a_whitespace *>
+  a_number_range 0 86400 >>| fun seconds ->
+  `Entry (B(Transition_window, seconds))
+
 let a_mssfix = a_entry_one_number "mssfix" >>| fun x ->
   `Entry (B(Mssfix,x))
 (* TODO make a_mssfix use a_number_range *)
@@ -797,6 +813,8 @@ let a_config_entry : line A.t =
     a_tls_auth ;
     a_remote_cert_tls ;
     a_verb ;
+    a_hand_window ;
+    a_tran_window ;
     a_connect_retry ;
     a_auth_retry ;
     a_mssfix ;
@@ -1053,7 +1071,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
                     `Entry (B(Ping_timeout, _)) -> true
                   | _ -> false) tl with
               | Some `Entry (B(Ping_timeout, x)) -> false, x
-              | _ -> false, get Ping_timeout Defaults.config end ;
+              | _ -> false, get Ping_timeout Defaults.client_config end ;
               in keepalive_action was_old timeout action in
           loop (add Ping_timeout timeout acc) tl
         | ( `Proto_force _
@@ -1093,7 +1111,7 @@ let parse_client ~string_of_file config_str =
   parse ~string_of_file config_str >>= fun parsed_conf ->
   (* apply default configuration entries, overriding with the parsed config: *)
   let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
-      Defaults.config parsed_conf in
+      Defaults.client_config parsed_conf in
   is_valid_client_config merged >>| fun () -> merged
 
 let merge_push_reply client (push_config:string) =

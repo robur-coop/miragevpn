@@ -42,6 +42,16 @@ module Config : sig
     | Dhcp_domain: [ `host ] Domain_name.t k
     | Float    : flag k
 
+    | Handshake_window : int k
+    (** TLS-based key exchange must finalize within [n] seconds of handshake
+        initiation by any peer. If it fails to do so, we attempt to reset
+        our connection with the peer and try again.
+        Even in the event of handshake failure we will still use our
+        expiring key for up to --tran-window seconds to maintain continuity
+        of transmission of tunnel data.
+        TODO pasted from `man openvpn`
+    *)
+
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     (**  TODO --ifconfig parameters which are IP addresses can also be  speci‐
               fied as a DNS or /etc/hosts file resolvable name.*)
@@ -104,6 +114,15 @@ module Config : sig
         by the TLS library. *)
 
     | Topology : [`net30 | `p2p | `subnet] k
+
+    | Transition_window : int k
+    (* our old key can live this many seconds after a new key
+       renegotiation begins. Feature allows for a graceful transition from old
+       to new key, and removes the key renegotiation sequence from the
+       critical path of tunnel data forwarding.
+       TODO pasted from `man openvpn`
+    *)
+
     | Tun_mtu : int k
     | Verb : int k
 
