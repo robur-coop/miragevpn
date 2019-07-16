@@ -146,18 +146,14 @@ module Config : sig
 end
 
 type t
+(** The abstract type of an OpenVPN connection. *)
 
 val client : Config.t -> Ptime.t -> int64 -> (int -> Cstruct.t) -> unit ->
   (t * ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list * Cstruct.t,
    Rresult.R.msg) result
-
-type error
-
-val pp_error : error Fmt.t
-
-val incoming : t -> Ptime.t -> int64 -> Cstruct.t -> (t * Cstruct.t list * Cstruct.t list, error) result
-
-val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t list, [ `Not_ready ]) result
+(** [client config now ts rng ()] constructs a [t], returns the remote to
+    connect to, an initial buffer to send to the remote. It returns an error
+    if the configuration does not contain a tls-auth element. *)
 
 type ip_config = {
   ip : Ipaddr.V4.t ;
@@ -165,6 +161,27 @@ type ip_config = {
   gateway : Ipaddr.V4.t ;
 }
 
-val timer : t -> int64 -> t * Cstruct.t list
-
 val ready : t -> ip_config option
+(** [ready t] is [Some ip] if the OpenVPN connection is up, [None] otherwise. *)
+
+type error
+(** The type of errors when processing incoming data. *)
+
+val pp_error : error Fmt.t
+(** [pp_error ppf e] pretty prints the error [e]. *)
+
+val incoming : t -> Ptime.t -> int64 -> Cstruct.t ->
+  (t * Cstruct.t list * Cstruct.t list, error) result
+(** [incoming t now ts data] processes [data], returning a new connection state,
+    a list of buffers to be sent to the peer, and a list of decrypted
+    application data. *)
+
+val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t list, [ `Not_ready ]) result
+(** [outgoing t ts data] prepares [data] to be sent over the OpenVPN connection.
+    If the connection is not ready yet, [`Not_ready] is returned instead. *)
+
+val timer : t -> int64 -> t * Cstruct.t list
+(** [timer t ts] should be called every second. It ensures that ping packets are
+    sent if the connection has been idle for some time, also deals with rekeying
+    when configured limits (time, bytes, packets) are reached. The returned list
+    of data is to be transmitted to the peer. *)
