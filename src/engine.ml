@@ -480,11 +480,22 @@ let maybe_rekey state now ts =
   in
   if should_rekey then maybe_init_rekey state now ts else state, []
 
+let maybe_drop_lame_duck state ts =
+  match state.lame_duck, Config.find Transition_window state.config with
+  | None, _ -> state
+  | _, None -> state (* TODO: warn? *)
+  | Some (_, ts'), Some s ->
+    if Duration.to_sec (Int64.sub ts ts') >= s then
+      { state with lame_duck = None }
+    else
+      state
+
 let timer state now ts =
   let s', out = maybe_ping state ts in
   maybe_timeout s' ts;
   let s'', out' = maybe_rekey s' now ts in
-  s'', out @ out'
+  let s''' = maybe_drop_lame_duck s'' ts in
+  s''', out @ out'
 
 let incoming_data err (ctx : keys) compress data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
@@ -621,7 +632,8 @@ let incoming state now ts buf =
                    { state' with compress ; session ; channel = ch''' }
                  | Rekeying (ip, _) ->
                    let session = { session with state = Ready ip } in
-                   { state' with session ; channel = ch''' ; lame_duck = Some state'.channel }
+                   { state' with session ; channel = ch''' ;
+                                 lame_duck = Some (state'.channel, ts) }
                  | Ready _ -> assert false
                else
                  set_ch { state' with config = config' } ch'''

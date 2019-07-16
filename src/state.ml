@@ -126,23 +126,25 @@ type t = {
   rng : int -> Cstruct.t ;
   session : session ;
   channel : channel ;
-  lame_duck : channel option ;
+  lame_duck : (channel * int64) option ;
   last_received : int64 ;
   last_sent : int64 ;
 }
 
 let pp ppf t =
+  let lame_duck = match t.lame_duck with None -> None | Some (ch, _) -> Some ch in
   Fmt.pf ppf "linger %d compress %B session %a@.active %a@.lame duck %a@.last-rcvd %Lu last-sent %Lu"
     (Cstruct.len t.linger) t.compress
     pp_session t.session pp_channel t.channel
-    Fmt.(option ~none:(unit "no") pp_channel) t.lame_duck t.last_received t.last_sent
+    Fmt.(option ~none:(unit "no") pp_channel) lame_duck
+    t.last_received t.last_sent
 
 let channel_of_keyid keyid s =
   if s.channel.keyid = keyid then
     Some (s.channel, fun s channel -> { s with channel })
   else match s.lame_duck with
-    | Some ch when ch.keyid = keyid ->
-      Some (ch, fun s ch -> { s with lame_duck = Some ch })
+    | Some (ch, ts) when ch.keyid = keyid ->
+      Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
     | _ -> match s.session.state with
       | Rekeying (ip, channel) when channel.keyid = keyid ->
         let set s ch =
