@@ -23,6 +23,22 @@ type inline_or_path = [ `Need_inline of inlineable
 module Conf_map = struct
   type flag = unit
 
+  (* When adding a new entry here you should also add it in:
+     - This file:
+        - Defaults.client_config
+            Declare default value as per `man openvpn`, if any.
+        - Conf_map.pp_b:
+           Enable config-serialization of the values
+           (must be in the format from `man openvpn`)
+        - a_config_entry:
+           Expose it to the parser
+     - openvpn.mli:Config 'a k:
+         Expose it in the mli interface.
+         Must add a docstring comment detailing which config entry the
+         key corresponds to, and its semantics if there can be any doubt.
+     - README.md:
+         Document the existence of this option
+  *)
   type 'a k =
     | Auth_retry : [`Nointeract] k
     | Auth_user_pass : (string * string) k
@@ -77,6 +93,7 @@ module Conf_map = struct
     | Tls_cert   : X509.t k
     | Tls_mode : [`Client | `Server] k
     | Tls_key    : X509.private_key k
+    | Tls_timeout : int k
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     | Topology : [`net30 | `p2p | `subnet] k
     | Transition_window : int k
@@ -107,8 +124,6 @@ module Conf_map = struct
          | None | Some `Server -> Error "is not a TLS client"
          | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
-        (* TODO
-           ensure_not Comp_lzo "LZO compression is deprecated upstream, and not implemented in this library" >>=fun() -> *)
         ensure_mem Auth_user_pass "does not have user/password"
         (* ^-- TODO or has client certificate ? *)
         >>= fun () ->
@@ -254,6 +269,7 @@ module Conf_map = struct
         (if or_highest then " or-highest" else "")
     | Tls_mode, `Server -> p() "tls-server"
     | Tls_mode, `Client -> p() "tls-client"
+    | Tls_timeout, seconds -> p() "tls-timeout %d" seconds
     | Topology, v -> p() "topology %s" (match v with
           `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
     | Transition_window, seconds -> p() "tran-window %d" seconds
@@ -283,6 +299,7 @@ module Defaults = struct
     |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
     |> add Handshake_window 60
     |> add Transition_window 3600
+    |> add Tls_timeout 2
 end
 
 open Conf_map
@@ -586,6 +603,10 @@ let a_tls_version_min =
 let a_entry_one_number name =
   string name *> a_whitespace *> a_number
 
+let a_tls_timeout =
+  a_entry_one_number "tls-timeout" >>| fun seconds ->
+  `Entry (B(Tls_timeout, seconds))
+
 let a_reneg_bytes =
   a_entry_one_number "reneg-bytes" >>| fun n ->
   `Entry (B(Renegotiate_bytes,n))
@@ -823,6 +844,7 @@ let a_config_entry : line A.t =
     a_proto_force ;
     a_resolv_retry ;
     a_tls_auth ;
+    a_tls_timeout ;
     a_remote_cert_tls ;
     a_verb ;
     a_hand_window ;

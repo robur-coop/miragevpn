@@ -74,9 +74,16 @@ module Config : sig
     | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
-    | Renegotiate_bytes : int k (* reneg-bytes *)
-    | Renegotiate_packets : int k (* reneg-pkts *)
-    | Renegotiate_seconds : int k (* reneg-sec *)
+
+    | Renegotiate_bytes : int k
+    (** reneg-bytes *)
+
+    | Renegotiate_packets : int k
+    (** reneg-pkts *)
+
+    | Renegotiate_seconds : int k
+    (** reneg-sec *)
+
     | Replay_window : (int * int) k
     | Resolv_retry  : [`Infinite | `Seconds of int] k
     | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
@@ -110,6 +117,10 @@ module Config : sig
     (** TODO Tls_key : X509.private_key * [`Incoming|`Outgoing] k
         --key-direction governs this for inlined files
         see comment in {!a_key} *)
+
+    | Tls_timeout : int k
+    (** Retransmit control channel packet after not receiving an ACK for
+        [n] seconds. TODO: presumably does not apply to TCP? *)
 
     | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
     (** [v * or_highest]: if [or_highest] then v = the highest version supported

@@ -152,8 +152,7 @@ remote-cert-tls client
 reneg-bytes BYTES
 reneg-pkts PACKET-COUNT
 reneg-sec SECONDS
-# renegotiate data channel key after N items sent or received
-# TODO: is this (N > sent || N > received) or (N > sent+received) ?
+# renegotiate data channel key after N items > sent-items + received-items
 
 replay-window LOW-SECONDS HIGH-SECONDS
 
@@ -179,6 +178,10 @@ route-gateway IP
 
 route-metric METRIC
 # METRIC: may be "default" or an integer between 0 and 255, inclusively.
+
+tls-timeout SECONDS
+# resend control data packets after not receivin an ACK for SECONDS
+# TODO should this only apply to UDP?
 
 tls-version-min 1.1
 tls-version-min 1.2
