@@ -52,6 +52,19 @@ type channel = {
   keyid : int ;
   channel_st : channel_state ;
   transport : transport ;
+  started : int64 ;
+  bytes : int ;
+  packets : int ;
+}
+
+let pp_channel ppf c =
+  Fmt.pf ppf "channel %d %a@ started %Lu bytes %d packets %d@ transport %a"
+    c.keyid pp_channel_state c.channel_st
+    c.started c.bytes c.packets pp_transport c.transport
+
+let new_channel ?(state = Expect_server_reset) keyid started = {
+  keyid ; channel_st = state ; transport = init_transport ; started ;
+  bytes = 0 ; packets = 0
 }
 
 let keys_opt ch = match ch.channel_st with
@@ -64,11 +77,6 @@ let set_keys ch keys =
     | x -> x
   in
   { ch with channel_st }
-
-let pp_channel ppf c =
-  Fmt.pf ppf "channel %d: %a, transport %a"
-    c.keyid pp_channel_state c.channel_st
-    pp_transport c.transport
 
 type ip_config = {
   ip : Ipaddr.V4.t ;

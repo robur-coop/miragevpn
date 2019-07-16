@@ -38,6 +38,9 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     mutable linger : Cstruct.t list ;
   }
 
+  let now () = Ptime.v (P.now_d_ps ())
+  let ts () = M.elapsed_ns ()
+
   let get_ip t = t.ip_config.Openvpn.ip
 
   let lift_err ~pp_error v = v >|= Rresult.R.error_to_msg ~pp_error
@@ -82,7 +85,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         invalid_arg msg
       | Ok () ->
         Ipv4_common.set_checksum hdr_buf;
-        match Openvpn.outgoing c (M.elapsed_ns ()) (Cstruct.append hdr_buf payload) with
+        match Openvpn.outgoing c (ts ()) (Cstruct.append hdr_buf payload) with
         | Ok (c', outs) ->
           begin
             t.client <- `Active c';
@@ -103,7 +106,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       | Ok client ->
         lift_err ~pp_error:Openvpn.pp_error
           (Lwt_result.lift
-             (Openvpn.incoming client (Ptime.v (P.now_d_ps ())) (M.elapsed_ns ()) b))
+             (Openvpn.incoming client (now ()) (ts ()) b))
 
   let input _t ~tcp ~udp ~default buf =
     match Ipv4_packet.Unmarshal.of_cstruct buf with
@@ -155,7 +158,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let rec ping t =
     match t.client with
     | `Active client ->
-      let client', out = Openvpn.timer client (M.elapsed_ns ()) in
+      let client', out = Openvpn.timer client (now ()) (ts ()) in
       t.client <- `Active client';
       (match out with [] -> () | _ -> Log.info (fun m -> m "sending ping"));
       send_multiple t.flow out >>= fun _ ->
@@ -167,7 +170,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let connect config s =
     let open Lwt_result.Infix in
-    Lwt_result.lift (Openvpn.client config (Ptime.v (P.now_d_ps ())) (M.elapsed_ns ()) R.generate ())
+    Lwt_result.lift (Openvpn.client config (now ()) (ts ()) R.generate ())
     >>= fun (client, remote, data) ->
     (match remote with
      | (`IP (Ipaddr.V4 ip), port) :: _ -> Lwt.return (Ok (ip, port))

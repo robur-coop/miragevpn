@@ -180,7 +180,7 @@ val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t list, [ `Not_ready ]) r
 (** [outgoing t ts data] prepares [data] to be sent over the OpenVPN connection.
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
 
-val timer : t -> int64 -> t * Cstruct.t list
+val timer : t -> Ptime.t -> int64 -> t * Cstruct.t list
 (** [timer t ts] should be called every second. It ensures that ping packets are
     sent if the connection has been idle for some time, also deals with rekeying
     when configured limits (time, bytes, packets) are reached. The returned list

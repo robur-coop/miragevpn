@@ -121,7 +121,7 @@ let jump _ filename =
         write_to_fd fd out >>= fun () ->
         let _ =
           Lwt_engine.on_timer 1. true (fun _ ->
-              let s', out = Openvpn.timer !s (ts ()) in
+              let s', out = Openvpn.timer !s (now ()) (ts ()) in
               s := s' ;
               Lwt.async (fun () -> write_multiple_to_fd fd out))
         in

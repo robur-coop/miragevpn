@@ -48,7 +48,6 @@ let client config now ts rng () =
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_TODO_direction, _, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
-    let transport = init_transport in
     let my_session_id = Randomconv.int64 rng in
     let session = {
       state = Connecting ;
@@ -59,18 +58,14 @@ let client config now ts rng () =
       my_hmac ;
       their_hmac = my_hmac ;
     } in
-    let channel = {
-      keyid = 0 ;
-      channel_st = Expect_server_reset ;
-      transport ;
-    } in
+    let channel = new_channel 0 ts in
     let state = {
       config ; linger = Cstruct.empty ; compress = false ; rng ;
       session ; channel ; lame_duck = None ;
       last_received = ts ; last_sent = ts ;
     } in
     let timestamp = ptime_to_ts_exn now in
-    let session, transport, header = header session transport timestamp in
+    let session, transport, header = header session channel.transport timestamp in
     let transport, m_id = next_message_id transport in
     let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
     let out = hmac_and_out channel.keyid my_hmac header p in
@@ -217,7 +212,7 @@ let incoming_control config rng session channel now op data =
                 Packet.pp_operation op pp_channel channel);
   match channel.channel_st, op with
   | Expect_server_reset, (Packet.Hard_reset_server | Packet.Soft_reset) ->
-    (* for rekey, allow soft_reset as well *)
+    (* for rekey we receive a soft_reset -- a bit alien that we don't send soft_reset *)
     (* we reply with ACK + TLS client hello! *)
     let tls, ch =
       let authenticator = match Config.find Ca config with
@@ -412,29 +407,78 @@ let outgoing s ts data =
   | Some ctx ->
     Logs.debug (fun m -> m "out key %d" s.channel.keyid);
     let ctx, data = data_out ctx s.compress s.rng s.channel.keyid data in
-    let channel = set_keys s.channel ctx in
+    let ch = set_keys s.channel ctx in
+    let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
     Ok ({ s with channel ; last_sent = ts }, [ data ])
 
 let ping =
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
-let timer state ts =
-  let interval, timeout =
-    Config.(get Ping_interval state.config),
-    match Config.(get Ping_timeout state.config) with
-    | `Restart x -> x
-    | `Exit x -> x
-  in
-  let s_since_recv = Duration.to_sec (Int64.sub ts state.last_received) in
-  if s_since_recv > timeout then
-    Logs.warn (fun m -> m "should restart or exit (last_received > timeout)");
-  if Duration.to_sec (Int64.sub ts state.last_sent) > interval then begin
+let maybe_ping state ts =
+  (* ping if we haven't send anything for the configured interval *)
+  let s_since_sent = Duration.to_sec (Int64.sub ts state.last_sent) in
+  let interval = Config.(get Ping_interval state.config) in
+  if s_since_sent > interval then begin
     Logs.debug (fun m -> m "not enough activity, sending a ping");
-    match outgoing state ts ping with
-    | Error _ -> state, []
-    | Ok (state', data) -> state', data
+    match outgoing state ts ping with Error _ -> state, [] | Ok (s', d) -> s', d
   end else
     state, []
+
+let maybe_timeout state ts =
+  (* timeout fires if no data was received within the configured interval *)
+  let s_since_rcvd = Duration.to_sec (Int64.sub ts state.last_received) in
+  let timeout =
+    match Config.(get Ping_timeout state.config) with `Restart x | `Exit x -> x
+  in
+  if s_since_rcvd > timeout then (* TODO: actually restart / exit! *)
+    Logs.warn (fun m -> m "should restart or exit (last_received > timeout)")
+
+let maybe_init_rekey state now ts =
+  (* if there's a rekey in process we don't do anything (NB: may need a timeout
+     for TLS handshake) *)
+  match state.session.state with
+  | Connecting | Rekeying _ -> state, []
+  | Ready ip ->
+    (* allocate new channel, send out a rst (and await a rst) *)
+    let keyid =
+      let n = succ state.channel.keyid mod 8 in
+      if n = 0 then 1 else n (* i have no clue why 0 is special... *)
+    in
+    let channel = {
+      keyid ; channel_st = Expect_server_reset ; transport = init_transport ;
+      started = ts ; bytes = 0 ; packets = 0
+    } in
+    let session = { state.session with state = Rekeying (ip, channel) } in
+    let timestamp = ptime_to_ts_exn now in
+    let session, transport, header = header session channel.transport timestamp in
+    let transport, m_id = next_message_id transport in
+    let p = `Control (Packet.Soft_reset, (header, m_id, Cstruct.empty)) in
+    let out = hmac_and_out channel.keyid session.my_hmac header p in
+    let channel = { channel with transport } in
+    let session = { session with state = Rekeying (ip, channel) } in
+    { state with session }, [ out ]
+
+let maybe_rekey state now ts =
+  (* rekeying may happen iff:
+     - channel has been up for <reneg_seconds>
+     - channel has transferred bytes >= reneg_bytes
+     - channel has transferred packets >= reneg_packets
+     crucial to note: we only check the active channel!
+      should we insert some fuzzyness since a rekey takes time, so that the
+      deadlines are always met?
+  *)
+  let should_rekey =
+    match Config.(find Renegotiate_seconds state.config) with
+    | Some y -> y <= Duration.to_sec (Int64.sub ts state.channel.started)
+    | _ -> false
+  in
+  if should_rekey then maybe_init_rekey state now ts else state, []
+
+let timer state now ts =
+  let s', out = maybe_ping state ts in
+  maybe_timeout s' ts;
+  let s'', out' = maybe_rekey s' now ts in
+  s'', out @ out'
 
 let incoming_data err (ctx : keys) compress data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
@@ -504,18 +548,14 @@ let incoming state now ts buf =
       match
         match channel_of_keyid key state with
         | None ->
+          (* TODO not entirely sure, maybe first check that it was/is a reset? *)
           begin match state.session.state with
             | Rekeying _ | Connecting ->
               Logs.warn (fun m -> m "ignoring bad packet (key %d) in %a"
                             key pp state);
               Error ()
             | Ready ip ->
-              let channel = {
-                keyid = key ;
-                channel_st = Expect_server_reset ;
-                transport = init_transport
-              }
-              in
+              let channel = new_channel key ts in
               Ok (channel, fun s ch ->
                   let session = { s.session with state = Rekeying (ip, ch) } in
                   { s with session })
@@ -536,9 +576,10 @@ let incoming state now ts buf =
                Logs.warn (fun m -> m "received data, but session is not keyed yet");
                Ok (state, [], [])
              | Some keys ->
+               let ch = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
                incoming_data bad_mac keys state.compress data >>| fun data ->
                let data = match data with None -> [] | Some x -> [ x ] in
-               state, [], data
+               set_ch state ch, [], data
            end
          | (`Ack _ | `Control _) as d ->
            check_control_integrity bad_mac key p state.session.their_hmac >>= fun () ->
@@ -553,8 +594,8 @@ let incoming state now ts buf =
              Logs.info (fun m -> m "ignoring acknowledgement");
              Ok (set_ch state' ch', [], [])
            | `Control (typ, (_, _, data)) ->
-             (* process control in client state machine -- TODO: should receive partial state *)
-             incoming_control state.config state.rng state.session ch' now typ data >>| fun (est, config', ch'', outs) ->
+             incoming_control state.config state.rng state.session ch' now typ data
+             >>| fun (est, config', ch'', outs) ->
              Logs.debug (fun m -> m "out channel %a, pkts %d"
                             pp_channel ch'' (List.length outs));
              (* each control needs to be acked! *)
