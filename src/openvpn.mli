@@ -74,6 +74,8 @@ module Config : sig
     | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
+    | Renegotiate_bytes : int k (* reneg-bytes *)
+    | Renegotiate_packets : int k (* reneg-pkts *)
     | Renegotiate_seconds : int k (* reneg-sec *)
     | Replay_window : (int * int) k
     | Resolv_retry  : [`Infinite | `Seconds of int] k

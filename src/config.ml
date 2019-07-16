@@ -57,6 +57,8 @@ module Conf_map = struct
     | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
+    | Renegotiate_bytes : int k
+    | Renegotiate_packets : int k
     | Renegotiate_seconds : int k
     | Replay_window : (int * int) k
     | Resolv_retry : [`Infinite | `Seconds of int] k
@@ -207,6 +209,8 @@ module Conf_map = struct
     | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
     | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
     | Remote_random, () -> p() "remote-random"
+    | Renegotiate_bytes, i -> p() "reneg-bytes %d" i
+    | Renegotiate_packets, i -> p() "reneg-pkts %d" i
     | Renegotiate_seconds, i -> p() "reneg-sec %d" i
     | Replay_window, (low,high) -> p() "replay-window %d %d" low high
     | Resolv_retry, `Infinite -> p() "resolv-retry infinite"
@@ -582,6 +586,14 @@ let a_tls_version_min =
 let a_entry_one_number name =
   string name *> a_whitespace *> a_number
 
+let a_reneg_bytes =
+  a_entry_one_number "reneg-bytes" >>| fun n ->
+  `Entry (B(Renegotiate_bytes,n))
+
+let a_reneg_pkts =
+  a_entry_one_number "reneg-pkts" >>| fun n ->
+  `Entry (B(Renegotiate_packets,n))
+
 let a_reneg_sec =
   a_entry_one_number "reneg-sec" >>| fun n -> `Entry (B(Renegotiate_seconds,n))
 
@@ -828,6 +840,8 @@ let a_config_entry : line A.t =
     a_cipher ;
     a_replay_window ;
     a_remote_entry ;
+    a_reneg_bytes ;
+    a_reneg_pkts ;
     a_reneg_sec ;
     a_lport ;
     a_rport ;

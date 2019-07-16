@@ -149,7 +149,11 @@ tls-server
 remote-cert-tls server
 remote-cert-tls client
 
+reneg-bytes BYTES
+reneg-pkts PACKET-COUNT
 reneg-sec SECONDS
+# renegotiate data channel key after N items sent or received
+# TODO: is this (N > sent || N > received) or (N > sent+received) ?
 
 replay-window LOW-SECONDS HIGH-SECONDS
 
