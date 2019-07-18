@@ -394,7 +394,7 @@ let data_out (ctx : keys) compress rng key data =
   let payload = Cstruct.append iv enc in
   let hmac = Nocrypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
   let payload' = Cstruct.append hmac payload in
-  let out = Packet.encode (key, `Data (Packet.Data_v2, payload')) in
+  let out = Packet.encode (key, `Data payload') in
   (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
   let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
   Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
@@ -587,7 +587,7 @@ let incoming state now ts buf =
                        pp_channel ch (* Packet.pp (key, p) *));
         let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
         (match p with
-         | `Data (_, data) ->
+         | `Data data ->
            begin match keys_opt ch with
              | None ->
                Logs.warn (fun m -> m "received data, but session is not keyed yet");

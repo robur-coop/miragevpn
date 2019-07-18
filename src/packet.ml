@@ -23,12 +23,11 @@ type operation =
   | Data_v1
   | Hard_reset_client
   | Hard_reset_server
-  | Data_v2
 
 let operation_to_int, int_to_operation =
   let ops =
     [ (Soft_reset, 3) ; (Control, 4) ; (Ack, 5) ; (Data_v1, 6) ;
-      (Hard_reset_client, 7) ; (Hard_reset_server, 8) ; (Data_v2, 9) ]
+      (Hard_reset_client, 7) ; (Hard_reset_server, 8) ]
   in
   let rev_ops = List.map (fun (a, b) -> (b, a)) ops in
   (fun k -> List.assoc k ops),
@@ -41,8 +40,7 @@ let pp_operation ppf op =
       | Ack -> "ack"
       | Data_v1 -> "data v1"
       | Hard_reset_client -> "hard reset client"
-      | Hard_reset_server -> "hard reset server"
-      | Data_v2 -> "data v2")
+      | Hard_reset_server -> "hard reset server")
 
 type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
@@ -169,10 +167,7 @@ let to_be_signed_control op (header, packet_id, payload) =
   Cstruct.BE.set_uint32 buf off packet_id ;
   Cstruct.append buf payload
 
-let decode_data buf = Ok buf
-
-let encode_data payload =
-  Cstruct.(append (create 3) payload, len payload + 3)
+let encode_data payload = payload, Cstruct.len payload
 
 let decode buf =
   guard (Cstruct.len buf >= 3) `Partial >>= fun () ->
@@ -184,24 +179,24 @@ let decode buf =
   int_to_operation op >>= fun operation ->
   (match operation with
    | Ack -> decode_header payload >>| fun (ack, _) -> `Ack ack
-   | Data_v1 | Data_v2 -> decode_data payload >>| fun data -> `Data (operation, data)
+   | Data_v1 -> Ok (`Data payload)
    | _ -> decode_control payload >>| fun control -> `Control (operation, control)) >>| fun res ->
   (key, res, Cstruct.shift buf (plen + 2))
 
 let operation = function
   | `Ack _ -> Ack
   | `Control (op, _) -> op
-  | `Data (op, _) -> op
+  | `Data _ -> Data_v1
 
 let op_key op key =
   let op = operation_to_int op in
   op lsl 3 lor key
 
 let encode (key, p) =
-  let (payload, len)= match p with
+  let payload, len = match p with
     | `Ack ack -> encode_header ack
     | `Control (_, control) -> encode_control control
-    | `Data (_, d) -> encode_data d
+    | `Data d -> d, Cstruct.len d
   in
   let buf = Cstruct.create 3 in
   Cstruct.BE.set_uint16 buf 0 (succ len) ;
@@ -219,28 +214,28 @@ let to_be_signed key p =
 type t = int * [
   | `Ack of header
   | `Control of operation * control
-  | `Data of operation * Cstruct.t
+  | `Data of Cstruct.t
 ]
 
 let header = function
   | `Ack hdr -> hdr
   | `Control (_, (hdr, _, _)) -> hdr
-  | `Data (_, _) -> assert false
+  | `Data _ -> assert false
 
 let with_header hdr = function
   | `Ack _ -> `Ack hdr
   | `Control (op, (_, id, data)) -> `Control (op, (hdr, id, data))
-  | `Data (op, data) -> `Data (op, data)
+  | `Data data -> `Data data
 
 let message_id = function
   | `Ack _ -> None
   | `Control (_, (_, msg_id, _)) -> Some msg_id
-  | `Data (_, _) -> assert false
+  | `Data _ -> assert false
 
 let pp ppf (key, p) = match p with
   | `Ack a -> Fmt.pf ppf "key %x ack %a" key pp_header a
   | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c
-  | `Data (op, d) -> Fmt.pf ppf "key %x data %a: %a" key pp_operation op Cstruct.hexdump_pp d
+  | `Data d -> Fmt.pf ppf "key %x data %a" key Cstruct.hexdump_pp d
 
 type tls_data = { (* key method v2 only! *)
   (* 4 zero bytes *)
