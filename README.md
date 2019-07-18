@@ -161,6 +161,7 @@ keepalive LOW-SECONDS HIGH-SECONDS
 
 resolv-retry infinite
 resolv-retry SECONDS
+# defaults to: resolv-retry infinite
 
 route-delay N-SECONDS W-SECONDS
 # TODO describe these
@@ -225,4 +226,22 @@ socks-proxy
 
 dhcp-option
 # DHCP options not listed in "Supported directives" above are ignored.
+
+engine ENGINE-NAME
+# select OpenSSL hw crypto backend; we don't use OpenSSL and so this doesn't
+# make sense to parse.
+```
+
+## Unimplemented directives
+
+```
+allow-recursive-routing
+
+connect-timeout
+# aka --server-poll-timeout
+connect-retry-max SECONDS
+# Configures the default for connect-retry when used without the second optional arg
+
+ping-timer-rem
+
 ```

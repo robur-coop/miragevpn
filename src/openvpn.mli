@@ -7,7 +7,13 @@ module Config : sig
   type flag = unit
 
   type 'a k =
-    | Auth_retry : [`Nointeract] k
+    | Auth_retry : [`Interact | `Nointeract | `None] k
+    (** [`Interact]: Interactively ask user for new Auth_user_pass value
+                     before retrying an authentication attempt.
+        [`Nointeract]: Retry an authentication attempt with same Auth_user_pass
+        [`None]: Exit with fatal error if authentication fails (default)
+    *)
+
     | Auth_user_pass : (string * string) k (** username, password*)
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
                                | `IP of Ipaddr.t] option) option k

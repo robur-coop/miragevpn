@@ -23,7 +23,7 @@ type inline_or_path = [ `Need_inline of inlineable
 module Conf_map = struct
   type flag = unit
 
-  (* When adding a new entry here you should also add it in:
+  (* Checklist when adding a new entry here:
      - This file:
         - Defaults.client_config
             Declare default value as per `man openvpn`, if any.
@@ -37,10 +37,11 @@ module Conf_map = struct
          Must add a docstring comment detailing which config entry the
          key corresponds to, and its semantics if there can be any doubt.
      - README.md:
-         Document the existence of this option
+         - Document the existence of this option
+         - Remove it from Ignored Directives and/or Unimplemented Directives
   *)
   type 'a k =
-    | Auth_retry : [`Nointeract] k
+    | Auth_retry : [`Interact | `Nointeract | `None] k
     | Auth_user_pass : (string * string) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
                                | `IP of Ipaddr.t] option) option k
@@ -161,7 +162,9 @@ module Conf_map = struct
          |> Cstruct.to_string)
     in
     match k,v with
+    | Auth_retry, `None -> p() "auth-retry none"
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
+    | Auth_retry, `Interact -> p() "auth-retry interact"
     | Auth_user_pass, (user,pass) ->
       Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
     | Bind, None -> p() "nobind"
@@ -300,6 +303,8 @@ module Defaults = struct
     |> add Handshake_window 60
     |> add Transition_window 3600
     |> add Tls_timeout 2
+    |> add Resolve_retry `Infinite
+    |> add Auth_retry `None
 end
 
 open Conf_map
@@ -541,7 +546,9 @@ let a_auth_user_pass_payload =
 
 let a_auth_retry =
   string "auth-retry" *> a_whitespace *>
-  choice [ string "nointeract" *> return `Nointeract ] >>| fun x ->
+  choice [ string "nointeract" *> return `Nointeract
+         ; string "interact" *> return `Interact
+         ; string "none" *> return `None ] >>| fun x ->
   `Entry (B(Auth_retry,x))
 
 let a_socks_proxy =
@@ -822,6 +829,7 @@ let a_not_implemented =
        string "socket-flags" ;
        string "remote-cert-ku" ;
        string "rport" ;
+       string "engine" ;
        (* TODO: *)
        string "dhcp-option";
        string "redirect-gateway" ;
@@ -954,6 +962,12 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Passtos -> warn () | Persist_key -> warn () | Persist_tun -> warn ()
       | Pull -> warn ()
       | Remote_random -> warn ()
+      (* can be pushed, but can't change: *)
+      | Auth_retry ->
+         Logs.warn (fun m ->
+            m "resolve_conflict: ignoring Auth_retry (should \
+	       only be done when called from merge_push_reply. TODO.");
+         Ok v2
       (* adding wouldn't change anything: *)
       | _ when v = v2 -> (* TODO polymorphic comparison *)
         Logs.debug (fun m ->
