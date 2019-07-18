@@ -179,10 +179,10 @@ let maybe_kdf config transport key = function
     let my_key, their_key = Cstruct.sub keys 0 32, Cstruct.sub keys 128 32 in
     let keys_ctx = {
       my_key = Nocrypto.Cipher_block.AES.CBC.of_secret my_key ;
-      my_hmac = Cstruct.sub keys 64 20 ;
+      my_hmac = Cstruct.sub keys 64 Packet.hmac_len ;
       my_packet_id = 1l ;
       their_key = Nocrypto.Cipher_block.AES.CBC.of_secret their_key ;
-      their_hmac = Cstruct.sub keys 192 20 ;
+      their_hmac = Cstruct.sub keys 192 Packet.hmac_len ;
       their_packet_id = 1l ;
     } in
     (config', keys_ctx)
@@ -409,7 +409,7 @@ let outgoing s ts data =
     let ctx, data = data_out ctx s.compress s.rng s.channel.keyid data in
     let ch = set_keys s.channel ctx in
     let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
-    Ok ({ s with channel ; last_sent = ts }, [ data ])
+    Ok ({ s with channel ; last_sent = ts }, data)
 
 let ping =
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
@@ -420,7 +420,9 @@ let maybe_ping state ts =
   let interval = Config.(get Ping_interval state.config) in
   if s_since_sent > interval then begin
     Logs.debug (fun m -> m "not enough activity, sending a ping");
-    match outgoing state ts ping with Error _ -> state, [] | Ok (s', d) -> s', d
+    match outgoing state ts ping with
+    | Error _ -> state, []
+    | Ok (s', d) -> s', [ d ]
   end else
     state, []
 
@@ -484,7 +486,7 @@ let maybe_drop_lame_duck state ts =
   match state.lame_duck, Config.find Transition_window state.config with
   | None, _ -> state
   | _, None -> state (* TODO: warn? *)
-  | Some (_, ts'), Some s ->
+  | Some (_, ts'), Some s -> (* TODO: log when dropped *)
     if Duration.to_sec (Int64.sub ts ts') >= s then
       { state with lame_duck = None }
     else

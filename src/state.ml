@@ -139,6 +139,37 @@ let pp ppf t =
     Fmt.(option ~none:(unit "no") pp_channel) lame_duck
     t.last_received t.last_sent
 
+let mtu t =
+  (* we assume to have a tun interface and the server send us a tun-mtu *)
+  let tun_mtu = match Config.find Tun_mtu t.config with
+    | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
+    | Some x -> x
+  in
+  let bs = match Config.find Cipher t.config with
+    | Some "AES-256-CBC" -> 16
+    | _ -> assert false
+  in
+  (* padding, done on packet_id + compress + data *)
+  let not_yet_padded_payload =
+    4 (* packet id *) + if t.compress then 1 else 0
+  in
+  let hdrs =
+    3 (* hdr: 2 byte length, 1 byte op + key *) + bs (* IV *) + Packet.hmac_len
+  in
+  (* now we know: tun_mtu - hdrs is space we have for data *)
+  let data = tun_mtu - hdrs in
+  (* data is pad ( not_yet_padded_payload + x ) - i.e. we're looking for the
+     closest bs-1 number, and subtract not_yet_padded_payload *)
+  let left = data mod bs in
+  let r =
+    if left = pred bs then
+      data - not_yet_padded_payload
+    else
+      data - succ left - not_yet_padded_payload
+  in
+  assert (r > 0) ;
+  r
+
 let channel_of_keyid keyid s =
   if s.channel.keyid = keyid then
     Some (s.channel, fun s channel -> { s with channel })

@@ -195,6 +195,10 @@ val client : Config.t -> Ptime.t -> int64 -> (int -> Cstruct.t) -> unit ->
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
 
+val mtu : t -> int
+(** [mtu t] is the real MTU for payload in [t], depending on tun-mtu,
+    compression, and cipher in use. *)
+
 type ip_config = {
   ip : Ipaddr.V4.t ;
   prefix : Ipaddr.V4.Prefix.t ;
@@ -216,7 +220,7 @@ val incoming : t -> Ptime.t -> int64 -> Cstruct.t ->
     a list of buffers to be sent to the peer, and a list of decrypted
     application data. *)
 
-val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t list, [ `Not_ready ]) result
+val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
 (** [outgoing t ts data] prepares [data] to be sent over the OpenVPN connection.
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
 

@@ -177,7 +177,7 @@ let jump _ filename =
           | Error `Not_ready -> failwith ""
           | Ok (s', outs) ->
             s := s';
-            write_multiple_to_fd fd outs
+            write_multiple_to_fd fd [ outs ]
             >>= process_outgoing tun_fd
         in
         Lwt.pick [ process_incoming app_data

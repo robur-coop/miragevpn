@@ -44,19 +44,49 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let get_ip t = t.ip_config.Openvpn.ip
 
+  let mtu t = match t.client with
+    | `Active t -> Openvpn.mtu t
+    | `Error _ -> assert false
+
   let lift_err ~pp_error v = v >|= Rresult.R.error_to_msg ~pp_error
 
   let send_multiple flow datas =
     lift_err ~pp_error:TCP.pp_write_error (TCP.writev flow datas)
 
+  let encode_encrypt c hdr data =
+    let payload_len = Cstruct.len data
+    and hdr_buf = Cstruct.create Ipv4_wire.sizeof_ipv4
+    in
+    match Ipv4_packet.Marshal.into_cstruct ~payload_len hdr hdr_buf with
+    | Error msg ->
+      Log.err (fun m -> m "failure while assembling ip frame: %s" msg) ;
+      assert false
+    | Ok () ->
+      Ipv4_common.set_checksum hdr_buf;
+      match Openvpn.outgoing c (ts ()) (Cstruct.append hdr_buf data) with
+      | Error `Not_ready -> assert false
+      | Ok (c', out) -> c', out
+
   let write t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
-    (* TODO: mostly copied from static_ipv4 *)
-    (* TODO: no fragmentation (yet) *)
+    (* everything must be unfragmented! the Openvpn.outgoing function prepends *)
+    (* whatever we get here we may need to split up *)
+    Log.debug (fun m -> m "write size %d bufs len %d"
+                  size (Cstruct.lenv bufs));
     match t.client with
     | `Error e -> Lwt.return (Error e)
     | `Active c ->
       (* no options here, always 20 bytes IPv4 header size! *)
-      let hdr_len = Ipv4_wire.sizeof_ipv4 in
+      (* first figure out the actual payload a user wants *)
+      let u_hdr =
+        if size > 0 then
+          let b = Cstruct.create size in
+          let l = headerf b in
+          Cstruct.sub b 0 l
+        else
+          Cstruct.empty
+      in
+      let payload = Cstruct.concat (u_hdr :: bufs) in
+      let pay_len = Cstruct.len payload in
       let hdr =
         let src = match src with None -> get_ip t | Some x -> x in
         let off = if fragment then 0x0000 else 0x4000 in
@@ -66,35 +96,48 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           ttl ; off ; id = 0 ;
           proto = Ipv4_packet.Marshal.protocol_to_int proto }
       in
-      let hdr_buf = Cstruct.create hdr_len in
-      let payload =
-        if size > 0 then begin
-          let b = Cstruct.create size in
-          let header_len = headerf b in
-          if header_len > size then begin
-            Log.err (fun m -> m "headers returned length exceeding size") ;
-            invalid_arg "headerf exceeds size"
-          end ;
-          Cstruct.concat (Cstruct.sub b 0 header_len :: bufs)
-        end else
-          Cstruct.concat bufs
-      in
-      let payload_len = Cstruct.len payload in
-      match Ipv4_packet.Marshal.into_cstruct ~payload_len hdr hdr_buf with
-      | Error msg ->
-        Log.err (fun m -> m "failure while assembling ip frame: %s" msg) ;
-        invalid_arg msg
-      | Ok () ->
-        Ipv4_common.set_checksum hdr_buf;
-        match Openvpn.outgoing c (ts ()) (Cstruct.append hdr_buf payload) with
-        | Ok (c', outs) ->
-          begin
-            t.client <- `Active c';
-            send_multiple t.flow outs >|= function
-            | Ok () -> Ok ()
-            | Error e -> t.client <- `Error e ; Error e
-          end
-        | Error `Not_ready -> assert false
+      (* now we take chunks of (mtu - hdr_len) one at a time *)
+      let ip_payload_len = mtu t - Ipv4_wire.sizeof_ipv4 in
+      assert (ip_payload_len > 0);
+      if not fragment && ip_payload_len < pay_len then
+        invalid_arg "don't fragment set, but too much payload!"
+      else
+        let c', outs =
+          if pay_len <= ip_payload_len then
+            (* simple case, marshal and go ahead *)
+            let c', out = encode_encrypt c hdr payload in
+            c', [ out ]
+          else
+            (* complex case: loop, set more_fragments and offset *)
+            (* set an ip ID *)
+            (* we also need to ensure that our v4 payload is 8byte-bounded *)
+            (*  ~~> since we're at max, we may need to reduce mtu again... *)
+            let ip_payload_len' = ip_payload_len - (ip_payload_len mod 8) in
+            let frags = (pay_len + pred ip_payload_len') / ip_payload_len' in
+            (* do not set more_fragments in last one *)
+            let hdr = { hdr with id = Randomconv.int16 R.generate } in
+            let c', outs =
+              List.fold_left (fun (c, outs) idx ->
+                  let start = idx * ip_payload_len' in
+                  let off =
+                    (if idx = pred frags then 0 else 0x2000) (* more frags *) +
+                    (start / 8)
+                  in
+                  let hdr' = { hdr with off } in
+                  let data =
+                    let len = min ip_payload_len' (Cstruct.len payload - start) in
+                    Cstruct.sub payload start len
+                  in
+                  let c', out = encode_encrypt c hdr' data in
+                  (c', out :: outs))
+                (c, []) (List.init frags (fun i -> i))
+            in
+            c', List.rev outs
+        in
+        t.client <- `Active c';
+        send_multiple t.flow outs >|= function
+        | Error e -> t.client <- `Error e ; Error e
+        | Ok () -> Ok ()
 
   let read_react client flow =
     let open Lwt_result.Infix in
@@ -103,11 +146,12 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | `Data b ->
       Log.debug (fun m -> m "read %d bytes" (*" %a"*) (Cstruct.len b) (* Cstruct.hexdump_pp b *));
       match client () with
-      | Error e -> Log.err (fun m -> m "read_react error state %a" pp_error e) ; Lwt.return (Error e)
+      | Error e ->
+        Log.err (fun m -> m "read_react error state %a" pp_error e);
+        Lwt.return (Error e)
       | Ok client ->
         lift_err ~pp_error:Openvpn.pp_error
-          (Lwt_result.lift
-             (Openvpn.incoming client (now ()) (ts ()) b))
+          (Lwt_result.lift (Openvpn.incoming client (now ()) (ts ()) b))
 
   let input t ~tcp ~udp ~default buf =
     match Ipv4_packet.Unmarshal.of_cstruct buf with
@@ -117,7 +161,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Ok (packet, payload) ->
       Log.info (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
                    Ipv4_packet.pp packet (Cstruct.len payload));
-      let frags, r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
+      let frags, r = Fragments.process t.frags (ts ()) packet payload in
       t.frags <- frags;
       match r with
       | None -> Lwt.return_unit
@@ -209,10 +253,6 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     Ipv4_packet.Marshal.pseudoheader ~src ~dst ~proto len
 
   let src t ~dst:_ = get_ip t
-
-  let mtu _t =
-    (* TODO get from OpenVPN configuration *)
-    1500
 
   let get_ip t = [ get_ip t ]
 end
