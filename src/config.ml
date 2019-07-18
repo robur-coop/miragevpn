@@ -305,7 +305,7 @@ module Defaults = struct
     |> add Handshake_window 60
     |> add Transition_window 3600
     |> add Tls_timeout 2
-    |> add Resolve_retry `Infinite
+    |> add Resolv_retry `Infinite
     |> add Auth_retry `None
     |> add Connect_timeout 120
 end
@@ -719,7 +719,7 @@ let a_connect_timeout =
   choice [
     a_entry_one_number "connect-timeout" ;
     a_entry_one_number "server-poll-timeout"
-  ] >>= fun seconds ->
+  ] >>| fun seconds ->
   `Entry (B (Connect_timeout, seconds))
 
 let a_keepalive =
@@ -978,7 +978,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
          Logs.warn (fun m ->
             m "resolve_conflict: ignoring Auth_retry (should \
 	       only be done when called from merge_push_reply. TODO.");
-         Ok v2
+         Ok (Some (k,v2))
       (* adding wouldn't change anything: *)
       | _ when v = v2 -> (* TODO polymorphic comparison *)
         Logs.debug (fun m ->
