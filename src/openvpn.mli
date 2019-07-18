@@ -57,7 +57,11 @@ module Config : sig
               fied as a DNS or /etc/hosts file resolvable name.*)
 
     | Ifconfig_nowarn : flag k
+
     | Link_mtu : int k
+    (** MTU of the network interface used to receive/transmit encrypted packets,
+	e.g. the network interface that connects OpenVPN client and server. *)
+
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
     | Passtos  : flag k
@@ -137,6 +141,10 @@ module Config : sig
     *)
 
     | Tun_mtu : int k
+    (* MTU of the local TUN interface used to receive (from the user's operating system), or transmit (decrypted), plaintext packets.
+       TODO: is this also used for the IP payloads of 'dev tap' configurations?
+       TODO: openvpn manpage says something about deriving Link_mtu from this *)
+
     | Verb : int k
 
   include Gmap.S with type 'a key = 'a k
