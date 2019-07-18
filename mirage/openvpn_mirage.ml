@@ -36,6 +36,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     ip_config : Openvpn.ip_config ;
     flow : TCP.flow ;
     mutable linger : Cstruct.t list ;
+    mutable frags : Fragments.Cache.t ;
   }
 
   let now () = Ptime.v (P.now_d_ps ())
@@ -108,7 +109,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           (Lwt_result.lift
              (Openvpn.incoming client (now ()) (ts ()) b))
 
-  let input _t ~tcp ~udp ~default buf =
+  let input t ~tcp ~udp ~default buf =
     match Ipv4_packet.Unmarshal.of_cstruct buf with
     | Error s ->
       Log.err (fun m -> m "error %s while parsing IPv4 frame %a" s Cstruct.hexdump_pp buf);
@@ -116,11 +117,16 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Ok (packet, payload) ->
       Log.info (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
                    Ipv4_packet.pp packet (Cstruct.len payload));
-      let src, dst = packet.src, packet.dst in
-      match Ipv4_packet.Unmarshal.int_to_protocol packet.proto with
-      | Some `TCP -> tcp ~src ~dst payload
-      | Some `UDP -> udp ~src ~dst payload
-      | Some `ICMP | None -> default ~proto:packet.proto ~src ~dst payload
+      let frags, r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
+      t.frags <- frags;
+      match r with
+      | None -> Lwt.return_unit
+      | Some (pkt, payload) ->
+        let src, dst = pkt.src, pkt.dst in
+        match Ipv4_packet.Unmarshal.int_to_protocol pkt.proto with
+        | Some `TCP -> tcp ~src ~dst payload
+        | Some `UDP -> udp ~src ~dst payload
+        | Some `ICMP | None -> default ~proto:pkt.proto ~src ~dst payload
 
   let rec read_and_process ~tcp ~udp ~default t =
     begin match t.linger with
@@ -182,7 +188,8 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     lift_err ~pp_error:TCP.pp_error (TCP.create_connection (S.tcpv4 s) remote) >>= fun flow ->
     lift_err ~pp_error:TCP.pp_write_error (TCP.write flow data) >>= fun () ->
     establish_tunnel client flow >|= fun (client', ip_config, linger) ->
-    let t = { flow ; client = `Active client' ; ip_config ; linger } in
+    let frags = Fragments.Cache.empty (1024 * 256) in
+    let t = { flow ; client = `Active client' ; ip_config ; linger ; frags } in
     Lwt.async (fun () -> ping t);
     t, read_and_process
 
