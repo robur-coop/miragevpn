@@ -39,6 +39,11 @@ module Config : sig
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
 
+    | Connect_timeout : int k
+    (** [connect-timeout] a.k.a. [server-poll-timeout]
+        Timeout a connection attempt to a remote server after [SECONDS].
+    *)
+
     | Dev      : [`Null | `Tun of int option | `Tap of int option] k
     (** if Tap/Tun is [None], a device must be allocated dynamically. *)
 

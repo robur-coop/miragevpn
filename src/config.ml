@@ -49,6 +49,7 @@ module Conf_map = struct
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
+    | Connect_timeout : int k
     | Dev      : [`Null | `Tun of int option | `Tap of int option] k
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
@@ -181,6 +182,7 @@ module Conf_map = struct
     | Cipher, cipher -> p() "cipher %s" cipher
     | Comp_lzo, () -> p() "comp-lzo"
     | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
+    | Connect_timeout, seconds -> p() "connect-timeout %d" seconds
     | Dev, `Tap None -> p() "dev tap"
     | Dev, `Tap Some i -> p() "dev tap%d" i
     | Dev, `Tun None -> p() "dev tun"
@@ -305,6 +307,7 @@ module Defaults = struct
     |> add Tls_timeout 2
     |> add Resolve_retry `Infinite
     |> add Auth_retry `None
+    |> add Connect_timeout 120
 end
 
 open Conf_map
@@ -712,6 +715,13 @@ let a_connect_retry =
   a_entry_two_numbers "connect-retry" >>| fun pair ->
   `Entry (B (Connect_retry,pair))
 
+let a_connect_timeout =
+  choice [
+    a_entry_one_number "connect-timeout" ;
+    a_entry_one_number "server-poll-timeout"
+  ] >>= fun seconds ->
+  `Entry (B (Connect_timeout, seconds))
+
 let a_keepalive =
   a_entry_two_numbers "keepalive" >>| fun (interval, timeout) ->
   `Keepalive (interval, timeout)
@@ -858,6 +868,7 @@ let a_config_entry : line A.t =
     a_hand_window ;
     a_tran_window ;
     a_connect_retry ;
+    a_connect_timeout ;
     a_auth_retry ;
     a_mssfix ;
     a_inline ;

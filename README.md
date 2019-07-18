@@ -159,6 +159,10 @@ replay-window LOW-SECONDS HIGH-SECONDS
 connect-retry LOW-SECONDS HIGH-SECONDS
 keepalive LOW-SECONDS HIGH-SECONDS
 
+connect-timeout SECONDS
+# a.k.a. --server-poll-timeout SECONDS
+# defaults to: connect-timeout 120
+
 resolv-retry infinite
 resolv-retry SECONDS
 # defaults to: resolv-retry infinite
@@ -237,8 +241,6 @@ engine ENGINE-NAME
 ```
 allow-recursive-routing
 
-connect-timeout
-# aka --server-poll-timeout
 connect-retry-max SECONDS
 # Configures the default for connect-retry when used without the second optional arg
 
