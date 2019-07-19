@@ -4,7 +4,12 @@ open Openvpn.Config
 let read_config_file fn =
   let str fn =
     Logs.info (fun m -> m "Reading file %S" fn) ;
-    let fd = Unix.openfile fn [O_RDONLY] 0 in
+    let fd = try Unix.openfile fn [O_RDONLY] 0 with
+      | Unix.Unix_error (Unix.ENOENT, "open", required_fn) ->
+        Logs.err (fun m -> m "%S: Unable to open %S required"
+                     fn required_fn);
+        exit 1
+    in
     let {Unix.st_size; _} = Unix.fstat fd in
     let buf = Bytes.create st_size in
     let rec loop remaining =
