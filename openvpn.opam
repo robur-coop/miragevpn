@@ -42,4 +42,12 @@ depends: [
   "dns-client-lwt"
   "x509"
   "duration"
+
+  # mirage:
+  "mirage-stack-lwt"
+  "mirage-protocols-lwt"
+  "tcpip"
+  "mirage-random"
+  "mirage-clock"
+  "dns-mirage-client"
 ]
