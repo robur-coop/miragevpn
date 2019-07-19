@@ -17,6 +17,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   type uipaddr = Ipaddr.t
   let to_uipaddr ip = Ipaddr.V4 ip
   let of_uipaddr = Ipaddr.to_v4
+  let pp_ipaddr = Ipaddr.V4.pp
 
   type error = [ Mirage_protocols.Ip.error
                | `Msg of string
