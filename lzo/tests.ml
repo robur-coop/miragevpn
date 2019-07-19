@@ -26,6 +26,16 @@ module Lzo_tests = struct
       (Lzo.decompress
     "\000,E\000\000\178\181\212\000\0002\017ix\178\000d\253.\246\"\251\250\211\0005\000\158,\250\226k\001 \000\001\000\000\000\000\000\001\nabcdefghij\n1234567890 7W\000\000\000\001`\015\000\003)\016\000\000\000\000\000\000\012\000\n\000\bN\205\220\221\194u%\152\017\000\000")
 
+  let regression_05 () =
+    (* found with Crowbar/AFL *)
+    Alcotest.check Alcotest.(result pass reject) "dig/DNS: don't crash"
+      (Ok "")
+      (Lzo.decompress
+         ("\164\194\239\194\144S\131\218\252\210\029\2372\224cR\225r,"
+          ^"\028\243\159\139m\004\018\254\152\016\207\176>\194\r\245#"
+          ^"\189\128\n\179]\007\251\162O\247\134\1655\173\006\019\216"
+          ^"\024W\182\219\245u\145%O\026\193"))
+
   let short_literals () =
     Alcotest.check Alcotest.(result string reject) "is empty"
       (Ok "")
@@ -1705,12 +1715,27 @@ module Lzo_tests = struct
     ; "random 01", `Quick, random_01
     ; "random 02", `Quick, random_02
     ; "regression 04", `Quick, regression_04
+    ; "regression 05", `Quick, regression_05
     ]
+end
+
+module Lzo_crowbar = struct
+  let decompress () =
+    Crowbar.add_test ~name:"Crowbar.string invalid input"
+      [Crowbar.bytes]
+      (fun s -> match Lzo.decompress s with
+         | Error _ -> ()
+         | Ok _ -> ())
+
+    let lzo_suite = [
+      "Lzo.decompress", `Slow, decompress
+  ]
 end
 
 let () =
   Logs.set_reporter @@ Logs_fmt.reporter ~dst:Format.std_formatter () ;
   Logs.(set_level @@ Some Debug);
   Alcotest.run "openvpn LZO decompression tests"
-    [ "LZO", Lzo_tests.lzo_suite
+    [ "Hardcoded", Lzo_tests.lzo_suite
+    ; "AFL", Lzo_crowbar.lzo_suite
     ]
