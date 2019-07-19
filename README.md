@@ -246,4 +246,6 @@ connect-retry-max SECONDS
 
 ping-timer-rem
 
+secret FILE
+# static key
 ```
