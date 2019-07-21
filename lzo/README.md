@@ -36,6 +36,9 @@ while ./testmini > test_case.ml && utop ; do : ; done
 
 # Other implementations and resources that may be of interest
 
+- https://ethw.org/History_of_Lossless_Data_Compression_Algorithms
+- https://www.csoonline.com/article/2375206/twenty-year-old-vulnerability-in-lzo-finally-patched.html
+- https://synopse.info/fossil/artifact/85d08b1143a99dea
 - https://github.com/joyent/syslinux/blob/master/lzo/src/lzo1x_1o.c#L43
 - https://github.com/ir193/python-lzo/blob/master/lzo.py
 - https://github.com/shevek/lzo-java

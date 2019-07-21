@@ -10,3 +10,9 @@
   (modules tests)
   (libraries alcotest crowbar fmt logs.fmt lzo rresult)
 )
+(executable
+  (public_name lzo-fuzzable)
+  (name lzo_fuzzable)
+  (modules lzo_fuzzable)
+  (libraries afl-persistent lzo rresult)
+)
