@@ -17,7 +17,6 @@ module Main (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     FS.get data (Mirage_kv.Key.v "openvpn.config") >|= function
     | Error e -> Rresult.R.error_to_msg ~pp_error:FS.pp_error (Error e)
     | Ok data ->
-      let open Rresult.R.Infix in
       let string_of_file _ = Error (`Msg "not supported") in
       Openvpn.Config.parse_client ~string_of_file data
 

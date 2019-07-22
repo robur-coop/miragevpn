@@ -131,7 +131,7 @@ module Conf_map = struct
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
     let open Rresult in
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
-      ( ensure_mem Remote "does not have a remote"  >>=fun()->
+      ( ensure_mem Remote "does not have a remote" >>= fun()->
         (match find Tls_mode t with
          | None | Some `Server -> Error "is not a TLS client"
          | Some `Client -> Ok ()) >>= fun () ->
@@ -626,7 +626,7 @@ let a_tls_version_min =
   `Entry (B(Tls_version_min,(v,or_h)))
 
 let a_entry_one_number name =
-  string name *> fix (fun x -> x *> a_whitespace *> a_number)
+  string name *> a_whitespace *> commit *> a_number
 
 let a_tls_timeout =
   a_entry_one_number "tls-timeout" >>| fun seconds ->

@@ -5,7 +5,6 @@ The configuration file must be stored in the `config/` directory under the name 
 
 ```bash
 set -e
-make depend
 opam install -y mirage mirage-random-stdlib
 mirage configure -t unix --data-kv_ro=direct
 make depend
