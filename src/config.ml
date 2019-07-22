@@ -67,7 +67,7 @@ module Conf_map = struct
     | Passtos  : flag k
     | Persist_key : flag k
     | Persist_tun : flag k
-    | Ping_interval : int k
+    | Ping_interval : [`Not_configured | `Seconds of int] k
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
     | Proto    : ([`IPv6 | `IPv4] option
@@ -303,7 +303,7 @@ module Defaults = struct
   let client_config =
     let open Conf_map in
     empty
-    |> add Ping_interval 0
+    |> add Ping_interval `Not_configured
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
     |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
@@ -684,7 +684,10 @@ let a_rport =
                          This is not properly implemented."); `Rport n*)
 
 let a_ping =
-  a_entry_one_number "ping" >>| fun n -> `Entry (B(Ping_interval,n))
+  (a_entry_one_number "ping" >>| function
+    0 -> `Not_configured
+  | n -> `Seconds n) >>| fun setting ->
+  `Entry (B(Ping_interval, setting))
 
 let a_ping_restart =
   a_entry_one_number "ping-restart" >>| fun n ->

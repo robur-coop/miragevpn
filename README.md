@@ -118,6 +118,9 @@ hand-window SECONDS
 tran-window SECONDS
 
 ping SECONDS
+# Send a control channel ping after SECONDS of inactivity.
+# Defaults to 0, which means no pings will be sent.
+
 ping-exit SECONDS
 ping-restart SECONDS
 

@@ -89,7 +89,19 @@ module Config : sig
     | Passtos  : flag k
     | Persist_key : flag k
     | Persist_tun : flag k
-    | Ping_interval : int k
+
+    | Ping_interval : [`Not_configured | `Seconds of int] k
+    (** The [ping] config directive.
+        Will send a OpenVPN ping packet (ie {b not} IP/ICMP) over the
+        control channel after [seconds] of inactivity on the
+        control/data channel to tell the peer that we are still alive.
+        Defaults to [`Not_configured] (equivalent to `ping 0`),
+        which means no pings will be sent.
+        TODO ?The peer will be notified of the value of this configuration
+        upon connection, and thus will know whether or not to expect pings
+        from us?
+    *)
+
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
 
