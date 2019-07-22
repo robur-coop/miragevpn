@@ -217,18 +217,20 @@ val client : Config.t -> Ptime.t -> int64 -> (int -> Cstruct.t) -> unit ->
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
 
-val mtu : t -> int
-(** [mtu t] is the real MTU for payload in [t], depending on tun-mtu,
-    compression, and cipher in use. *)
-
 type ip_config = {
   ip : Ipaddr.V4.t ;
   prefix : Ipaddr.V4.Prefix.t ;
   gateway : Ipaddr.V4.t ;
 }
 
-val ready : t -> ip_config option
-(** [ready t] is [Some ip] if the OpenVPN connection is up, [None] otherwise. *)
+type established = {
+  ip_config : ip_config ;
+  compress : bool ;
+  mtu : int ;
+}
+
+val ready : t -> established option
+(** [ready t] is the IP configuration, compression, and mtu information. *)
 
 type error
 (** The type of errors when processing incoming data. *)

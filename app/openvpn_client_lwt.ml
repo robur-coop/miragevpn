@@ -141,8 +141,8 @@ let jump _ filename =
           read_and_handle () >>= function
           | incoming_data ->
             match Openvpn.ready !s with
-            | Some ip_config ->
-              open_tun config ip_config >|= fun tun_fd -> tun_fd, incoming_data
+            | Some est ->
+              open_tun config est.ip_config >|= fun tun_fd -> tun_fd, incoming_data
             | None ->
               if incoming_data <> [] then
                 Logs.err (fun m ->

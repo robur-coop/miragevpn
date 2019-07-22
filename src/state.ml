@@ -84,7 +84,7 @@ type ip_config = {
   gateway : Ipaddr.V4.t ;
 }
 
-let pp_ip ppf { ip ; prefix ; gateway } =
+let pp_ip_config ppf { ip ; prefix ; gateway } =
   Fmt.pf ppf "ip %a prefix %a gateway %a"
     Ipaddr.V4.pp ip Ipaddr.V4.Prefix.pp prefix Ipaddr.V4.pp gateway
 
@@ -94,18 +94,7 @@ let ip_from_config config =
     { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway }
   | _ -> assert false
 
-type session_state =
-  | Connecting
-  | Ready of ip_config
-  | Rekeying of ip_config * channel
-
-let pp_session_state ppf = function
-  | Connecting -> Fmt.string ppf "connecting"
-  | Ready ip -> Fmt.pf ppf "ready %a" pp_ip ip
-  | Rekeying (ip, c) -> Fmt.pf ppf "rekeying %a %a" pp_ip ip pp_channel c
-
 type session = {
-  state : session_state ;
   my_session_id : int64 ;
   my_packet_id : int32 ; (* this starts from 1l, indicates the next to-be-send *)
   my_hmac : Cstruct.t ;
@@ -115,15 +104,35 @@ type session = {
 }
 
 let pp_session ppf t =
-  Fmt.pf ppf "state %a@.my session %Lu packet %lu@.their session %Lu packet %lu"
-    pp_session_state t.state t.my_session_id t.my_packet_id t.their_session_id
+  Fmt.pf ppf "my session %Lu packet %lu@.their session %Lu packet %lu"
+    t.my_session_id t.my_packet_id t.their_session_id
     t.their_packet_id
+
+type established = {
+  ip_config : ip_config ;
+  compress : bool ;
+  mtu : int
+}
+
+let pp_established ppf t =
+  Fmt.pf ppf "ip %a compress %B mtu %d" pp_ip_config t.ip_config t.compress t.mtu
+
+type state =
+  | Connecting
+  | Ready of established
+  | Rekeying of established * channel
+
+let pp_state ppf = function
+  | Connecting -> Fmt.string ppf "connecting"
+  | Ready established -> Fmt.pf ppf "ready %a" pp_established established
+  | Rekeying (established, c) ->
+    Fmt.pf ppf "rekeying %a %a" pp_established established pp_channel c
 
 type t = {
   config : Config.t ;
   linger : Cstruct.t ;
-  compress : bool ;
   rng : int -> Cstruct.t ;
+  state : state ;
   session : session ;
   channel : channel ;
   lame_duck : (channel * int64) option ;
@@ -133,25 +142,31 @@ type t = {
 
 let pp ppf t =
   let lame_duck = match t.lame_duck with None -> None | Some (ch, _) -> Some ch in
-  Fmt.pf ppf "linger %d compress %B session %a@.active %a@.lame duck %a@.last-rcvd %Lu last-sent %Lu"
-    (Cstruct.len t.linger) t.compress
-    pp_session t.session pp_channel t.channel
+  Fmt.pf ppf "linger %d state %a session %a@.active %a@.lame duck %a@.last-rcvd %Lu last-sent %Lu"
+    (Cstruct.len t.linger)
+    pp_state t.state
+    pp_session t.session
+    pp_channel t.channel
     Fmt.(option ~none:(unit "no") pp_channel) lame_duck
     t.last_received t.last_sent
 
-let mtu t =
+let compress s = match s.state with
+  | Ready est | Rekeying (est, _) -> est.compress
+  | _ -> false
+
+let mtu config compress =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
-  let tun_mtu = match Config.find Tun_mtu t.config with
+  let tun_mtu = match Config.find Tun_mtu config with
     | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
     | Some x -> x
   in
-  let bs = match Config.find Cipher t.config with
+  let bs = match Config.find Cipher config with
     | Some "AES-256-CBC" -> 16
     | _ -> assert false
   in
   (* padding, done on packet_id + compress + data *)
   let not_yet_padded_payload =
-    4 (* packet id *) + if t.compress then 1 else 0
+    4 (* packet id *) + if compress then 1 else 0
   in
   let hdrs =
     3 (* hdr: 2 byte length, 1 byte op + key *) + bs (* IV *) + Packet.hmac_len
@@ -176,11 +191,15 @@ let channel_of_keyid keyid s =
   else match s.lame_duck with
     | Some (ch, ts) when ch.keyid = keyid ->
       Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
-    | _ -> match s.session.state with
-      | Rekeying (ip, channel) when channel.keyid = keyid ->
+    | _ -> match s.state with
+      | Rekeying (_, channel) when channel.keyid = keyid ->
         let set s ch =
-          let session = { s.session with state = Rekeying (ip, ch) } in
-          { s with session }
+          let state =
+            match s.state with
+            | Rekeying (a, _) -> Rekeying (a, ch)
+            | _ -> assert false
+          in
+          { s with state }
         in
         Some (channel, set)
       | _ -> None

@@ -4,8 +4,8 @@ open Rresult.R.Infix
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
 
-let ready f = match f.session.state with
-    Ready ip | Rekeying (ip, _) -> Some ip | _ -> None
+let ready f = match f.state with
+  | Ready ip | Rekeying (ip, _) -> Some ip | _ -> None
 
 let next_message_id state =
   { state with my_message_id = Int32.succ state.my_message_id },
@@ -50,7 +50,6 @@ let client config now ts rng () =
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
     let my_session_id = Randomconv.int64 rng in
     let session = {
-      state = Connecting ;
       my_session_id ;
       my_packet_id = 1l ;
       their_session_id = 0L ;
@@ -60,7 +59,7 @@ let client config now ts rng () =
     } in
     let channel = new_channel 0 ts in
     let state = {
-      config ; linger = Cstruct.empty ; compress = false ; rng ;
+      config ; state = Connecting ; linger = Cstruct.empty ; rng ;
       session ; channel ; lame_duck = None ;
       last_received = ts ; last_sent = ts ;
     } in
@@ -406,7 +405,7 @@ let outgoing s ts data =
   | None -> Error `Not_ready
   | Some ctx ->
     Logs.debug (fun m -> m "out key %d" s.channel.keyid);
-    let ctx, data = data_out ctx s.compress s.rng s.channel.keyid data in
+    let ctx, data = data_out ctx (compress s) s.rng s.channel.keyid data in
     let ch = set_keys s.channel ctx in
     let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
     Ok ({ s with channel ; last_sent = ts }, data)
@@ -435,29 +434,28 @@ let maybe_timeout state ts =
   if s_since_rcvd > timeout then (* TODO: actually restart / exit! *)
     Logs.warn (fun m -> m "should restart or exit (last_received > timeout)")
 
-let maybe_init_rekey state now ts =
+let maybe_init_rekey s now ts =
   (* if there's a rekey in process we don't do anything *)
-  match state.session.state with
-  | Connecting | Rekeying _ -> state, []
-  | Ready ip ->
+  match s.state with
+  | Connecting | Rekeying _ -> s, []
+  | Ready est ->
     (* allocate new channel, send out a rst (and await a rst) *)
     let keyid =
-      let n = succ state.channel.keyid mod 8 in
+      let n = succ s.channel.keyid mod 8 in
       if n = 0 then 1 else n (* i have no clue why 0 is special... *)
     in
     let channel = {
       keyid ; channel_st = Expect_server_reset ; transport = init_transport ;
       started = ts ; bytes = 0 ; packets = 0
     } in
-    let session = { state.session with state = Rekeying (ip, channel) } in
     let timestamp = ptime_to_ts_exn now in
-    let session, transport, header = header session channel.transport timestamp in
+    let session, transport, header = header s.session channel.transport timestamp in
     let transport, m_id = next_message_id transport in
     let p = `Control (Packet.Soft_reset, (header, m_id, Cstruct.empty)) in
     let out = hmac_and_out channel.keyid session.my_hmac header p in
     let channel = { channel with transport } in
-    let session = { session with state = Rekeying (ip, channel) } in
-    { state with session }, [ out ]
+    let state = Rekeying (est, channel) in
+    { s with state ; session }, [ out ]
 
 let maybe_rekey state now ts =
   (* rekeying may happen iff:
@@ -568,7 +566,7 @@ let incoming state now ts buf =
         match channel_of_keyid key state with
         | None ->
           (* TODO not entirely sure, maybe first check that it was/is a reset? *)
-          begin match state.session.state with
+          begin match state.state with
             | Rekeying _ | Connecting ->
               Logs.warn (fun m -> m "ignoring bad packet (key %d) in %a"
                             key pp state);
@@ -576,8 +574,8 @@ let incoming state now ts buf =
             | Ready ip ->
               let channel = new_channel key ts in
               Ok (channel, fun s ch ->
-                  let session = { s.session with state = Rekeying (ip, ch) } in
-                  { s with session })
+                  let state = Rekeying (ip, ch) in
+                  { s with state })
           end
         | Some (ch, set_ch) -> Ok (ch, set_ch)
       with
@@ -596,7 +594,7 @@ let incoming state now ts buf =
                Ok (state, [], [])
              | Some keys ->
                let ch = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
-               incoming_data bad_mac keys state.compress data >>| fun data ->
+               incoming_data bad_mac keys (compress state) data >>| fun data ->
                let data = match data with None -> [] | Some x -> [ x ] in
                set_ch state ch, [], data
            end
@@ -625,17 +623,22 @@ let incoming state now ts buf =
              in
              let ch''' = { ch'' with transport } in
              let state' = { state' with config = config' ; session } in
-             let s' = if est then
-                 match session.state with
+             let s' =
+               if est then
+                 match state'.state with
                  | Connecting ->
-                   let ip = ip_from_config state'.config in
-                   let session = { session with state = Ready ip } in
-                   let compress = match Config.find Comp_lzo config' with None -> false | Some () -> true in
-                   { state' with compress ; session ; channel = ch''' }
-                 | Rekeying (ip, _) ->
-                   let session = { session with state = Ready ip } in
-                   { state' with session ; channel = ch''' ;
-                                 lame_duck = Some (state'.channel, ts) }
+                   let ip_config = ip_from_config config'
+                   and compress = match Config.find Comp_lzo config' with None -> false | Some () -> true
+                   in
+                   let mtu = mtu config' compress in
+                   let state = Ready { ip_config ; compress ; mtu } in
+                   { state' with state ; channel = ch''' }
+                 | Rekeying (est, _) ->
+                   (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+                   let state = Ready est
+                   and lame_duck = Some (state'.channel, ts)
+                   in
+                   { state' with state ; channel = ch''' ; lame_duck }
                  | Ready _ -> assert false
                else
                  set_ch { state' with config = config' } ch'''

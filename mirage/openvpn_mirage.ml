@@ -35,6 +35,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   type t = {
     mutable client : [ `Active of Openvpn.t | `Error of error ] ;
     ip_config : Openvpn.ip_config ;
+    mtu : int ;
     flow : TCP.flow ;
     mutable linger : Cstruct.t list ;
     mutable frags : Fragments.Cache.t ;
@@ -45,9 +46,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let get_ip t = t.ip_config.Openvpn.ip
 
-  let mtu t = match t.client with
-    | `Active t -> Openvpn.mtu t
-    | `Error _ -> assert false
+  let mtu t = t.mtu
 
   let lift_err ~pp_error v = v >|= Rresult.R.error_to_msg ~pp_error
 
@@ -232,9 +231,9 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
      | _ -> Lwt.return (Error (`Msg "bad openvpn config, no suitable remote"))) >>= fun remote ->
     lift_err ~pp_error:TCP.pp_error (TCP.create_connection (S.tcpv4 s) remote) >>= fun flow ->
     lift_err ~pp_error:TCP.pp_write_error (TCP.write flow data) >>= fun () ->
-    establish_tunnel client flow >|= fun (client', ip_config, linger) ->
+    establish_tunnel client flow >|= fun (client', est, linger) ->
     let frags = Fragments.Cache.empty (1024 * 256) in
-    let t = { flow ; client = `Active client' ; ip_config ; linger ; frags } in
+    let t = { flow ; client = `Active client' ; ip_config = est.ip_config ; linger ; frags ; mtu = est.mtu } in
     Lwt.async (fun () -> ping t);
     t, read_and_process
 
