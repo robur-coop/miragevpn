@@ -70,6 +70,10 @@ This does not mean that conflicting options cannot be accepted from an on-disk
 
 Here is a list of configuration directives supported by this parser.
 
+**NB: These are supported by the _parser_, not necessarily supported
+by the _unikernel_ or _client_ executables. TODO document that subset somewhere,
+and maybe check upon initialization that we understand all the options given?**
+
 Directives that call for an external file to be read (or can be
  supplied inline with the `[inline]` stanza):
 ```
