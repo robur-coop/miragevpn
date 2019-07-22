@@ -73,6 +73,7 @@ Here is a list of configuration directives supported by this parser.
 Directives that call for an external file to be read (or can be
  supplied inline with the `[inline]` stanza):
 ```
+auth-nocache
 auth-user-pass FILE-PATH
 ca FILE-PATH
 cert FILE-PATH
@@ -159,6 +160,11 @@ replay-window LOW-SECONDS HIGH-SECONDS
 connect-retry LOW-SECONDS HIGH-SECONDS
 keepalive LOW-SECONDS HIGH-SECONDS
 
+connect-retry-max unlimited
+connect-retry-max TIMES
+# Configures the maximum amount of times to retry each remote/connection
+# before giving up. Defaults to "unlimited".
+
 connect-timeout SECONDS
 # a.k.a. --server-poll-timeout SECONDS
 # defaults to: connect-timeout 120
@@ -240,9 +246,6 @@ engine ENGINE-NAME
 
 ```
 allow-recursive-routing
-
-connect-retry-max SECONDS
-# Configures the default for connect-retry when used without the second optional arg
 
 ping-timer-rem
 

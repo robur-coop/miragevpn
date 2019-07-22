@@ -41,6 +41,7 @@ module Conf_map = struct
          - Remove it from Ignored Directives and/or Unimplemented Directives
   *)
   type 'a k =
+    | Auth_nocache : flag k
     | Auth_retry : [`Interact | `Nointeract | `None] k
     | Auth_user_pass : (string * string) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
@@ -49,6 +50,7 @@ module Conf_map = struct
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
+    | Connect_retry_max : [`Unlimited | `Times of int] k
     | Connect_timeout : int k
     | Dev      : [`Null | `Tun of int option | `Tap of int option] k
     | Dhcp_disable_nbt: flag k
@@ -163,6 +165,7 @@ module Conf_map = struct
          |> Cstruct.to_string)
     in
     match k,v with
+    | Auth_nocache, () -> p() "auto-nocache"
     | Auth_retry, `None -> p() "auth-retry none"
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
     | Auth_retry, `Interact -> p() "auth-retry interact"
@@ -182,6 +185,8 @@ module Conf_map = struct
     | Cipher, cipher -> p() "cipher %s" cipher
     | Comp_lzo, () -> p() "comp-lzo"
     | Connect_retry, (low,high) -> p() "connect-retry %d %d" low high
+    | Connect_retry_max, `Unlimited -> p() "connect-retry-max unlimited"
+    | Connect_retry_max, `Times i -> p() "connect-retry-max %d" i
     | Connect_timeout, seconds -> p() "connect-timeout %d" seconds
     | Dev, `Tap None -> p() "dev tap"
     | Dev, `Tap Some i -> p() "dev tap%d" i
@@ -308,6 +313,7 @@ module Defaults = struct
     |> add Resolv_retry `Infinite
     |> add Auth_retry `None
     |> add Connect_timeout 120
+    |> add Connect_retry_max `Unlimited
 end
 
 open Conf_map
@@ -571,6 +577,7 @@ let a_socks_proxy =
 let a_flag =
   let r k v = return (B (k,v)) in
   choice [
+    string "auth-nocache" *> r Auth_nocache () ;
     string "bind" *> r Bind (Some (None,None)) ;
     string "nobind" *> r Bind None ;
     string "float" *> r Float () ;
@@ -714,6 +721,12 @@ let a_entry_two_numbers name =
 let a_connect_retry =
   a_entry_two_numbers "connect-retry" >>| fun pair ->
   `Entry (B (Connect_retry,pair))
+
+let a_connect_retry_max =
+  string "connect-retry-max" *> a_whitespace *>
+  choice [ (a_number_range 0 max_int >>| fun i -> `Times i)
+         ; string "unlimited" *> return `Unlimited] >>| fun times ->
+  `Entry (B (Connect_retry_max, times))
 
 let a_connect_timeout =
   choice [
@@ -868,6 +881,7 @@ let a_config_entry : line A.t =
     a_hand_window ;
     a_tran_window ;
     a_connect_retry ;
+    a_connect_retry_max ;
     a_connect_timeout ;
     a_auth_retry ;
     a_mssfix ;

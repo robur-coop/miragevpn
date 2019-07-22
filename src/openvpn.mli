@@ -7,6 +7,12 @@ module Config : sig
   type flag = unit
 
   type 'a k =
+    | Auth_nocache : flag k
+    (* Erase user-provided credentials ([Askpass] and [Auth_user_pass]) from
+       program memory after their user.
+       DOES NOT affect [--http-proxy-user-pass].
+    *)
+
     | Auth_retry : [`Interact | `Nointeract | `None] k
     (** [`Interact]: Interactively ask user for new Auth_user_pass value
                      before retrying an authentication attempt.
@@ -38,6 +44,11 @@ module Config : sig
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
+
+    | Connect_retry_max : [`Unlimited | `Times of int] k
+    (** How many times to retry each remote before giving up.
+        The counter for each remote/connection should be reset upon the
+        successful establishment of a  connection.*)
 
     | Connect_timeout : int k
     (** [connect-timeout] a.k.a. [server-poll-timeout]
