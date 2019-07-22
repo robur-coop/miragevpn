@@ -22,7 +22,7 @@ module Config : sig
 
     | Auth_user_pass : (string * string) k (** username, password*)
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
-                               | `IP of Ipaddr.t] option) option k
+                               | `Ip of Ipaddr.t] option) option k
     (** local [port],[host] to bind to.
         Defaults to [Some (None, None)], see [--bind] in [man openvpn].
 
@@ -105,11 +105,12 @@ module Config : sig
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
 
-    | Proto    : ([`IPv6 | `IPv4] option
+    | Proto    : ([`Ipv6 | `Ipv4] option
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (** TODO should Proto be bound to a remote? *)
 
-    | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
+    | Remote : ([ `Domain of [ `host ] Domain_name.t
+                | `Ip of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
 
@@ -124,20 +125,20 @@ module Config : sig
 
     | Replay_window : (int * int) k
     | Resolv_retry  : [`Infinite | `Seconds of int] k
-    | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
+    | Route : ([ `Ip of Ipaddr.t | `Net_gateway | `Remote_host | `Vpn_gateway]
                * Ipaddr.Prefix.t option
-               * [`ip of Ipaddr.t | `net_gateway | `remote_host
-                 | `vpn_gateway] option
-               * [`Default | `Metric of int]) list k
+               * [ `Ip of Ipaddr.t | `Net_gateway | `Remote_host
+                 | `Vpn_gateway] option
+               * [ `Default | `Metric of int]) list k
     (** Route consists of: network , netmask , gateway , metric *)
 
     | Route_delay : (int * int) k
     (** [n,w] seconds to wait after connection establishment before adding
         routes to the routing table. *)
 
-    | Route_gateway : [ `IP of Ipaddr.t
+    | Route_gateway : [ `Ip of Ipaddr.t
                       | `Default
-                      | `DHCP ] k
+                      | `Dhcp ] k
     (** DHCP: should be executed on the encrypted VPN LAN interface *)
 
     | Route_metric : [`Default | `Metric of int] k
@@ -160,11 +161,11 @@ module Config : sig
     (** Retransmit control channel packet after not receiving an ACK for
         [n] seconds. TODO: presumably does not apply to TCP? *)
 
-    | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
+    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k
     (** [v * or_highest]: if [or_highest] then v = the highest version supported
         by the TLS library. *)
 
-    | Topology : [`net30 | `p2p | `subnet] k
+    | Topology : [`Net30 | `P2p | `Subnet] k
 
     | Transition_window : int k
     (* our old key can live this many seconds after a new key

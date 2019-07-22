@@ -20,6 +20,13 @@ let string_of_inlineable = function
 type inline_or_path = [ `Need_inline of inlineable
                       | `Path of string * inlineable ]
 
+let int_of_ping_interval = function
+  | `Not_configured -> 0
+  | `Seconds 0 ->
+    failwith "Openvpn.Config, internal invariant \
+              Ping_interval `Seconds <> 0 violated"
+  | `Seconds n -> n
+
 module Conf_map = struct
   type flag = unit
 
@@ -45,7 +52,7 @@ module Conf_map = struct
     | Auth_retry : [`Interact | `Nointeract | `None] k
     | Auth_user_pass : (string * string) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
-                               | `IP of Ipaddr.t] option) option k
+                               | `Ip of Ipaddr.t] option) option k
     | Ca       : X509.t k
     | Cipher   : string k
     | Comp_lzo : flag k
@@ -70,11 +77,12 @@ module Conf_map = struct
     | Ping_interval : [`Not_configured | `Seconds of int] k
     | Ping_timeout : [`Restart of int | `Exit of int] k
     | Pull     : flag k
-    | Proto    : ([`IPv6 | `IPv4] option
+    | Proto    : ([`Ipv6 | `Ipv4] option
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (* see socket.c:static const struct proto_names proto_names[] *)
 
-    | Remote : ([`Domain of [ `host ] Domain_name.t | `IP of Ipaddr.t] * int) list k
+    | Remote : ([`Domain of [ `host ] Domain_name.t
+                | `Ip of Ipaddr.t] * int) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
     | Renegotiate_bytes : int k
@@ -82,15 +90,15 @@ module Conf_map = struct
     | Renegotiate_seconds : int k
     | Replay_window : (int * int) k
     | Resolv_retry : [`Infinite | `Seconds of int] k
-    | Route : ([`ip of Ipaddr.t | `net_gateway | `remote_host | `vpn_gateway]
+    | Route : ([`Ip of Ipaddr.t | `Net_gateway | `Remote_host | `Vpn_gateway]
                * Ipaddr.Prefix.t option
-               * [`ip of Ipaddr.t | `net_gateway | `remote_host
-                 | `vpn_gateway] option
+               * [ `Ip of Ipaddr.t | `Net_gateway | `Remote_host
+                 | `Vpn_gateway] option
                * [`Default | `Metric of int]) list k
     | Route_delay : (int * int) k
-    | Route_gateway : [ `IP of Ipaddr.t
+    | Route_gateway : [ `Ip of Ipaddr.t
                       | `Default
-                      | `DHCP ] k
+                      | `Dhcp ] k
     | Route_metric : [`Default | `Metric of int] k
     | Tls_auth : ([ `Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
@@ -98,8 +106,8 @@ module Conf_map = struct
     | Tls_mode : [`Client | `Server] k
     | Tls_key    : X509.private_key k
     | Tls_timeout : int k
-    | Tls_version_min : ([`v1_3 | `v1_2 | `v1_1 ] * bool) k
-    | Topology : [`net30 | `p2p | `subnet] k
+    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k
+    | Topology : [`Net30 | `P2p | `Subnet] k
     | Transition_window : int k
     | Tun_mtu : int k
     | Verb : int k
@@ -180,7 +188,7 @@ module Conf_map = struct
       begin match snd opts with
         | None -> ()
         | Some `Domain n -> p() "%alocal %a" sep() Domain_name.pp n
-        | Some `IP ip -> p() "%alocal %a" sep() Ipaddr.pp ip end
+        | Some `Ip ip -> p() "%alocal %a" sep() Ipaddr.pp ip end
     | Ca, ca -> pp_x509 "ca" ca
     | Cipher, cipher -> p() "cipher %s" cipher
     | Comp_lzo, () -> p() "comp-lzo"
@@ -207,7 +215,7 @@ module Conf_map = struct
       p() "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
     | Ifconfig_nowarn, () -> p() "ifconfig-nowarn"
     | Link_mtu, i -> p() "link-mtu %d" i
-    | Ping_interval, n -> p() "ping %d" n
+    | Ping_interval, n -> p() "ping %d" (int_of_ping_interval n)
     | Ping_timeout, `Exit timeout -> p() "ping-exit %d" timeout
     | Ping_timeout, `Restart timeout -> p() "ping-restart %d" timeout
     | Mssfix, int -> p() "mssfix %d" int
@@ -218,7 +226,7 @@ module Conf_map = struct
     | Proto, (ip_v, kind) ->
       p() "proto %s%s%s"
         (match kind with `Udp -> "udp" | `Tcp _ -> "tcp")
-        (match ip_v with Some `IPv4 -> "4" | Some `IPv6 -> "6" | None -> "")
+        (match ip_v with Some `Ipv4 -> "4" | Some `Ipv6 -> "6" | None -> "")
         (match kind with | `Tcp Some `Client -> "-client"
                          | `Tcp Some `Server -> "-server"
                          | `Tcp None | `Udp -> "")
@@ -229,7 +237,7 @@ module Conf_map = struct
              pair ~sep:(unit " ")
                (fun ppf -> function
                   | `Domain name -> Domain_name.pp ppf name
-                  | `IP ip -> Ipaddr.pp ppf ip)
+                  | `Ip ip -> Ipaddr.pp ppf ip)
                int (*port*))) ppf lst
     | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
     | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
@@ -244,10 +252,10 @@ module Conf_map = struct
       routes |> List.iter
         begin fun (network,netmask,gateway,metric) ->
           let pp_addr ppf v = Fmt.pf ppf "%s" (match v with
-              | `ip ip -> Ipaddr.to_string ip
-              | `net_gateway -> "net_gateway"
-              | `remote_host -> "remote_host"
-              | `vpn_gateway -> "vpn_gateway") in
+              | `Ip ip -> Ipaddr.to_string ip
+              | `Net_gateway -> "net_gateway"
+              | `Remote_host -> "remote_host"
+              | `Vpn_gateway -> "vpn_gateway") in
           p() "route %a %a %a %s"
             pp_addr network
             Fmt.(option ~none:(unit"default") Ipaddr.Prefix.pp) netmask
@@ -257,8 +265,8 @@ module Conf_map = struct
         end
     | Route_delay, (n,w) -> p() "route-delay %d %d" n w
     | Route_gateway, `Default -> p() "route-gateway default"
-    | Route_gateway, `DHCP ->  p() "route-gateway dhcp"
-    | Route_gateway, `IP ip -> p() "route-gateway %a" Ipaddr.pp ip
+    | Route_gateway, `Dhcp ->  p() "route-gateway dhcp"
+    | Route_gateway, `Ip ip -> p() "route-gateway %a" Ipaddr.pp ip
     | Tls_auth, (direction, a,b,c,d) ->
       p() "tls-auth [inline]%s\n<tls-auth>\n\
            -----BEGIN OpenVPN Static key V1-----\n\
@@ -275,13 +283,13 @@ module Conf_map = struct
     | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver,or_highest) ->
       p() "tls-version-min %s%s" (match ver with
-          | `v1_3 -> "1.3" | `v1_2 -> "1.2" | `v1_1 -> "1.1")
+          | `V1_3 -> "1.3" | `V1_2 -> "1.2" | `V1_1 -> "1.1")
         (if or_highest then " or-highest" else "")
     | Tls_mode, `Server -> p() "tls-server"
     | Tls_mode, `Client -> p() "tls-client"
     | Tls_timeout, seconds -> p() "tls-timeout %d" seconds
     | Topology, v -> p() "topology %s" (match v with
-          `net30 -> "net30" | `p2p -> "p2p" | `subnet -> "subnet")
+          `Net30 -> "net30" | `P2p -> "p2p" | `Subnet -> "subnet")
     | Transition_window, seconds -> p() "tran-window %d" seconds
     | Tun_mtu, int -> p() "tun-mtu %d" int
     | Verb, int -> p() "verb %d" int
@@ -428,15 +436,15 @@ let a_dev =
 
 let a_proto =
   string "proto" *> a_whitespace *> choice [
-    string "tcp6-client" *> return (Some `IPv6, `Tcp (Some `Client));
-    string "tcp6-server" *> return (Some `IPv6, `Tcp (Some `Server));
-    string "tcp6" *> return (Some `IPv6, `Tcp None);
-    string "tcp4-client" *> return (Some `IPv4, `Tcp (Some `Client));
-    string "tcp4-server" *> return (Some `IPv4, `Tcp (Some `Server));
-    string "tcp4" *> return (Some `IPv4, `Tcp None);
+    string "tcp6-client" *> return (Some `Ipv6, `Tcp (Some `Client));
+    string "tcp6-server" *> return (Some `Ipv6, `Tcp (Some `Server));
+    string "tcp6" *> return (Some `Ipv6, `Tcp None);
+    string "tcp4-client" *> return (Some `Ipv4, `Tcp (Some `Client));
+    string "tcp4-server" *> return (Some `Ipv4, `Tcp (Some `Server));
+    string "tcp4" *> return (Some `Ipv4, `Tcp None);
     string "tcp" *> return (None, `Tcp None);
-    string "udp6" *> return (Some `IPv6, `Udp);
-    string "udp4" *> return (Some `IPv4, `Udp);
+    string "udp6" *> return (Some `Ipv6, `Udp);
+    string "udp4" *> return (Some `Ipv4, `Udp);
     string "udp" *> return (None, `Udp);
   ] >>| fun prot -> `Entry (B(Proto,prot))
 
@@ -609,16 +617,16 @@ let _TODO = a_hex
 
 let a_tls_version_min =
   string "tls-version-min" *> a_whitespace *>
-  choice [ string "1.3" *> return `v1_3 ;
-           string "1.2" *> return `v1_2 ;
-           string "1.1" *> return `v1_1 ;
+  choice [ string "1.3" *> return `V1_3 ;
+           string "1.2" *> return `V1_2 ;
+           string "1.1" *> return `V1_1 ;
          ] >>= fun v ->
   choice [a_whitespace *> string "or-highest" *> return true ;
           a_ign_whitespace *> end_of_line *> return false ] >>| fun or_h ->
   `Entry (B(Tls_version_min,(v,or_h)))
 
 let a_entry_one_number name =
-  string name *> a_whitespace *> a_number
+  string name *> fix (fun x -> x *> a_whitespace *> a_number)
 
 let a_tls_timeout =
   a_entry_one_number "tls-timeout" >>| fun seconds ->
@@ -667,7 +675,7 @@ let a_domain_or_ip =
   a_single_param >>= fun param ->
   Angstrom.parse_string
     (choice ~failure_msg:"not a hostname nor an IP" [
-        (a_ip >>| fun ip -> `IP ip) ;
+        (a_ip >>| fun ip -> `Ip ip) ;
         (a_domain_name >>| fun dns -> `Domain dns)])
     param |> function Ok x-> return x
                     | Error s -> fail s
@@ -739,8 +747,10 @@ let a_connect_timeout =
   `Entry (B (Connect_timeout, seconds))
 
 let a_keepalive =
-  a_entry_two_numbers "keepalive" >>| fun (interval, timeout) ->
-  `Keepalive (interval, timeout)
+  a_entry_two_numbers "keepalive" >>= function
+  | 0, _ -> fail "keepalive 0 [..] must be >= 0"
+  | (interval, timeout) ->
+    return (`Keepalive (interval, timeout))
 
 let a_verb =
   a_entry_one_number "verb" >>| fun x -> `Entries [B (Verb, x)]
@@ -748,9 +758,9 @@ let a_verb =
 let a_topology =
   string "topology" *> a_whitespace *>
   choice [
-    string "net30" *> return `net30 ;
-    string "p2p" *> return `p2p ;
-    string "subnet" *> return `subnet ;
+    string "net30" *> return `Net30 ;
+    string "p2p" *> return `P2p ;
+    string "subnet" *> return `Subnet ;
   ] >>| fun v -> `Entry (B( Topology, v))
 
 let a_cipher =
@@ -780,17 +790,18 @@ let a_remote =
 let a_remote_entry = a_remote >>| fun b -> `Entry b
 
 let a_network_or_gateway =
-  choice [ (a_ip >>| fun ip -> `ip ip) ;
-           (string "vpn_gateway" *> return `vpn_gateway) ;
-           (string "net_gateway" *> return `net_gateway) ;
-           (string "remote_host" *> return `remote_host) ]
+  choice [ (a_ip >>| fun ip -> `Ip ip) ;
+           (string "vpn_gateway" *> return `Vpn_gateway) ;
+           (string "net_gateway" *> return `Net_gateway) ;
+           (string "remote_host" *> return `Remote_host) ]
 
 let a_route =
   (* --route network/IP [netmask] [gateway] [metric] *)
   string "route" *> a_whitespace *> a_network_or_gateway >>= fun network ->
   let some x = Some x in
 
-  option (some @@ Ipaddr.Prefix.of_string_exn "255.255.255.255/32", None, `Default)
+  option (some @@ Ipaddr.Prefix.of_string_exn "255.255.255.255/32",
+          None, `Default)
     ( (a_whitespace *>
        (
          (a_ip >>= fun ip -> (char '/' *> a_number_range 0 32) >>= fun mask ->
@@ -821,10 +832,10 @@ let a_route =
 let a_route_gateway =
   (string "route-gateway" *> a_whitespace) *>
   choice [
-    (a_single_param >>= function "dhcp" -> return `DHCP
+    (a_single_param >>= function "dhcp" -> return `Dhcp
                                | "default" -> return `Default
                                | _ -> fail "not dhcp|default|ip") ;
-    (a_ip >>| fun x -> `IP x) ] >>| fun x -> `Entry (B(Route_gateway,x))
+    (a_ip >>| fun x -> `Ip x) ] >>| fun x -> `Entry (B(Route_gateway,x))
 
 let a_inline =
   char '<' *> take_while1 (function 'a'..'z' |'-' -> true
@@ -994,13 +1005,8 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Auth_retry ->
          Logs.warn (fun m ->
             m "resolve_conflict: ignoring Auth_retry (should \
-	       only be done when called from merge_push_reply. TODO.");
+               only be done when called from merge_push_reply. TODO.");
          Ok (Some (k,v2))
-      (* adding wouldn't change anything: *)
-      | _ when v = v2 -> (* TODO polymorphic comparison *)
-        Logs.debug (fun m ->
-            m "Config key %a was supplied multiple times with same value"
-              pp (singleton k v)) ; Ok None
       (* can coalesce: *)
       | Bind -> begin match v, v2 with
           | None, None -> Ok (Some (Bind, None))
@@ -1029,7 +1035,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
         begin match find Ping_interval t with
           | Some old when old <> v ->
             Logs.warn (fun m -> m "Overriding previous interval %d with %d"
-                          old v)
+                          (int_of_ping_interval old) (int_of_ping_interval v))
           | _ -> () end ; Ok (Some (k, v))
       | Ping_timeout ->
         let override ~old ~next =
@@ -1049,6 +1055,11 @@ let resolve_conflict (type a) t (k:a key) (v:a)
           Error "Remote config tried to change ping timeout \
                  action from 'exit' to 'restart'"
         end
+      (* adding wouldn't change anything: *)
+      | _ when v = v2 -> (* TODO polymorphic comparison *)
+        Logs.debug (fun m ->
+            m "Config key %a was supplied multiple times with same value"
+              pp (singleton k v)) ; Ok None
       (* else: *)
       | _ -> Error (Fmt.strf "conflicting keys: %a not in %a"
                       pp (singleton k v) pp t)
@@ -1128,9 +1139,9 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
             | Some old ->
               Logs.warn (fun m ->
                   m "keepalive %d %d overrides former ping interval %d"
-                    interval timeout old);
+                    interval timeout (int_of_ping_interval old));
             | None -> () end ;
-          let acc = add Ping_interval interval acc in
+          let acc = add Ping_interval (`Seconds interval) acc in
           let keepalive_action was_old next =
             let maybe_warn old =
               if was_old && old <> next then
@@ -1208,7 +1219,7 @@ let merge_push_reply client (push_config:string) =
     | Tun_mtu, _ -> true
     | Topology, _ -> true
     | Renegotiate_seconds, n when n > 0 -> true
-    | Ping_interval, n when n >= 0 -> true
+    | Ping_interval, `Seconds n when n >= 0 -> true
     | Ping_timeout, `Restart n when n >= 0 -> true
     (* TODO | Redirect_gateway, _ -> true *)
 

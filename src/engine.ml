@@ -60,7 +60,7 @@ let client config ts rng =
     let channel = new_channel 0 ts in
     (match Config.get Remote config with
      | (`Domain name, _) :: _ -> Ok (`Resolve name, Resolving (0, ts, 0))
-     | (`IP ip, port) :: _ -> Ok (`Connect (ip, port), Connecting (0, ts, 0))
+     | (`Ip ip, port) :: _ -> Ok (`Connect (ip, port), Connecting (0, ts, 0))
      | [] -> Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
     let state = {
       config ; state ; linger = Cstruct.empty ; rng ;
@@ -414,13 +414,15 @@ let maybe_ping state ts =
   (* ping if we haven't send anything for the configured interval *)
   let s_since_sent = Duration.to_sec (Int64.sub ts state.last_sent) in
   let interval = Config.(get Ping_interval state.config) in
-  if s_since_sent > interval then begin
-    Logs.debug (fun m -> m "not enough activity, sending a ping");
+  match interval with
+  | `Not_configured -> state, []
+  | `Seconds threshold when s_since_sent < threshold -> state, []
+  | `Seconds _ ->
+    Logs.debug (fun m -> m "sending a ping after %d seconds of inactivity"
+                   s_since_sent);
     match outgoing state ts ping with
     | Error _ -> state, []
     | Ok (s', d) -> s', [ d ]
-  end else
-    state, []
 
 let maybe_timeout state ts =
   (* timeout fires if no data was received within the configured interval *)
@@ -679,7 +681,7 @@ let handle t now ts ev =
     next_or_fail idx retry >>| fun (idx', retry', r) ->
     let state, action = match r with
       | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
-      | `IP ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
+      | `Ip ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
     in
     { t with state }, action
   | Connecting _, `Connected ->
@@ -695,7 +697,7 @@ let handle t now ts ev =
     next_or_fail idx retry >>| fun (idx', retry', r) ->
     let state, action = match r with
       | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
-      | `IP ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
+      | `Ip ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
     in
     { t with state }, action
   | _, `Tick ->

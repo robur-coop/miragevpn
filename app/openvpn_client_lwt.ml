@@ -86,16 +86,18 @@ let jump _ filename =
     with
     | Error `Msg s -> Lwt.fail_with ("config parser: " ^ s)
     | Ok config ->
-      let resolve = function
-        | (`IP ip, port) :: _ -> Lwt.return (ip, port)
-        | (`Domain name, port) :: _ ->
+      let rec resolve = function
+        | (`Ip ip, port) :: _ -> Lwt.return (ip, port)
+        | (`Domain name, port) :: tl ->
           begin
             let res = Dns_client_lwt.create () in
             Dns_client_lwt.gethostbyname res name >>= function
             | Error `Msg x ->
-              Logs.err (fun m -> m "gethostbyname for %a returned an error: %s"
-                           Domain_name.pp name x) ;
-              Lwt.fail_with "resolver error"
+              Logs.warn (fun m -> m "gethostbyname for %a return an error: %s"
+                            Domain_name.pp name x);
+              (match tl with
+                | [] -> Lwt.fail_with "resolver error"
+                | tl -> resolve tl) (* TODO doesn't respect Remote_random *)
             | Ok ip -> Lwt.return (Ipaddr.V4 ip,port)
           end
         | [] -> Lwt.fail_with "no remote"

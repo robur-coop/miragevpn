@@ -126,7 +126,7 @@ let pp_action ppf = function
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with
-  | (V4 ip, V4 mask), `IP (V4 gateway) ->
+  | (V4 ip, V4 mask), `Ip (V4 gateway) ->
     let prefix = Ipaddr.V4.Prefix.of_netmask mask ip in
     { ip ; prefix ; gateway }
   | _ -> assert false
