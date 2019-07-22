@@ -5,7 +5,7 @@ let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
 
 let ready f = match f.state with
-  | Ready ip | Rekeying (ip, _) -> Some ip | _ -> None
+  | Ready est | Rekeying (est, _) -> Some (est.ip_config, est.mtu) | _ -> None
 
 let next_message_id state =
   { state with my_message_id = Int32.succ state.my_message_id },
@@ -43,7 +43,7 @@ let hmac_and_out key hmac_key header p =
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode (key, p')
 
-let client config now ts rng () =
+let client config ts rng =
   match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_TODO_direction, _, my_hmac, _, _) ->
@@ -58,19 +58,16 @@ let client config now ts rng () =
       their_hmac = my_hmac ;
     } in
     let channel = new_channel 0 ts in
+    (match Config.get Remote config with
+     | (`Domain name, _) :: _ -> Ok (`Resolve name, Resolving (0, ts, 0))
+     | (`IP ip, port) :: _ -> Ok (`Connect (ip, port), Connecting (0, ts, 0))
+     | [] -> Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
     let state = {
-      config ; state = Connecting ; linger = Cstruct.empty ; rng ;
+      config ; state ; linger = Cstruct.empty ; rng ;
       session ; channel ; lame_duck = None ;
       last_received = ts ; last_sent = ts ;
     } in
-    let timestamp = ptime_to_ts_exn now in
-    let session, transport, header = header session channel.transport timestamp in
-    let transport, m_id = next_message_id transport in
-    let p = `Control (Packet.Hard_reset_client, (header, m_id, Cstruct.empty)) in
-    let out = hmac_and_out channel.keyid my_hmac header p in
-    let remote = Config.get Remote config in
-    let channel = { channel with transport } in
-    Ok ({ state with channel ; session }, remote, out)
+    state, action
 
 let pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"
@@ -437,7 +434,6 @@ let maybe_timeout state ts =
 let maybe_init_rekey s now ts =
   (* if there's a rekey in process we don't do anything *)
   match s.state with
-  | Connecting | Rekeying _ -> s, []
   | Ready est ->
     (* allocate new channel, send out a rst (and await a rst) *)
     let keyid =
@@ -456,6 +452,8 @@ let maybe_init_rekey s now ts =
     let channel = { channel with transport } in
     let state = Rekeying (est, channel) in
     { s with state ; session }, [ out ]
+  | _ -> s, []
+
 
 let maybe_rekey state now ts =
   (* rekeying may happen iff:
@@ -566,16 +564,16 @@ let incoming state now ts buf =
         match channel_of_keyid key state with
         | None ->
           (* TODO not entirely sure, maybe first check that it was/is a reset? *)
-          begin match state.state with
-            | Rekeying _ | Connecting ->
-              Logs.warn (fun m -> m "ignoring bad packet (key %d) in %a"
-                            key pp state);
-              Error ()
-            | Ready ip ->
+          begin match state.state, p with
+            | Ready ip, `Control (Packet.Soft_reset, _)  ->
               let channel = new_channel key ts in
               Ok (channel, fun s ch ->
                   let state = Rekeying (ip, ch) in
                   { s with state })
+            | _ ->
+              Logs.warn (fun m -> m "ignoring bad packet (key %d) in %a"
+                            key pp state);
+              Error ()
           end
         | Some (ch, set_ch) -> Ok (ch, set_ch)
       with
@@ -626,7 +624,7 @@ let incoming state now ts buf =
              let s' =
                if est then
                  match state'.state with
-                 | Connecting ->
+                 | Handshaking _ ->
                    let ip_config = ip_from_config config'
                    and compress = match Config.find Comp_lzo config' with None -> false | Some () -> true
                    in
@@ -639,7 +637,7 @@ let incoming state now ts buf =
                    and lame_duck = Some (state'.channel, ts)
                    in
                    { state' with state ; channel = ch''' ; lame_duck }
-                 | Ready _ -> assert false
+                 | _ -> assert false
                else
                  set_ch { state' with config = config' } ch'''
              in
@@ -650,3 +648,72 @@ let incoming state now ts buf =
         multi state' linger (out @ outs) (appdata @ app)
   in
   multi state (Cstruct.append state.linger buf) [] []
+
+let handle t now ts ev =
+  let remote, next_remote =
+    let remotes = Config.get Remote t.config in
+    let r idx = List.nth remotes idx in
+    let next idx =
+      if succ idx = List.length remotes then None else Some (r (succ idx))
+    in
+    r, next
+  and retry_exceeded r =
+    match Config.get Connect_retry_max t.config with
+    | `Times m -> m > r
+    | `Unlimited -> false
+  in
+  let next_or_fail idx retry =
+    let idx', retry', v = match next_remote idx with
+      None -> 0, succ retry, remote 0 | Some x -> succ idx, retry, x
+    in
+    if retry_exceeded retry' then
+      Error (`Msg "maximum connection retries exceeded")
+    else
+      Ok (idx', retry', v)
+  in
+  match t.state, ev with
+  | Resolving (idx, _, retry), `Resolved ip ->
+    let endp = (ip, snd (remote idx)) in
+    Ok ({ t with state = Connecting (idx, ts, retry) }, `Connect endp)
+  | Resolving (idx, ts, retry), `Resolve_failed ->
+    next_or_fail idx retry >>| fun (idx', retry', r) ->
+    let state, action = match r with
+      | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
+      | `IP ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
+    in
+    { t with state }, action
+  | Connecting _, `Connected ->
+    let timestamp = ptime_to_ts_exn now in
+    let session, trans, hdr = header t.session t.channel.transport timestamp in
+    let transport, m_id = next_message_id trans in
+    let p = `Control (Packet.Hard_reset_client, (hdr, m_id, Cstruct.empty)) in
+    let out = hmac_and_out t.channel.keyid t.session.my_hmac hdr p in
+    let channel = { t.channel with transport } in
+    let state = Handshaking ts in
+    Ok ({ t with state ; channel ; session }, `Transmit [ out ])
+  | Connecting (idx, _, retry), `Connection_failed ->
+    next_or_fail idx retry >>| fun (idx', retry', r) ->
+    let state, action = match r with
+      | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
+      | `IP ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
+    in
+    { t with state }, action
+  | _, `Tick ->
+    let t', outs = timer t now ts in
+    Ok (t', `Transmit outs)
+  | _, `Data cs ->
+    incoming t now ts cs >>= fun (t', outs, apps) ->
+    begin match outs, apps with
+      | [], [] ->
+        let action = match t'.state with
+          | Ready est -> `Established (est.ip_config, est.mtu)
+          | _ -> `Transmit [] (* TODO ?? *)
+        in
+        Ok (t', action)
+      | x, [] -> Ok (t', `Transmit x)
+      | [], x -> Ok (t', `Payload x)
+      | _ -> Error (`Msg "both out and app")
+    end
+  | s, ev ->
+    Rresult.R.error_msgf "unexpected event %a in state %a"
+      pp_event ev pp_state s

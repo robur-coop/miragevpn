@@ -88,10 +88,47 @@ let pp_ip_config ppf { ip ; prefix ; gateway } =
   Fmt.pf ppf "ip %a prefix %a gateway %a"
     Ipaddr.V4.pp ip Ipaddr.V4.Prefix.pp prefix Ipaddr.V4.pp gateway
 
+type event = [
+  | `Resolved of Ipaddr.t
+  | `Resolve_failed
+  | `Connected
+  | `Connection_failed
+  | `Tick
+  | `Data of Cstruct.t
+]
+
+let pp_event ppf = function
+  | `Resolved r -> Fmt.pf ppf "resolved %a" Ipaddr.pp r
+  | `Resolve_failed -> Fmt.string ppf "resolve failed"
+  | `Connected -> Fmt.string ppf "connected"
+  | `Connection_failed -> Fmt.string ppf "connection failed"
+  | `Tick -> Fmt.string ppf "tick"
+  | `Data cs -> Fmt.pf ppf "data %d:@.%a" (Cstruct.len cs) Cstruct.hexdump_pp cs
+
+type action = [
+  | `Resolve of [ `host ] Domain_name.t
+  | `Connect of Ipaddr.t * int
+  | `Disconnect
+  | `Transmit of Cstruct.t list
+  | `Exit
+  | `Established of ip_config * int
+  | `Payload of Cstruct.t list
+]
+
+let pp_action ppf = function
+  | `Resolve host -> Fmt.pf ppf "resolve %a" Domain_name.pp host
+  | `Connect (ip, port) -> Fmt.pf ppf "connect %a:%d" Ipaddr.pp ip port
+  | `Disconnect -> Fmt.string ppf "disconect"
+  | `Transmit xs -> Fmt.pf ppf "transmit %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)
+  | `Exit -> Fmt.string ppf "exit"
+  | `Established (ip, mtu) -> Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
+  | `Payload xs -> Fmt.pf ppf "payload %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)
+
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with
   | (V4 ip, V4 mask), `IP (V4 gateway) ->
-    { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway }
+    let prefix = Ipaddr.V4.Prefix.of_netmask mask ip in
+    { ip ; prefix ; gateway }
   | _ -> assert false
 
 type session = {
@@ -118,12 +155,16 @@ let pp_established ppf t =
   Fmt.pf ppf "ip %a compress %B mtu %d" pp_ip_config t.ip_config t.compress t.mtu
 
 type state =
-  | Connecting
+  | Resolving of int * int64 * int (* index [into remote], timestamp, retry count *)
+  | Connecting of int * int64 * int (* index [into remote], ts, retry count *)
+  | Handshaking of int64 (* ts *)
   | Ready of established
   | Rekeying of established * channel
 
 let pp_state ppf = function
-  | Connecting -> Fmt.string ppf "connecting"
+  | Resolving (_idx, _ts, _) -> Fmt.string ppf "resolving"
+  | Connecting (_id, _ts, retry) -> Fmt.pf ppf "connecting (retry %d)" retry
+  | Handshaking _ -> Fmt.string ppf "handshaking"
   | Ready established -> Fmt.pf ppf "ready %a" pp_established established
   | Rekeying (established, c) ->
     Fmt.pf ppf "rekeying %a %a" pp_established established pp_channel c

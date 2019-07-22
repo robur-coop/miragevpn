@@ -31,7 +31,7 @@ depends: [
   "fmt"
   "gmap"     { >= "0.3.0"  & < "0.4.0" }
   "hex"      { >= "1.4.0"  & < "1.5.0" }
-  "ipaddr"   { >= "3.1.0"  & < "3.2.0" }
+  "ipaddr"   { >= "3.1.0" }
   "logs"
   "cstruct-lwt"
   "lwt"
@@ -45,7 +45,7 @@ depends: [
 
   # mirage:
   "mirage-stack-lwt"
-  "mirage-protocols-lwt"
+  "mirage-protocols-lwt" {>= "3.0.0"}
   "tcpip"
   "mirage-random"
   "mirage-clock"
