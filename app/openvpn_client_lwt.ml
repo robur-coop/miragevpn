@@ -1,6 +1,9 @@
 open Lwt.Infix
 
-let open_tun config {Openvpn.ip ; gateway ; prefix } : (Lwt_unix.file_descr,[> `Msg of string]) Lwt_result.t =
+let open_tun config {Openvpn.ip ; gateway ; prefix }
+  : (Openvpn.Config.t * Lwt_unix.file_descr,[> `Msg of string]) Lwt_result.t =
+  (* This returns a Config with updated MTU, and a file descriptor for
+     the TUN interface *)
   let open Lwt_result.Infix in
   let netmask =
     (* openvpn solves this problem by modifying the routing table: *)
@@ -17,9 +20,12 @@ let open_tun config {Openvpn.ip ; gateway ; prefix } : (Lwt_unix.file_descr,[> `
     let fd , dev = Tuntap.opentun ?devname () in
     (* pray to god we don't get raced re: tun dev teardown+creation here;
        TODO should patch Tuntap to operate on fd instead of dev name:*)
+    let config = match Openvpn.Config.find Tun_mtu config with
+      | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
+      | None -> Openvpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config in
     Tuntap.set_ipv4 ~netmask dev ip ;
     Logs.debug (fun m -> m "allocated TUN interface %s" dev);
-    Lwt_result.return (Lwt_unix.of_unix_file_descr fd)
+    Lwt_result.return (config, Lwt_unix.of_unix_file_descr fd)
   end with
   | Failure msg ->
     Lwt_result.fail
@@ -115,9 +121,27 @@ let jump _ filename =
         let fd = Lwt_unix.(socket dom SOCK_STREAM 0) in
         Lwt_unix.(connect fd (ADDR_INET (ip, port))) >>= fun () ->
 
-
-        (* TODO here we should learn MTU from unix.getsockopt fd IP_MTU
-           ... which Unix doesn't expose. *)
+        (* TODO here we should learn the MTU in order to set Link_mtu.
+           We can use ioctl SIOCIFMTU bound in Tuntap.get_mtu
+           if we learn the network interface name with
+           SIOCGIFNAME
+           #include <net/if.h>
+           SIOCGIFINDEX ifr_ifindex ifr_ifru.ifru_ivalue
+           ./sys/sockio.h:#define	SIOCGIFINDEX
+           SIOCSIFMETRIC
+           > #ifdef __FreeBSD__
+           >         ifr.ifr_index = i;
+           > #else
+           >         ifr.ifr_ifindex = i;
+           > #endif
+           > The "'SIOCGIFNAME' was not declared in this scope" is hopefully solved by:
+           > #ifdef SIOCGIFNAME
+           >         if (::ioctl (s, SIOCGIFNAME, &ifr) < 0)
+           > #else
+           >         if (!if_indextoname(ifr.ifr_index, ifr.ifr_name))
+           > #endif
+           TODO this will be fixed in upcoming PR to mirage-tuntap.
+        *)
 
         let open Lwt_result in
         write_to_fd fd out >>= fun () ->
@@ -143,8 +167,8 @@ let jump _ filename =
           read_and_handle () >>= function
           | incoming_data ->
             match Openvpn.ready !s with
-            | Some est ->
-              open_tun config est.ip_config >|= fun tun_fd -> tun_fd, incoming_data
+            | Some ip_config ->
+              open_tun config ip_config >|= fun (_, tun_fd) -> tun_fd, incoming_data
             | None ->
               if incoming_data <> [] then
                 Logs.err (fun m ->
@@ -177,9 +201,9 @@ let jump _ filename =
           >|= Cstruct.sub buf 0 >>= fun buf ->
           match Openvpn.outgoing !s (ts()) buf with
           | Error `Not_ready -> failwith ""
-          | Ok (s', outs) ->
+          | Ok (s', out) ->
             s := s';
-            write_multiple_to_fd fd [ outs ]
+            write_multiple_to_fd fd [out]
             >>= process_outgoing tun_fd
         in
         Lwt.pick [ process_incoming app_data
