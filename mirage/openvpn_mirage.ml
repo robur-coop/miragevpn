@@ -21,13 +21,21 @@
               Openvpn.handle for each event, and executing potential actions
               asynchronously (via Lwt.async handle_action)
 
-   Synchronisation is achieved by Lwt_condition.t variables, there are three:
-   * data_cond which gets signalled when payload has been received over the
-               tunnel (it is waited for by process_data)
-   * est_cond which gets signalled once the tunnel is established. connect waits
-              for that before returning
-   * event_cond which gets signalled by timer/reader/handle_action whenever an
-                event occured *)
+   Synchronisation is achieved by Lwt_mvar.t variables, there are three:
+   * data_mvar which gets put when payload has been received over the
+               tunnel (it is taken by process_data)
+   * est_mvar which gets put once the tunnel is established. connect takes
+              that before returning
+   * event_mvar which gets put by timer/reader/handle_action whenever an
+                event occured, the event task above waits for it *)
+
+(* TODO to avoid deadlocks, better be sure that
+   (a) until connect returns there ain't any data_mvar put happening
+   (b) there is currently only a single call to Lwt_mvar.take est_mvar
+       (in connect), but there may be subsequent (i.e. rekeying) -- either
+       return to use a Lwt_condition, or have sth taking the events (it _may_
+       be useful to allow both `Established and `Disconnected events here (for
+       keeping track of the tunnel state)) *)
 
 open Lwt.Infix
 
@@ -58,9 +66,9 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   type conn = {
     mutable o_client : Openvpn.t ;
     mutable tcp_flow : TCP.flow option ;
-    data_cond : Cstruct.t list Lwt_condition.t ;
-    est_cond : (Openvpn.ip_config * int) Lwt_condition.t ;
-    event_cond : Openvpn.event Lwt_condition.t ;
+    data_mvar : Cstruct.t list Lwt_mvar.t ;
+    est_mvar : (Openvpn.ip_config * int) Lwt_mvar.t ;
+    event_mvar : Openvpn.event Lwt_mvar.t ;
   }
 
   type t = {
@@ -192,7 +200,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let rec process_data ~tcp ~udp ~default t =
     Log.info (fun m -> m "processing data");
-    Lwt_condition.wait t.conn.data_cond >>= fun datas ->
+    Lwt_mvar.take t.conn.data_mvar >>= fun datas ->
     Log.info (fun m -> m "now for real processing data");
     Lwt_list.iter_s (input t ~tcp ~udp ~default) datas >>= fun () ->
     process_data ~tcp ~udp ~default t
@@ -229,7 +237,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     Log.info (fun m -> m "reading flow");
     read_flow flow >>= fun r ->
     Log.info (fun m -> m "read flow");
-    Lwt_condition.broadcast c r;
+    Lwt_mvar.put c r >>= fun () ->
     match r with
     | `Data _ -> reader c flow
     | _ ->
@@ -238,40 +246,37 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let handle_action s conn = function
     | `Resolve name ->
-      (resolve_hostname s name >|= fun r ->
+      (resolve_hostname s name >>= fun r ->
        let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
-       Lwt_condition.broadcast conn.event_cond ev)
+       Lwt_mvar.put conn.event_mvar ev)
     | `Connect endp ->
-      (connect_tcp s endp >|= fun r ->
+      (connect_tcp s endp >>= fun r ->
        let ev = match r with
          | None -> `Connection_failed
          | Some flow ->
-           Lwt.async (fun () -> reader conn.event_cond flow);
+           Lwt.async (fun () -> reader conn.event_mvar flow);
            conn.tcp_flow <- Some flow;
            `Connected
        in
        Log.debug (fun m -> m "here...");
-       Lwt_condition.broadcast conn.event_cond ev)
+       Lwt_mvar.put conn.event_mvar ev)
     | `Disconnect ->
+      (* TODO not sure, should maybe signal successful close (to be able to initiate new connection) *)
       begin match conn.tcp_flow with
         | None -> Log.err (fun m -> m "cannot disconnect no flow"); Lwt.return_unit
         | Some f -> conn.tcp_flow <- None ; TCP.close f
       end
     | `Transmit data ->
-      (transmit conn.tcp_flow data >|= function
-        | true -> ()
-        | false -> Lwt_condition.broadcast conn.event_cond `Connection_failed)
+      (transmit conn.tcp_flow data >>= function
+        | true -> Lwt.return_unit
+        | false -> Lwt_mvar.put conn.event_mvar `Connection_failed)
     | `Exit -> Lwt.fail_with "exit called"
-    | `Payload data ->
-      Lwt_condition.broadcast conn.data_cond data;
-      Lwt.return_unit
-    | `Established (ip, mtu) ->
-      Lwt_condition.broadcast conn.est_cond (ip, mtu);
-      Lwt.return_unit
+    | `Payload data -> Lwt_mvar.put conn.data_mvar data
+    | `Established (ip, mtu) -> Lwt_mvar.put conn.est_mvar (ip, mtu)
 
   let rec event s conn =
     Log.info (fun m -> m "processing event");
-    Lwt_condition.wait conn.event_cond >>= fun ev ->
+    Lwt_mvar.take conn.event_mvar >>= fun ev ->
     Log.info (fun m -> m "now for real processing event %a" Openvpn.pp_event ev);
     match Openvpn.handle conn.o_client (now ()) (ts ()) ev with
     | Error e ->
@@ -300,23 +305,23 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "client construction failed %s" msg);
       Lwt.return (Error (`Msg msg))
     | Ok (o_client, action) ->
-      let data_cond = Lwt_condition.create ()
-      and est_cond = Lwt_condition.create ()
-      and event_cond = Lwt_condition.create ()
+      let data_mvar = Lwt_mvar.create_empty ()
+      and est_mvar = Lwt_mvar.create_empty ()
+      and event_mvar = Lwt_mvar.create_empty ()
       in
-      let conn = { o_client ; tcp_flow = None ; data_cond ; est_cond ; event_cond } in
+      let conn = { o_client ; tcp_flow = None ; data_mvar ; est_mvar ; event_mvar } in
       (* handle initial action *)
       Lwt.async (fun () -> event s conn);
       Lwt.async (fun () ->
           let rec go () =
             T.sleep_ns (Duration.of_sec 1) >>= fun () ->
-            Lwt_condition.broadcast event_cond `Tick;
+            Lwt_mvar.put event_mvar `Tick >>= fun () ->
             go ()
           in
           go ());
       handle_action s conn action >>= fun () ->
       Log.info (fun m -> m "waiting for established");
-      Lwt_condition.wait est_cond >|= fun (ip_config, mtu) ->
+      Lwt_mvar.take est_mvar >|= fun (ip_config, mtu) ->
       Log.info (fun m -> m "now established");
       let frags = Fragments.Cache.empty (1024 * 256) in
       Ok ({ conn ; ip_config ; frags ; mtu }, process_data)
