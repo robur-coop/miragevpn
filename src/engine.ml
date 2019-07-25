@@ -565,7 +565,9 @@ let incoming state now ts buf =
       match
         match channel_of_keyid key state with
         | Some (ch, set_ch) -> Ok (ch, set_ch)
-        | None -> match state.state, p with
+        | None ->
+          Logs.warn (fun m -> m "no channel found! %d" key);
+          match state.state, p with
           | Ready ip, `Control (Packet.Soft_reset, _)  ->
             let channel = new_channel key ts in
             Ok (channel, fun s ch -> { s with state = Rekeying (ip, ch) })
@@ -578,8 +580,8 @@ let incoming state now ts buf =
         Logs.err (fun m -> m "no channel, continue") ;
         Ok (state, [], [])
       | Ok (ch, set_ch) ->
-        Logs.debug (fun m -> m "channel %a" (* "- received %a" *)
-                       pp_channel ch (* Packet.pp (key, p) *));
+        Logs.debug (fun m -> m "channel %a - received %a"
+                       pp_channel ch Packet.pp (key, p));
         let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
         (match p with
          | `Data data ->
@@ -596,7 +598,7 @@ let incoming state now ts buf =
            end
          | (`Ack _ | `Control _) as d ->
            check_control_integrity bad_mac key p state.session.their_hmac >>= fun () ->
-           (* _first_ update state with last_received_message_id and packet_id *)
+           (* _first_ update state with most recent received packet_id *)
            expected_packet state.session ch.transport d >>= fun (session, transport) ->
            let state' = { state with session }
            and ch' = { ch with transport }
@@ -607,7 +609,7 @@ let incoming state now ts buf =
              Logs.info (fun m -> m "ignoring acknowledgement");
              Ok (set_ch state' ch', [], [])
            | `Control (typ, (_, _, data)) ->
-             incoming_control state.config state.rng state.session ch' now typ data
+             incoming_control state.config state.rng state'.session ch' now typ data
              >>| fun (est, config', ch'', outs) ->
              Logs.debug (fun m -> m "out channel %a, pkts %d"
                             pp_channel ch'' (List.length outs));
@@ -637,7 +639,7 @@ let incoming state now ts buf =
                    { state' with state ; channel = ch''' ; lame_duck }
                  | _ -> assert false
                else
-                 set_ch { state' with config = config' } ch'''
+                 set_ch state' ch'''
              in
              s', encs, [])
         >>= fun (state', outs, app) ->
