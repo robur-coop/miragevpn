@@ -21,21 +21,18 @@
               Openvpn.handle for each event, and executing potential actions
               asynchronously (via Lwt.async handle_action)
 
-   Synchronisation is achieved by Lwt_mvar.t variables, there are three:
+   Synchronisation is achieved by Lwt_mvar.t variables, there are two:
    * data_mvar which gets put when payload has been received over the
                tunnel (it is taken by process_data)
    * est_mvar which gets put once the tunnel is established. connect takes
-              that before returning
+              that before returning (subsequent put mutate t)
    * event_mvar which gets put by timer/reader/handle_action whenever an
                 event occured, the event task above waits for it *)
 
 (* TODO to avoid deadlocks, better be sure that
-   (a) until connect returns there ain't any data_mvar put happening
-   (b) there is currently only a single call to Lwt_mvar.take est_mvar
-       (in connect), but there may be subsequent (i.e. rekeying) -- either
-       return to use a Lwt_condition, or have sth taking the events (it _may_
-       be useful to allow both `Established and `Disconnected events here (for
-       keeping track of the tunnel state)) *)
+   (a) until connect returns there ain't any data_mvar put happening -- since
+       only the task returned by connect (process_data) calls Lwt_mvar.take --
+       to-be-called by the client of this stack *)
 
 open Lwt.Infix
 
@@ -73,8 +70,8 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   type t = {
     conn : conn ;
-    ip_config : Openvpn.ip_config ;
-    mtu : int ;
+    mutable ip_config : Openvpn.ip_config ;
+    mutable mtu : int ;
     mutable frags : Fragments.Cache.t ;
   }
 
@@ -109,8 +106,10 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Ok () ->
       Ipv4_common.set_checksum hdr_buf;
       match Openvpn.outgoing c (ts ()) (Cstruct.append hdr_buf data) with
-      | Error `Not_ready -> assert false
-      | Ok (c', out) -> c', out
+      | Error `Not_ready ->
+        Log.warn (fun m -> m "tunnel not ready, dropping data!");
+        c, None
+      | Ok (c', out) -> c', Some out
 
   let write t ?(fragment = true) ?(ttl = 38) ?src dst proto ?(size = 0) headerf bufs =
     (* everything must be unfragmented! the Openvpn.outgoing function prepends *)
@@ -147,7 +146,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         if pay_len <= ip_payload_len then
           (* simple case, marshal and go ahead *)
           let c', out = encode_encrypt t.conn.o_client hdr payload in
-          c', [ out ]
+          c', match out with None -> [] | Some o -> [ o ]
         else
           (* complex case: loop, set more_fragments and offset *)
           (* set an ip ID *)
@@ -170,7 +169,8 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                   Cstruct.sub payload start len
                 in
                 let c', out = encode_encrypt c hdr' data in
-                (c', out :: outs))
+                let out' = match out with None -> outs | Some x -> x :: outs in
+                c', out')
               (t.conn.o_client, []) (List.init frags (fun i -> i))
           in
           c', List.rev outs
@@ -312,19 +312,34 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       let conn = { o_client ; tcp_flow = None ; data_mvar ; est_mvar ; event_mvar } in
       (* handle initial action *)
       Lwt.async (fun () -> event s conn);
-      Lwt.async (fun () ->
-          let rec go () =
-            T.sleep_ns (Duration.of_sec 1) >>= fun () ->
-            Lwt_mvar.put event_mvar `Tick >>= fun () ->
-            go ()
-          in
-          go ());
+      let rec tick () =
+        T.sleep_ns (Duration.of_sec 1) >>= fun () ->
+        Lwt_mvar.put event_mvar `Tick >>= fun () ->
+        tick ()
+      in
+      Lwt.async tick;
       handle_action s conn action >>= fun () ->
       Log.info (fun m -> m "waiting for established");
       Lwt_mvar.take est_mvar >|= fun (ip_config, mtu) ->
-      Log.info (fun m -> m "now established");
+      Log.info (fun m -> m "now established %a (mtu %d)"
+                   Openvpn.pp_ip_config ip_config mtu);
       let frags = Fragments.Cache.empty (1024 * 256) in
-      Ok ({ conn ; ip_config ; frags ; mtu }, process_data)
+      let t = { conn ; ip_config ; frags ; mtu } in
+      let rec established () =
+        Lwt_mvar.take est_mvar >>= fun (ip_config', mtu') ->
+        let ip_changed = Ipaddr.V4.compare ip_config.ip ip_config'.ip <> 0 in
+        Log.info (fun m -> m "tunnel re-established (ip changed? %B) %a (mtu %d)"
+                     ip_changed Openvpn.pp_ip_config ip_config' mtu');
+        if ip_changed then begin
+          t.frags <- Fragments.Cache.empty (1024 * 256);
+          t.ip_config <- ip_config'
+        end;
+        (* not sure about mtu changes, but better to update this in any case *)
+        t.mtu <- mtu';
+        established ()
+      in
+      Lwt.async established;
+      Ok (t, process_data)
 
   let disconnect _ =
     Log.warn (fun m -> m "disconnect called, should I do something?");

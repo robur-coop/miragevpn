@@ -229,6 +229,8 @@ type ip_config = {
   gateway : Ipaddr.V4.t ;
 }
 
+val pp_ip_config : ip_config Fmt.t
+
 type event = [
   | `Resolved of Ipaddr.t
   | `Resolve_failed
