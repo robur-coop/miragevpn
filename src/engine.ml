@@ -337,7 +337,7 @@ let pp_error ppf = function
     Fmt.pf ppf "different message id expected for fresh key (%d) message %a@ (state %a)"
       key Packet.pp_header hdr pp_transport state
   | `Bad_mac (state, computed, data) ->
-    Fmt.pf ppf "bad mac: computed %a, data %a@ (state %a)"
+    Fmt.pf ppf "bad mac: computed %a data %a@ (state %a)"
       Cstruct.hexdump_pp computed Packet.pp data pp state
   | `No_transition (channel, op, data) ->
     Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
@@ -560,24 +560,18 @@ let incoming state now ts buf =
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out, appdata)
     | Ok (key, p, linger) ->
-      Logs.debug (fun m -> m "in key %d" key);
       (* ok, at first find proper channel for key (or create a fresh channel) *)
       match
         match channel_of_keyid key state with
-        | None ->
-          (* TODO not entirely sure, maybe first check that it was/is a reset? *)
-          begin match state.state, p with
-            | Ready ip, `Control (Packet.Soft_reset, _)  ->
-              let channel = new_channel key ts in
-              Ok (channel, fun s ch ->
-                  let state = Rekeying (ip, ch) in
-                  { s with state })
-            | _ ->
-              Logs.warn (fun m -> m "ignoring bad packet (key %d) in %a"
-                            key pp state);
-              Error ()
-          end
         | Some (ch, set_ch) -> Ok (ch, set_ch)
+        | None -> match state.state, p with
+          | Ready ip, `Control (Packet.Soft_reset, _)  ->
+            let channel = new_channel key ts in
+            Ok (channel, fun s ch -> { s with state = Rekeying (ip, ch) })
+          | _ ->
+            Logs.warn (fun m -> m "ignoring unexpected packet %a in %a"
+                          Packet.pp (key, p) pp state);
+            Error ()
       with
       | Error () ->
         Logs.err (fun m -> m "no channel, continue") ;
@@ -590,10 +584,11 @@ let incoming state now ts buf =
          | `Data data ->
            begin match keys_opt ch with
              | None ->
-               Logs.warn (fun m -> m "received data, but session is not keyed yet");
+               Logs.warn (fun m -> m "received data, but no keys yet");
                Ok (state, [], [])
              | Some keys ->
-               let ch = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
+               let bytes = Cstruct.len data + ch.bytes in
+               let ch = { ch with packets = succ ch.packets ; bytes } in
                incoming_data bad_mac keys (compress state) data >>| fun data ->
                let data = match data with None -> [] | Some x -> [ x ] in
                set_ch state ch, [], data
