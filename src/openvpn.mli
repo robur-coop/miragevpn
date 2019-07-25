@@ -253,9 +253,6 @@ type action = [
 
 val pp_action : action Fmt.t
 
-val ready : t -> (ip_config * int) option
-(** [ready t] is the IP configuration and mtu information. *)
-
 val client : Config.t -> int64 -> (int -> Cstruct.t) ->
   (t * action, Rresult.R.msg) result
 (** [client config ts rng] constructs a [t], returns the remote to
