@@ -109,7 +109,6 @@ type action = [
   | `Resolve of [ `host ] Domain_name.t
   | `Connect of Ipaddr.t * int
   | `Disconnect
-  | `Transmit of Cstruct.t list
   | `Exit
   | `Established of ip_config * int
   | `Payload of Cstruct.t list
@@ -119,7 +118,6 @@ let pp_action ppf = function
   | `Resolve host -> Fmt.pf ppf "resolve %a" Domain_name.pp host
   | `Connect (ip, port) -> Fmt.pf ppf "connect %a:%d" Ipaddr.pp ip port
   | `Disconnect -> Fmt.string ppf "disconect"
-  | `Transmit xs -> Fmt.pf ppf "transmit %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) -> Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
   | `Payload xs -> Fmt.pf ppf "payload %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)

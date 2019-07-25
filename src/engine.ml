@@ -36,7 +36,6 @@ let ptime_to_ts_exn now =
 
 let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
-  Logs.debug (fun m -> m "to-be-signed@.%a" Cstruct.hexdump_pp tbs);
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
 let hmac_and_out key hmac_key header p =
@@ -457,7 +456,6 @@ let maybe_init_rekey s now ts =
     { s with state ; session }, [ out ]
   | _ -> s, []
 
-
 let maybe_rekey state now ts =
   (* rekeying may happen iff:
      - channel has been up for <reneg_seconds>
@@ -472,7 +470,6 @@ let maybe_rekey state now ts =
       Config.(find Renegotiate_seconds state.config,
               find Renegotiate_bytes state.config,
               find Renegotiate_packets state.config)
-
     with
     | Some y, _, _ when y <= Duration.to_sec (Int64.sub ts state.channel.started) -> true
     | _, Some b, _ when b <= state.channel.bytes -> true
@@ -556,10 +553,10 @@ let wrap_hmac_control now session key transport outs =
 
 let incoming state now ts buf =
   let state = { state with last_received = ts } in
-  let rec multi state buf out appdata =
+  let rec multi state buf out act =
     match Packet.decode buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
-    | Error `Partial -> Ok ({ state with linger = buf }, out, appdata)
+    | Error `Partial -> Ok ({ state with linger = buf }, out, act)
     | Ok (key, p, linger) ->
       (* ok, at first find proper channel for key (or create a fresh channel) *)
       match
@@ -578,7 +575,7 @@ let incoming state now ts buf =
       with
       | Error () ->
         Logs.err (fun m -> m "no channel, continue") ;
-        Ok (state, [], [])
+        Ok (state, out, act)
       | Ok (ch, set_ch) ->
         Logs.debug (fun m -> m "channel %a - received %a"
                        pp_channel ch Packet.pp (key, p));
@@ -588,13 +585,19 @@ let incoming state now ts buf =
            begin match keys_opt ch with
              | None ->
                Logs.warn (fun m -> m "received data, but no keys yet");
-               Ok (state, [], [])
+               Ok (state, [], None)
              | Some keys ->
                let bytes = Cstruct.len data + ch.bytes in
                let ch = { ch with packets = succ ch.packets ; bytes } in
                incoming_data bad_mac keys (compress state) data >>| fun data ->
-               let data = match data with None -> [] | Some x -> [ x ] in
-               set_ch state ch, [], data
+               let act = match act, data with
+                 | None, None -> None
+                 | None, Some x -> Some (`Payload [x])
+                 | Some x, None -> Some x
+                 | Some (`Payload y), Some x -> Some (`Payload (x::y))
+                 | _ -> assert false
+               in
+               set_ch state ch, [], act
            end
          | (`Ack _ | `Control _) as d ->
            check_control_integrity bad_mac key p state.session.their_hmac >>= fun () ->
@@ -607,7 +610,7 @@ let incoming state now ts buf =
            | `Ack _ ->
              (* TODO nothing to do for an ack, should bump ack number *)
              Logs.info (fun m -> m "ignoring acknowledgement");
-             Ok (set_ch state' ch', [], [])
+             Ok (set_ch state' ch', [], act)
            | `Control (typ, (_, _, data)) ->
              incoming_control state.config state.rng state'.session ch' now typ data
              >>| fun (est, config', ch'', outs) ->
@@ -621,33 +624,38 @@ let incoming state now ts buf =
              in
              let ch''' = { ch'' with transport } in
              let state' = { state' with config = config' ; session } in
-             let s' =
-               if est then
-                 match state'.state with
-                 | Handshaking _ ->
-                   let ip_config = ip_from_config config'
-                   and compress = match Config.find Comp_lzo config' with None -> false | Some () -> true
-                   in
-                   let mtu = mtu config' compress in
-                   let state = Ready { ip_config ; compress ; mtu } in
-                   { state' with state ; channel = ch''' }
-                 | Rekeying (est, _) ->
-                   (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-                   let state = Ready est
-                   and lame_duck = Some (state'.channel, ts)
-                   in
-                   { state' with state ; channel = ch''' ; lame_duck }
-                 | _ -> assert false
-               else
-                 set_ch state' ch'''
-             in
-             s', encs, [])
-        >>= fun (state', outs, app) ->
+             if est then
+               match state'.state with
+               | Handshaking _ ->
+                 let ip_config = ip_from_config config'
+                 and compress = match Config.find Comp_lzo config' with None -> false | Some () -> true
+                 in
+                 let mtu = mtu config' compress in
+                 let state = Ready { ip_config ; compress ; mtu } in
+                 let act' =
+                   match act with None -> Some (`Established (ip_config, mtu))
+                                | _ -> assert false
+                 in
+                 { state' with state ; channel = ch''' }, encs, act'
+               | Rekeying (est, _) ->
+                 (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+                 let state = Ready est
+                 and lame_duck = Some (state'.channel, ts)
+                 in
+                 { state' with state ; channel = ch''' ; lame_duck }, encs, act
+               | _ -> assert false
+             else
+                 set_ch state' ch''', encs, act) >>= fun (state', outs, act') ->
         Logs.debug (fun m -> m "out state is %a" State.pp state');
         Logs.debug (fun m -> m "%d outgoing packets" (List.length outs));
-        multi state' linger (out @ outs) (appdata @ app)
+        Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(unit "no") pp_action) act);
+        multi state' linger (out @ outs) act'
   in
-  multi state (Cstruct.append state.linger buf) [] []
+  multi state (Cstruct.append state.linger buf) [] None >>| fun (s', out, act) ->
+  let act' =
+    match act with Some (`Payload a) -> Some (`Payload (List.rev a)) | y -> y
+  in
+  s', out, act'
 
 let handle t now ts ev =
   let remote, next_remote =
@@ -674,14 +682,14 @@ let handle t now ts ev =
   match t.state, ev with
   | Resolving (idx, _, retry), `Resolved ip ->
     let endp = (ip, snd (remote idx)) in
-    Ok ({ t with state = Connecting (idx, ts, retry) }, `Connect endp)
+    Ok ({ t with state = Connecting (idx, ts, retry) }, [], Some (`Connect endp))
   | Resolving (idx, ts, retry), `Resolve_failed ->
     next_or_fail idx retry >>| fun (idx', retry', r) ->
     let state, action = match r with
-      | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
-      | `Ip ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
+      | `Domain name, _ -> Resolving (idx', ts, retry'), Some (`Resolve name)
+      | `Ip ip, port -> Connecting (idx', ts, retry'), Some (`Connect (ip, port))
     in
-    { t with state }, action
+    { t with state }, [], action
   | Connecting _, `Connected ->
     let timestamp = ptime_to_ts_exn now in
     let session, trans, hdr = header t.session t.channel.transport timestamp in
@@ -690,30 +698,18 @@ let handle t now ts ev =
     let out = hmac_and_out t.channel.keyid t.session.my_hmac hdr p in
     let channel = { t.channel with transport } in
     let state = Handshaking ts in
-    Ok ({ t with state ; channel ; session }, `Transmit [ out ])
+    Ok ({ t with state ; channel ; session }, [ out ], None)
   | Connecting (idx, _, retry), `Connection_failed ->
     next_or_fail idx retry >>| fun (idx', retry', r) ->
     let state, action = match r with
       | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
       | `Ip ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
     in
-    { t with state }, action
+    { t with state }, [], Some action
   | _, `Tick ->
     let t', outs = timer t now ts in
-    Ok (t', `Transmit outs)
-  | _, `Data cs ->
-    incoming t now ts cs >>= fun (t', outs, apps) ->
-    begin match outs, apps with
-      | [], [] ->
-        let action = match t'.state with
-          | Ready est -> `Established (est.ip_config, est.mtu)
-          | _ -> `Transmit [] (* TODO ?? *)
-        in
-        Ok (t', action)
-      | x, [] -> Ok (t', `Transmit x)
-      | [], x -> Ok (t', `Payload x)
-      | _ -> Error (`Msg "both out and app")
-    end
+    Ok (t', outs, None)
+  | _, `Data cs -> incoming t now ts cs
   | s, ev ->
     Rresult.R.error_msgf "unexpected event %a in state %a"
       pp_event ev pp_state s

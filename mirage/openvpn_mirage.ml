@@ -266,10 +266,6 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         | None -> Log.err (fun m -> m "cannot disconnect no flow"); Lwt.return_unit
         | Some f -> conn.tcp_flow <- None ; TCP.close f
       end
-    | `Transmit data ->
-      (transmit conn.tcp_flow data >>= function
-        | true -> Lwt.return_unit
-        | false -> Lwt_mvar.put conn.event_mvar `Connection_failed)
     | `Exit -> Lwt.fail_with "exit called"
     | `Payload data -> Lwt_mvar.put conn.data_mvar data
     | `Established (ip, mtu) -> Lwt_mvar.put conn.est_mvar (ip, mtu)
@@ -282,10 +278,19 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Error e ->
       Log.err (fun m -> m "openvpn handle failed %a" Openvpn.pp_error e);
       Lwt.return_unit
-    | Ok (t', action) ->
+    | Ok (t', outs, action) ->
       conn.o_client <- t';
-      Log.info (fun m -> m "handling action %a" Openvpn.pp_action action);
-      Lwt.async (fun () -> handle_action s conn action);
+      Log.info (fun m -> m "handling action %a" Fmt.(option ~none:(unit "none") Openvpn.pp_action) action);
+      (match outs with
+       | [] -> ()
+       | _ ->
+         Lwt.async (fun () ->
+             (transmit conn.tcp_flow outs >>= function
+               | true -> Lwt.return_unit
+               | false -> Lwt_mvar.put conn.event_mvar `Connection_failed)));
+      (match action with
+       | None -> ()
+       | Some a -> Lwt.async (fun () -> handle_action s conn a));
       event s conn
 
   (* what we actually want to do here (and lifetimes):

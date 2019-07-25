@@ -246,7 +246,6 @@ type action = [
   | `Resolve of [ `host ] Domain_name.t
   | `Connect of Ipaddr.t * int
   | `Disconnect
-  | `Transmit of Cstruct.t list
   | `Exit
   | `Established of ip_config * int
   | `Payload of Cstruct.t list
@@ -269,7 +268,7 @@ type error
 val pp_error : error Fmt.t
 (** [pp_error ppf e] pretty prints the error [e]. *)
 
-val handle : t -> Ptime.t -> int64 -> event -> (t * action, error) result
+val handle : t -> Ptime.t -> int64 -> event -> (t * Cstruct.t list * action option, error) result
 
 val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
 (** [outgoing t ts data] prepares [data] to be sent over the OpenVPN connection.
