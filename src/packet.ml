@@ -115,7 +115,6 @@ let encode_header hdr =
   buf, hdr_len + rsid + id_arr_len
 
 let to_be_signed_header ?(more = 0) op header =
-  (* TODO verify that this is indeed the thing to sign! *)
   (* packet_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ msg_id *)
   let acks = match header.ack_message_ids with
     | [] -> 0
@@ -208,8 +207,8 @@ let to_be_signed key p =
   let op = op_key (operation p) key in
   match p with
   | `Ack hdr -> fst (to_be_signed_header op hdr)
-  | `Data _ -> assert false
   | `Control (_, c) -> to_be_signed_control op c
+  | `Data _ -> assert false
 
 type t = int * [
   | `Ack of header

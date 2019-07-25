@@ -36,6 +36,7 @@ let ptime_to_ts_exn now =
 
 let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
+  Logs.debug (fun m -> m "to-be-signed@.%a" Cstruct.hexdump_pp tbs);
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
 let hmac_and_out key hmac_key header p =
