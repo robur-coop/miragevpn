@@ -45,16 +45,7 @@ let client config ts rng =
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (_TODO_direction, _, my_hmac, _, _) ->
     let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
-    let my_session_id = Randomconv.int64 rng in
-    let session = {
-      my_session_id ;
-      my_packet_id = 1l ;
-      their_session_id = 0L ;
-      their_packet_id = 1l ;
-      my_hmac ;
-      their_hmac = my_hmac ;
-      compress = false ;
-    } in
+    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac:my_hmac () in
     let channel = new_channel 0 ts in
     (match Config.get Remote config with
      | (`Domain name, _) :: _ -> Ok (`Resolve name, Resolving (0, ts, 0))
@@ -405,6 +396,7 @@ let outgoing s ts data =
     Ok ({ s with channel ; last_sent = ts }, data)
 
 let ping =
+  (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
 let maybe_ping state ts =
@@ -673,35 +665,47 @@ let handle t now ts ev =
     if retry_exceeded retry' then
       Error (`Msg "maximum connection retries exceeded")
     else
-      Ok (idx', retry', v)
+      Ok (match v with
+          | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
+          | `Ip ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port))
   in
   match t.state, ev with
   | Resolving (idx, _, retry), `Resolved ip ->
     let endp = (ip, snd (remote idx)) in
     Ok ({ t with state = Connecting (idx, ts, retry) }, [], Some (`Connect endp))
-  | Resolving (idx, ts, retry), `Resolve_failed ->
-    next_or_fail idx retry >>| fun (idx', retry', r) ->
-    let state, action = match r with
-      | `Domain name, _ -> Resolving (idx', ts, retry'), Some (`Resolve name)
-      | `Ip ip, port -> Connecting (idx', ts, retry'), Some (`Connect (ip, port))
-    in
-    { t with state }, [], action
-  | Connecting _, `Connected ->
+  | Resolving (idx, _, retry), `Resolve_failed ->
+    next_or_fail idx retry >>| fun (state, action) ->
+    { t with state }, [], Some action
+  | Connecting (idx, _, _), `Connected ->
     let timestamp = ptime_to_ts_exn now in
-    let session, trans, hdr = header t.session t.channel.transport timestamp in
+    let my_session_id = Randomconv.int64 t.rng
+    and my_hmac = t.session.my_hmac
+    in
+    let session = init_session ~my_session_id ~my_hmac ~their_hmac:my_hmac ()
+    and channel = new_channel 0 ts
+    in
+    let session, trans, hdr = header session channel.transport timestamp in
     let transport, m_id = next_message_id trans in
     let p = `Control (Packet.Hard_reset_client, (hdr, m_id, Cstruct.empty)) in
-    let out = hmac_and_out t.channel.keyid t.session.my_hmac hdr p in
-    let channel = { t.channel with transport } in
-    let state = Handshaking ts in
+    let out = hmac_and_out channel.keyid my_hmac hdr p in
+    let channel = { channel with transport } in
+    let state = Handshaking (idx, ts) in
     Ok ({ t with state ; channel ; session }, [ out ], None)
   | Connecting (idx, _, retry), `Connection_failed ->
-    next_or_fail idx retry >>| fun (idx', retry', r) ->
-    let state, action = match r with
-      | `Domain name, _ -> Resolving (idx', ts, retry'), `Resolve name
-      | `Ip ip, port -> Connecting (idx', ts, retry'), `Connect (ip, port)
-    in
+    next_or_fail idx retry >>| fun (state, action) ->
     { t with state }, [], Some action
+  | Connecting (idx, initial_ts, retry), `Tick ->
+    (* We are trying to establish a connection and a clock tick happens.
+       We need to determine if {!Config.Connect_timeout} seconds has passed
+       since [initial_ts] (when we started connecting), and if so,
+       try the next [Remote]. *)
+    let conn_timeout = Duration.of_sec Config.(get Connect_timeout t.config) in
+    if Int64.sub ts initial_ts >= conn_timeout then begin
+      Logs.err (fun m -> m "Connecting to remote #%d timed out" idx);
+      next_or_fail idx retry >>| fun (state, action) ->
+      { t with state }, [], Some action
+    end else
+      Ok (t, [], None)
   | _, `Tick ->
     let t', outs = timer t now ts in
     Ok (t', outs, None)

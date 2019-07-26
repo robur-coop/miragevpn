@@ -139,6 +139,11 @@ type session = {
   compress : bool ;
 }
 
+let init_session ~my_session_id ?(their_session_id = 0L) ~my_hmac ~their_hmac () =
+  { my_session_id ; my_packet_id = 1l ; my_hmac ;
+    their_session_id ; their_packet_id = 1l ; their_hmac ;
+    compress = false }
+
 let pp_session ppf t =
   Fmt.pf ppf "compression %B my session %Lu packet %lu@.their session %Lu packet %lu"
     t.compress
@@ -148,14 +153,14 @@ let pp_session ppf t =
 type state =
   | Resolving of int * int64 * int (* index [into remote], timestamp, retry count *)
   | Connecting of int * int64 * int (* index [into remote], ts, retry count *)
-  | Handshaking of int64 (* ts *)
+  | Handshaking of int * int64 (* index into [remote], ts *)
   | Ready
   | Rekeying of channel
 
 let pp_state ppf = function
   | Resolving (_idx, _ts, _) -> Fmt.string ppf "resolving"
-  | Connecting (_id, _ts, retry) -> Fmt.pf ppf "connecting (retry %d)" retry
-  | Handshaking _ -> Fmt.string ppf "handshaking"
+  | Connecting (_idx, _ts, retry) -> Fmt.pf ppf "connecting (retry %d)" retry
+  | Handshaking (_idx, _ts) -> Fmt.string ppf "handshaking"
   | Ready -> Fmt.string ppf "ready"
   | Rekeying c ->
     Fmt.pf ppf "rekeying %a" pp_channel c
@@ -174,7 +179,8 @@ type t = {
 
 let pp ppf t =
   let lame_duck = match t.lame_duck with None -> None | Some (ch, _) -> Some ch in
-  Fmt.pf ppf "linger %d state %a session %a@.active %a@.lame duck %a@.last-rcvd %Lu last-sent %Lu"
+  Fmt.pf ppf "@[linger %d state %a session %a@.active %a@.lame duck %a@.\
+              last-rcvd %Lu last-sent %Lu@]"
     (Cstruct.len t.linger)
     pp_state t.state
     pp_session t.session

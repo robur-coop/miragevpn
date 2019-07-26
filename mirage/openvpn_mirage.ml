@@ -8,7 +8,7 @@
    second), or an user wants to transmit data (write) over the tunnel, work
    will be done.
 
-   The asynchronous task library lwt is in use here, which provides cooperative
+   The asynchronous task library Lwt is in use here, which provides cooperative
    tasks -- not preemptive tasks! This means that only at yield points
    (Lwt.bind (>>=) and Lwt.map (>|=)) other tasks can be scheduled. Everything
    between two yield points will happen atomically!
