@@ -143,7 +143,8 @@ let to_be_signed_header ?(more = 0) op header =
 type control = header * packet_id * Cstruct.t
 
 let pp_control ppf (hdr, id, payload) =
-  Fmt.pf ppf "%a message-id %lu@.payload %a" pp_header hdr id Cstruct.hexdump_pp payload
+  Fmt.pf ppf "%a message-id %lu@.payload %d bytes"
+    pp_header hdr id (Cstruct.len payload)
 
 let decode_control buf =
   decode_header buf >>= fun (header, off) ->
@@ -232,9 +233,9 @@ let message_id = function
   | `Data _ -> assert false
 
 let pp ppf (key, p) = match p with
-  | `Ack a -> Fmt.pf ppf "key %x ack %a" key pp_header a
-  | `Control (op, c) -> Fmt.pf ppf "key %x control %a: %a" key pp_operation op pp_control c
-  | `Data d -> Fmt.pf ppf "key %x data %a" key Cstruct.hexdump_pp d
+  | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
+  | `Control (op, c) -> Fmt.pf ppf "key %d control %a: %a" key pp_operation op pp_control c
+  | `Data d -> Fmt.pf ppf "key %d data %d bytes" key (Cstruct.len d)
 
 type tls_data = { (* key method v2 only! *)
   (* 4 zero bytes *)
@@ -250,9 +251,9 @@ type tls_data = { (* key method v2 only! *)
 }
 
 let pp_tls_data ppf t =
-  Fmt.pf ppf "TLS data PMS %a R1 %a R2 %a options %s %a"
-    Cstruct.hexdump_pp t.pre_master Cstruct.hexdump_pp t.random1
-    Cstruct.hexdump_pp t.random2 t.options
+  Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a"
+    (Cstruct.len t.pre_master) (Cstruct.len t.random1) (Cstruct.len t.random2)
+    t.options
     Fmt.(option ~none:(unit "no user + pass")
            (prefix (unit "user: ") (pair ~sep:(unit ", pass") string string)))
     t.user_pass

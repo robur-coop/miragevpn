@@ -89,6 +89,8 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "no flow, cannot transmit");
       Lwt.return false
     | Some f, _ ->
+      let ip, port = TCP.dst f in
+      Log.warn (fun m -> m "sending %d bytes to %a:%d" (Cstruct.lenv data) Ipaddr.V4.pp ip port);
       TCP.writev f data >|= function
       | Ok () -> true
       | Error e ->
@@ -201,7 +203,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let rec process_data ~tcp ~udp ~default t =
     Log.info (fun m -> m "processing data");
     Lwt_mvar.take t.conn.data_mvar >>= fun datas ->
-    Log.info (fun m -> m "now for real processing data");
+    Log.info (fun m -> m "now for real processing data (%d, lenv %d)" (List.length datas) (Cstruct.lenv datas));
     Lwt_list.iter_s (input t ~tcp ~udp ~default) datas >>= fun () ->
     process_data ~tcp ~udp ~default t
 
@@ -213,19 +215,6 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "failed to resolve %a: %s" Domain_name.pp name msg);
       None
 
-  let connect_tcp s (ip, port) =
-    match ip with
-    | Ipaddr.V6 _ ->
-      Log.err (fun m -> m "IPv6 not yet supported");
-      Lwt.return None
-    | Ipaddr.V4 ip' ->
-      TCP.create_connection (S.tcpv4 s) (ip', port) >|= function
-      | Ok flow -> Some flow
-      | Error tcp_err ->
-        Log.err (fun m -> m "failed to connect to %a:%d: %a"
-                    Ipaddr.V4.pp ip' port TCP.pp_error tcp_err);
-        None
-
   let read_flow flow =
     TCP.read flow >|= fun r ->
     match r with
@@ -234,9 +223,11 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Error e -> Log.err (fun m -> m "tcp read error %a" TCP.pp_error e); `Connection_failed
 
   let rec reader c flow =
-    Log.info (fun m -> m "reading flow");
+    let ip, port = TCP.dst flow in
+    Log.info (fun m -> m "reading flow %a:%d" Ipaddr.V4.pp ip port);
     read_flow flow >>= fun r ->
-    Log.info (fun m -> m "read flow");
+    Log.info (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.V4.pp ip port
+                 (match r with `Connection_failed -> 0 | `Data r -> Cstruct.len r | _ -> assert false));
     Lwt_mvar.put c r >>= fun () ->
     match r with
     | `Data _ -> reader c flow
@@ -244,31 +235,68 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "connection failed, terminating reader");
       Lwt.return_unit
 
+  let connect_tcp s conn (ip, port) =
+    match ip with
+    | Ipaddr.V6 _ ->
+      Log.err (fun m -> m "IPv6 not yet supported");
+      None
+    | Ipaddr.V4 ip' ->
+      Some
+        (TCP.create_connection (S.tcpv4 s) (ip', port) >|= function
+          | Ok flow ->
+            Log.warn (fun m -> m "connectiong to %a:%d established"
+                         Ipaddr.V4.pp ip' port);
+            conn.tcp_flow <- Some flow;
+            Lwt.async (fun () -> reader conn.event_mvar flow);
+            true
+          | Error tcp_err ->
+            Log.err (fun m -> m "failed to connect to %a:%d: %a"
+                        Ipaddr.V4.pp ip' port TCP.pp_error tcp_err);
+            false)
+
+  let conn_est = ref None
+
+  let cancel_connection_attempt () =
+    Log.warn (fun m -> m "cancelling connection attempt");
+    match !conn_est with
+    | None -> Log.warn (fun m -> m "cancelling connection attempt: nothing to cancel")
+    | Some t ->
+      Log.warn (fun m -> m "cancelling connection attempt: cancelling");
+      conn_est := None;
+      Lwt.cancel t
+
   let handle_action s conn = function
     | `Resolve name ->
-      (resolve_hostname s name >>= fun r ->
-       let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
-       Lwt_mvar.put conn.event_mvar ev)
+      cancel_connection_attempt ();
+      resolve_hostname s name >>= fun r ->
+      let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
+      Lwt_mvar.put conn.event_mvar ev
     | `Connect endp ->
-      (connect_tcp s endp >>= fun r ->
-       let ev = match r with
-         | None -> `Connection_failed
-         | Some flow ->
-           Lwt.async (fun () -> reader conn.event_mvar flow);
-           conn.tcp_flow <- Some flow;
-           `Connected
-       in
-       Log.debug (fun m -> m "here...");
-       Lwt_mvar.put conn.event_mvar ev)
+      cancel_connection_attempt ();
+      (match connect_tcp s conn endp with
+       | None -> Lwt.return `Connection_failed
+       | Some est ->
+         conn_est := Some est;
+         est >|= fun success ->
+         Log.warn (fun m -> m "successfully %B established connection to %a:%d"
+                      success Ipaddr.pp (fst endp) (snd endp));
+         conn_est := None;
+         if success then `Connected else `Connection_failed) >>= fun ev ->
+       Lwt_mvar.put conn.event_mvar ev
     | `Disconnect ->
       (* TODO not sure, should maybe signal successful close (to be able to initiate new connection) *)
       begin match conn.tcp_flow with
         | None -> Log.err (fun m -> m "cannot disconnect no flow"); Lwt.return_unit
-        | Some f -> conn.tcp_flow <- None ; TCP.close f
+        | Some f ->
+          let ip, port = TCP.dst f in
+          Log.err (fun m -> m "disconnecting flow %a:%d" Ipaddr.V4.pp ip port);
+          conn.tcp_flow <- None ; TCP.close f
       end
     | `Exit -> Lwt.fail_with "exit called"
     | `Payload data -> Lwt_mvar.put conn.data_mvar data
-    | `Established (ip, mtu) -> Lwt_mvar.put conn.est_mvar (ip, mtu)
+    | `Established (ip, mtu) ->
+      Log.warn (fun m -> m "action = established");
+      Lwt_mvar.put conn.est_mvar (ip, mtu)
 
   let rec event s conn =
     Log.info (fun m -> m "processing event");
@@ -323,7 +351,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         tick ()
       in
       Lwt.async tick;
-      handle_action s conn action >>= fun () ->
+      Lwt.async (fun () -> handle_action s conn action);
       Log.info (fun m -> m "waiting for established");
       Lwt_mvar.take est_mvar >|= fun (ip_config, mtu) ->
       Log.info (fun m -> m "now established %a (mtu %d)"
@@ -344,6 +372,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         established ()
       in
       Lwt.async established;
+      Log.warn (fun m -> m "returning from connect");
       Ok (t, process_data)
 
   let disconnect _ =

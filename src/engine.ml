@@ -146,7 +146,7 @@ let maybe_kex rng config tls =
 let maybe_kdf config transport key = function
   | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
-    Logs.debug (fun m -> m "received tls payload %a" Cstruct.hexdump_pp data);
+    Logs.debug (fun m -> m "received tls payload %d bytes" (Cstruct.len data));
     Packet.decode_tls_data data >>| fun tls_data ->
     let config' =
       match Config.client_merge_server_config config tls_data.options with
@@ -156,10 +156,7 @@ let maybe_kdf config transport key = function
                      tls_data.options msg);
         config
     in
-    (* TODO need to preserve master secret (for subsequent key updates)!? *)
     let keys = derive_keys transport key tls_data in
-    Logs.info (fun m -> m "received tls data %a@.key block %a"
-                  Packet.pp_tls_data tls_data Cstruct.hexdump_pp keys);
     (* TODO offsets and length depend on some configuration parameters, no? *)
     let my_key, their_key = Cstruct.sub keys 0 32, Cstruct.sub keys 128 32 in
     let keys_ctx = {

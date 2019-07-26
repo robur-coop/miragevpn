@@ -103,7 +103,7 @@ let pp_event ppf = function
   | `Connected -> Fmt.string ppf "connected"
   | `Connection_failed -> Fmt.string ppf "connection failed"
   | `Tick -> Fmt.string ppf "tick"
-  | `Data cs -> Fmt.pf ppf "data %d:@.%a" (Cstruct.len cs) Cstruct.hexdump_pp cs
+  | `Data cs -> Fmt.pf ppf "data %d bytes" (Cstruct.len cs)
 
 type action = [
   | `Resolve of [ `host ] Domain_name.t
