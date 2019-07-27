@@ -53,7 +53,7 @@ module Conf_map = struct
     | Auth_user_pass : (string * string) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
                                | `Ip of Ipaddr.t] option) option k
-    | Ca       : X509.t k
+    | Ca       : X509.Certificate.t k
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
@@ -102,9 +102,9 @@ module Conf_map = struct
     | Route_metric : [`Default | `Metric of int] k
     | Tls_auth : ([ `Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
-    | Tls_cert   : X509.t k
+    | Tls_cert   : X509.Certificate.t k
     | Tls_mode : [`Client | `Server] k
-    | Tls_key    : X509.private_key k
+    | Tls_key    : X509.Private_key.t k
     | Tls_timeout : int k
     | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k
     | Topology : [`Net30 | `P2p | `Subnet] k
@@ -156,21 +156,22 @@ module Conf_map = struct
            # Key fingerprint (sha256): %a\n%s</%s>"
         entry_typ
         entry_typ
-        (X509.common_name_to_string cert)
+        (match X509.Distinguished_name.(find CN (X509.Certificate.subject cert)) with
+         | None -> "NO common name" | Some x -> x)
         (Fmt.(pair ~sep:(unit" -> ") Ptime.(pp_human()) Ptime.(pp_human()))
-        ) (X509.validity cert)
-        Fmt.(list ~sep:(unit " ") string) (X509.hostnames cert)
-        Hex.pp (Hex.of_cstruct (X509.fingerprint `SHA256 cert))
-        Hex.pp (Hex.of_cstruct (X509.key_fingerprint ~hash:`SHA256
-                                  (X509.public_key cert)))
-        (X509.Encoding.Pem.Certificate.to_pem_cstruct1 cert
+        ) (X509.Certificate.validity cert)
+        Fmt.(list ~sep:(unit " ") Domain_name.pp)
+        (Domain_name.Set.elements (X509.Certificate.hostnames cert))
+        Hex.pp (Hex.of_cstruct (X509.Certificate.fingerprint `SHA256 cert))
+        Hex.pp (Hex.of_cstruct (X509.Public_key.fingerprint ~hash:`SHA256
+                                  (X509.Certificate.public_key cert)))
+        (X509.Certificate.encode_pem cert
          |> Cstruct.to_string)
         entry_typ
     in
     let pp_x509_private_key key =
       p() "key [inline]\n<key>\n%s</key>"
-        (X509.Encoding.Pem.Private_key.to_pem_cstruct1 key
-         |> Cstruct.to_string)
+        (X509.Private_key.encode_pem key |> Cstruct.to_string)
     in
     match k,v with
     | Auth_nocache, () -> p() "auto-nocache"
@@ -472,15 +473,9 @@ let a_option_with_single_path name kind =
 
 let a_x509_cert_payload ctx constructor str =
   Logs.debug (fun m -> m "x509 cert: %s" ctx);
-  match X509.Encoding.Pem.parse (Cstruct.of_string str) with
-  | ("CERTIFICATE", x)::[] ->
-    begin match X509.Encoding.parse x with
-      | Some cert -> Ok (constructor cert)
-      | None -> Error (Fmt.strf "%s: invalid certificate" ctx)
-    end
-  | exception Invalid_argument _ ->
-    Error (Fmt.strf "%s: Error parsing PEM container" ctx)
-  | _ -> Error (Fmt.strf "%s: PEM does not consist of a single certificate" ctx)
+  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  | Ok cert -> Ok (constructor cert)
+  | Error (`Msg msg) -> Error (Fmt.strf "%s: invalid certificate: %s" ctx msg)
 
 let a_ca = a_option_with_single_path "ca" `Ca
 let a_ca_payload str =
@@ -492,17 +487,9 @@ let a_cert_payload str =
 
 let a_key = a_option_with_single_path "key" `Tls_key
 let a_key_payload str =
-  let open Rresult in
-  a_x509_cert_payload "key"
-    (let open X509.Encoding in
-     fun x -> cs_of_cert x |>
-              Pem.Private_key.of_pem_cstruct
-    ) str >>= function
-  | k::tl ->
-    if tl <> [] then
-      Logs.warn (fun m -> m "extra keys found in x509 tls-key, will use first");
-    Ok (B(Tls_key,k))
-  | [] -> Error "no key found in x509 tls-key"
+  match X509.Private_key.decode_pem (Cstruct.of_string str) with
+  | Ok key -> Ok (B (Tls_key, key))
+  | Error (`Msg msg) -> Error ("no key found in x509 tls-key: " ^ msg)
 
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 

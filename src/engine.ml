@@ -202,8 +202,8 @@ let incoming_control config rng session channel now op data =
           Logs.warn (fun m -> m "not authenticating certificate (missing CA)");
           X509.Authenticator.null
         | Some ca ->
-          Logs.info (fun m -> m "authenticating using %s"
-                        (X509.common_name_to_string ca));
+          Logs.info (fun m -> m "authenticating with CA %a"
+                        X509.Certificate.pp ca);
           X509.Authenticator.chain_of_trust ~time:now [ ca ]
       in
       Tls.(Engine.client (Config.client ~authenticator ()))

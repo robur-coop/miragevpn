@@ -40,7 +40,7 @@ module Config : sig
     *)
 
 
-    | Ca       : X509.t k
+    | Ca       : X509.Certificate.t k
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
@@ -146,13 +146,13 @@ module Config : sig
 
     | Tls_auth : ([`Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
-    | Tls_cert     : X509.t k
+    | Tls_cert     : X509.Certificate.t k
 
     | Tls_mode   : [`Client | `Server] k
     (** Governed by the [tls-client] and [tls-server] directives.
         Indirectly also by [client]. *)
 
-    | Tls_key      : X509.private_key k
+    | Tls_key      : X509.Private_key.t k
     (** TODO Tls_key : X509.private_key * [`Incoming|`Outgoing] k
         --key-direction governs this for inlined files
         see comment in {!a_key} *)
