@@ -235,54 +235,51 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "connection failed, terminating reader");
       Lwt.return_unit
 
-  let connect_tcp s conn (ip, port) =
+  let connect_tcp sw s (ip, port) =
     match ip with
     | Ipaddr.V6 _ ->
       Log.err (fun m -> m "IPv6 not yet supported");
-      None
+      Lwt.return (sw, None)
     | Ipaddr.V4 ip' ->
-      Some
-        (TCP.create_connection (S.tcpv4 s) (ip', port) >|= function
-          | Ok flow ->
-            Log.warn (fun m -> m "connectiong to %a:%d established"
-                         Ipaddr.V4.pp ip' port);
-            conn.tcp_flow <- Some flow;
-            Lwt.async (fun () -> reader conn.event_mvar flow);
-            true
-          | Error tcp_err ->
-            Log.err (fun m -> m "failed to connect to %a:%d: %a"
-                        Ipaddr.V4.pp ip' port TCP.pp_error tcp_err);
-            false)
+      TCP.create_connection (S.tcpv4 s) (ip', port) >|= function
+      | Ok flow ->
+        Log.warn (fun m -> m "connectiong to %a:%d established"
+                     Ipaddr.V4.pp ip' port);
+        (sw, Some flow)
+      | Error tcp_err ->
+        Log.err (fun m -> m "failed to connect to %a:%d: %a"
+                    Ipaddr.V4.pp ip' port TCP.pp_error tcp_err);
+        (sw, None)
 
-  let conn_est = ref None
-
-  let cancel_connection_attempt () =
-    Log.warn (fun m -> m "cancelling connection attempt");
-    match !conn_est with
-    | None -> Log.warn (fun m -> m "cancelling connection attempt: nothing to cancel")
-    | Some t ->
-      Log.warn (fun m -> m "cancelling connection attempt: cancelling");
-      conn_est := None;
-      Lwt.cancel t
+  let conn_est = ref (Lwt_switch.create ())
 
   let handle_action s conn = function
     | `Resolve name ->
-      cancel_connection_attempt ();
+      Lwt_switch.turn_off !conn_est >>= fun () ->
       resolve_hostname s name >>= fun r ->
       let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
       Lwt_mvar.put conn.event_mvar ev
     | `Connect endp ->
-      cancel_connection_attempt ();
-      (match connect_tcp s conn endp with
-       | None -> Lwt.return `Connection_failed
-       | Some est ->
-         conn_est := Some est;
-         est >|= fun success ->
-         Log.warn (fun m -> m "successfully %B established connection to %a:%d"
-                      success Ipaddr.pp (fst endp) (snd endp));
-         conn_est := None;
-         if success then `Connected else `Connection_failed) >>= fun ev ->
-       Lwt_mvar.put conn.event_mvar ev
+      Lwt_switch.turn_off !conn_est >>= fun () ->
+      let sw = Lwt_switch.create () in
+      conn_est := sw;
+      connect_tcp sw s endp >>= fun (sw', r) ->
+      if Lwt_switch.is_on sw' then
+        let ev =
+          match r with
+          | None -> `Connection_failed
+          | Some flow ->
+            conn.tcp_flow <- Some flow;
+            Lwt.async (fun () -> reader conn.event_mvar flow);
+            Log.warn (fun m -> m "successfully established connection to %a:%d"
+                         Ipaddr.pp (fst endp) (snd endp));
+            `Connected
+        in
+        Lwt_mvar.put conn.event_mvar ev
+      else begin
+        Log.warn (fun m -> m "ignoring connection (cancelled by switch)");
+        match r with None -> Lwt.return_unit | Some f -> TCP.close f
+      end
     | `Disconnect ->
       (* TODO not sure, should maybe signal successful close (to be able to initiate new connection) *)
       begin match conn.tcp_flow with
