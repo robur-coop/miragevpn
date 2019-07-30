@@ -410,15 +410,6 @@ let maybe_ping state ts =
     | Error _ -> state, []
     | Ok (s', d) -> s', [ d ]
 
-let maybe_timeout state ts =
-  (* timeout fires if no data was received within the configured interval *)
-  let s_since_rcvd = Duration.to_sec (Int64.sub ts state.last_received) in
-  let timeout =
-    match Config.(get Ping_timeout state.config) with `Restart x | `Exit x -> x
-  in
-  if s_since_rcvd > timeout then (* TODO: actually restart / exit! *)
-    Logs.warn (fun m -> m "should restart or exit (last_received > timeout)")
-
 let maybe_init_rekey s now ts =
   (* if there's a rekey in process we don't do anything *)
   match s.state with
@@ -476,7 +467,6 @@ let maybe_drop_lame_duck state ts =
 
 let timer state now ts =
   let s', out = maybe_ping state ts in
-  maybe_timeout s' ts;
   let s'', out' = maybe_rekey s' now ts in
   let s''' = maybe_drop_lame_duck s'' ts in
   s''', out @ out'
@@ -642,6 +632,20 @@ let incoming state now ts buf =
   Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(unit "no") pp_action) act);
   s', out, act'
 
+let maybe_timeout state ts =
+  (* timeout fires if no data was received within the configured interval *)
+  let s_since_rcvd = Duration.to_sec (Int64.sub ts state.last_received) in
+  let timeout, action =
+    match Config.(get Ping_timeout state.config) with
+    | `Restart x -> x, `Restart
+    | `Exit x -> x, `Exit
+  in
+  if s_since_rcvd > timeout then begin
+    Logs.warn (fun m -> m "timeout!");
+    Some action
+  end else
+    None
+
 let handle t now ts ev =
   let remote, next_remote =
     let remotes = Config.get Remote t.config in
@@ -708,8 +712,15 @@ let handle t now ts ev =
     next_or_fail (-1) 0 >>| fun (state, action) ->
     { t with state }, [], Some action
   | _, `Tick ->
-    let t', outs = timer t now ts in
-    Ok (t', outs, None)
+    begin match maybe_timeout t ts with
+      | Some `Exit -> Ok (t, [], Some `Exit)
+      | Some `Restart ->
+        next_or_fail (-1) 0 >>| fun (state, action) ->
+        { t with state }, [], Some action
+      | None ->
+        let t', outs = timer t now ts in
+        Ok (t', outs, None)
+    end
   | _, `Data cs -> incoming t now ts cs
   | s, ev ->
     Rresult.R.error_msgf "unexpected event %a in state %a"
