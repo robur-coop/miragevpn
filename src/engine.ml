@@ -703,6 +703,10 @@ let handle t now ts ev =
       { t with state }, [], Some action
     end else
       Ok (t, [], None)
+  | _, `Connection_failed ->
+    (* re-start from scratch *)
+    next_or_fail (-1) 0 >>| fun (state, action) ->
+    { t with state }, [], Some action
   | _, `Tick ->
     let t', outs = timer t now ts in
     Ok (t', outs, None)

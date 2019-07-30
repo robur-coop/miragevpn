@@ -220,7 +220,8 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     match r with
     | Ok `Data b -> `Data b
     | Ok `Eof -> Log.err (fun m -> m "eof while reading"); `Connection_failed
-    | Error e -> Log.err (fun m -> m "tcp read error %a" TCP.pp_error e); `Connection_failed
+    | Error e ->
+      Log.err (fun m -> m "tcp read error %a" TCP.pp_error e); `Connection_failed
 
   let rec reader c flow =
     let ip, port = TCP.dst flow in
