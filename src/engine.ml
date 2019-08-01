@@ -43,9 +43,18 @@ let hmac_and_out key hmac_key header p =
 let client config ts rng =
   match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
-  | Some (_TODO_direction, _, my_hmac, _, _) ->
-    let my_hmac = Cstruct.sub my_hmac 0 Packet.hmac_len in
-    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac:my_hmac () in
+  | Some (direction, _, hmac1, _, hmac2) ->
+    let my_hmac, their_hmac =
+      let a, b =
+        match direction with
+        | None -> hmac1, hmac1
+        | Some `Incoming -> hmac2, hmac1
+        | Some `Outgoing -> hmac1, hmac2
+      in
+      let s cs = Cstruct.sub cs 0 Packet.hmac_len in
+      s a, s b
+    in
+    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
     let channel = new_channel 0 ts in
     (match Config.get Remote config with
      | (`Domain name, _) :: _ -> Ok (`Resolve name, Resolving (0, ts, 0))
@@ -681,8 +690,9 @@ let handle t now ts ev =
     let timestamp = ptime_to_ts_exn now in
     let my_session_id = Randomconv.int64 t.rng
     and my_hmac = t.session.my_hmac
+    and their_hmac = t.session.their_hmac
     in
-    let session = init_session ~my_session_id ~my_hmac ~their_hmac:my_hmac ()
+    let session = init_session ~my_session_id ~my_hmac ~their_hmac ()
     and channel = new_channel 0 ts
     in
     let session, trans, hdr = header session channel.transport timestamp in
