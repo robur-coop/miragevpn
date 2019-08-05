@@ -419,6 +419,15 @@ let maybe_ping state ts =
     | Error _ -> state, []
     | Ok (s', d) -> s', [ d ]
 
+let init_channel how session keyid now ts =
+  let channel = new_channel keyid ts in
+  let timestamp = ptime_to_ts_exn now in
+  let session, transport, header = header session channel.transport timestamp in
+  let transport, m_id = next_message_id transport in
+  let p = `Control (how, (header, m_id, Cstruct.empty)) in
+  let out = hmac_and_out channel.keyid session.my_hmac header p in
+  session, { channel with transport }, out
+
 let maybe_init_rekey s now ts =
   (* if there's a rekey in process we don't do anything *)
   match s.state with
@@ -428,13 +437,9 @@ let maybe_init_rekey s now ts =
       let n = succ s.channel.keyid mod 8 in
       if n = 0 then 1 else n (* i have no clue why 0 is special... *)
     in
-    let channel = new_channel keyid ts in
-    let timestamp = ptime_to_ts_exn now in
-    let session, transport, header = header s.session channel.transport timestamp in
-    let transport, m_id = next_message_id transport in
-    let p = `Control (Packet.Soft_reset, (header, m_id, Cstruct.empty)) in
-    let out = hmac_and_out channel.keyid session.my_hmac header p in
-    let channel = { channel with transport } in
+    let session, channel, out =
+      init_channel Packet.Soft_reset s.session keyid now ts
+    in
     let state = Rekeying channel in
     { s with state ; session }, [ out ]
   | _ -> s, []
@@ -683,19 +688,14 @@ let handle t now ts ev =
     next_or_fail idx retry >>| fun (state, action) ->
     { t with state }, [], Some action
   | Connecting (idx, _, _), `Connected ->
-    let timestamp = ptime_to_ts_exn now in
     let my_session_id = Randomconv.int64 t.rng
     and my_hmac = t.session.my_hmac
     and their_hmac = t.session.their_hmac
     in
-    let session = init_session ~my_session_id ~my_hmac ~their_hmac ()
-    and channel = new_channel 0 ts
+    let session = init_session ~my_session_id ~my_hmac ~their_hmac () in
+    let session, channel, out =
+      init_channel Packet.Hard_reset_client session 0 now ts
     in
-    let session, trans, hdr = header session channel.transport timestamp in
-    let transport, m_id = next_message_id trans in
-    let p = `Control (Packet.Hard_reset_client, (hdr, m_id, Cstruct.empty)) in
-    let out = hmac_and_out channel.keyid my_hmac hdr p in
-    let channel = { channel with transport } in
     let state = Handshaking (idx, ts) in
     Ok ({ t with state ; channel ; session }, [ out ], None)
   | Connecting (idx, _, retry), `Connection_failed ->
