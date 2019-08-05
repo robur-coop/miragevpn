@@ -211,11 +211,13 @@ let to_be_signed key p =
   | `Control (_, c) -> to_be_signed_control op c
   | `Data _ -> assert false
 
-type t = int * [
+type pkt = [
   | `Ack of header
   | `Control of operation * control
   | `Data of Cstruct.t
 ]
+
+type t = int * pkt
 
 let header = function
   | `Ack hdr -> hdr

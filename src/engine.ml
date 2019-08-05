@@ -35,8 +35,9 @@ let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
-let hmac_and_out key hmac_key header p =
+let hmac_and_out key hmac_key (p : Packet.pkt) =
   let hmac = compute_hmac key p hmac_key in
+  let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode (key, p')
 
@@ -340,14 +341,6 @@ let pp_error ppf = function
   | `Tls tls_e -> pp_tls_error ppf tls_e
   | `Msg msg -> Fmt.string ppf msg
 
-let wrap_openvpn session transport ts out =
-  let session, transport, header = header session transport ts in
-  if Cstruct.equal Cstruct.empty out then
-    session, transport, (header, `Ack header)
-  else
-    let transport, m_id = next_message_id transport in
-    session, transport, (header, `Control (Packet.Control, (header, m_id, out)))
-
 let pad block_size cs =
   let pad_len =
     let l = (Cstruct.len cs) mod block_size in
@@ -425,7 +418,7 @@ let init_channel how session keyid now ts =
   let session, transport, header = header session channel.transport timestamp in
   let transport, m_id = next_message_id transport in
   let p = `Control (how, (header, m_id, Cstruct.empty)) in
-  let out = hmac_and_out channel.keyid session.my_hmac header p in
+  let out = hmac_and_out channel.keyid session.my_hmac p in
   session, { channel with transport }, out
 
 let maybe_init_rekey s now ts =
@@ -529,9 +522,16 @@ let wrap_hmac_control now session key transport outs =
   let session, transport, outs =
     List.fold_left (fun (session, transport, acc) out ->
         (* add the OpenVPN header *)
-        let session, transport, (hdr, p) = wrap_openvpn session transport ts out in
+        let session, transport, header = header session transport ts in
+        let transport, p =
+          if Cstruct.equal Cstruct.empty out then
+            transport, `Ack header
+          else
+            let transport, m_id = next_message_id transport in
+            transport, `Control (Packet.Control, (header, m_id, out))
+        in
         (* hmac each outgoing frame and encode *)
-        let out = hmac_and_out key session.my_hmac hdr p in
+        let out = hmac_and_out key session.my_hmac p in
         session, transport, out :: acc)
       (session, transport, []) outs
   in
