@@ -23,4 +23,4 @@ let openvpn_handler =
     "Unikernel.Main" (random @-> mclock @-> pclock @-> time @-> stackv4 @-> kv_ro @-> job)
 
 let () =
-  register "client" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4 default_network $ data ]
+  register "ovpn-client" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4 default_network $ data ]

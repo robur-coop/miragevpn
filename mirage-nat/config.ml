@@ -30,4 +30,4 @@ let openvpn_handler =
     (random @-> mclock @-> pclock @-> time @-> stackv4 @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> kv_ro @-> job)
 
 let () =
-  register "client" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4 default_network $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ data ]
+  register "ovpn-nat" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4 default_network $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ data ]
