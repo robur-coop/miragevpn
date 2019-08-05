@@ -81,8 +81,9 @@ module Conf_map = struct
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (* see socket.c:static const struct proto_names proto_names[] *)
 
-    | Remote : ([`Domain of [ `host ] Domain_name.t
-                | `Ip of Ipaddr.t] * int) list k
+    | Remote : ([`Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6] option
+                | `Ip of Ipaddr.t] * int * [`Udp | `Tcp]) list k
+
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
     | Renegotiate_bytes : int k
@@ -234,12 +235,23 @@ module Conf_map = struct
     | Pull, () -> p() "pull"
     | Remote, lst ->
       Fmt.(list ~sep @@
-           (fun ppf -> pf ppf "remote %a"@@
-             pair ~sep:(unit " ")
-               (fun ppf -> function
-                  | `Domain name -> Domain_name.pp ppf name
-                  | `Ip ip -> Ipaddr.pp ppf ip)
-               int (*port*))) ppf lst
+           (fun ppf (endp, port, proto) ->
+              let pp_endpoint, ip_proto =
+                match endp with
+                | `Domain (name, prot) ->
+                  (fun ppf () -> Domain_name.pp ppf name),
+                  (match prot with
+                     Some `Ipv4 -> "4" | Some `Ipv6 -> "6" | None -> "")
+                | `Ip ip ->
+                  (fun ppf () -> Ipaddr.pp ppf ip),
+                  (match ip with V4 _ -> "4" | V6 _ -> "6")
+              in
+              pf ppf "remote %a %d %s%s"
+                pp_endpoint ()
+                port
+                (match proto with `Udp -> "udp" | `Tcp -> "tcp")
+                ip_proto
+           )) ppf lst
     | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
     | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
     | Remote_random, () -> p() "remote-random"
@@ -323,6 +335,7 @@ module Defaults = struct
     |> add Auth_retry `None
     |> add Connect_timeout 120
     |> add Connect_retry_max `Unlimited
+    |> add Proto (None, `Udp)
 end
 
 open Conf_map
@@ -330,9 +343,12 @@ open Conf_map
 type line = [
   | `Entries of b list
   | `Entry of b
-  | `Blank
+  | `Comment of string
+  | `Ignored of string
   | `Inline of string * string
   | `Keepalive of int * int (* interval * timeout *)
+  | `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4] option
+               | `Ip of Ipaddr.t] * int * [`Udp | `Tcp] option
   | `Rport of int (* remote port number used by --remote option *)
   | `Proto_force of [ `Tcp | `Udp ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
@@ -342,10 +358,12 @@ type line = [
 let pp_line ppf (x : line) =
   let v = Fmt.pf in
   (match x with
+   | `Remote _ -> v ppf "remote TODO"
    | `Entries bs -> v ppf "entries: @[<v>%a@]"
                      Fmt.(list ~sep:(unit"@,") pp_b) bs
    | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b
-   | `Blank -> v ppf "#"
+   | `Comment s -> v ppf "# %s" s
+   | `Ignored s -> v ppf "# IGNORED: %s" s
    | `Keepalive (interval, timeout) -> v ppf "keepalive %d %d" interval timeout
    | `Rport d -> v ppf "rport %d" d
    | `Proto_force `Tcp -> v ppf "proto-force tcp"
@@ -766,15 +784,39 @@ let a_ifconfig =
   a_whitespace *> a_ip >>| fun remote ->
   `Entry (B(Ifconfig, (local,remote)))
 
-(* TODO finish "remote [port] [proto]" by adding proto (tcp/udp/tcp4/tcp6/udp4/udp6)
+(* TODO
    what are the semantics if proto and remote proto is provided? *)
-let a_remote =
-  let remote a b = B (Remote, [a,b]) in
-  lift2 remote
-    (string "remote" *> a_whitespace *> a_domain_or_ip)
-    (option 1194 (a_whitespace *> a_number))
+let a_remote
+  : [>  `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4] option
+                   | `Ip of Ipaddr.t] * int * [`Udp | `Tcp] option] A.t =
+  (string "remote" *> a_whitespace *> a_domain_or_ip) >>= fun host_or_ip ->
+  (option 1194 (a_whitespace *> a_number) >>= fun port ->
+   ((option None (a_whitespace *> a_single_param >>| fun p -> Some p))
+    >>= function
+    | Some "udp" -> return (Some `Udp, None)
+    | Some "udp4" -> return (Some `Udp, Some `Ipv4)
+    | Some "udp6" -> return (Some `Udp, Some `Ipv6)
+    | Some "tcp" -> return (Some `Tcp, None)
+    | Some "tcp4" -> return (Some `Tcp, Some `Ipv4)
+    | Some "tcp6" -> return (Some `Tcp, Some `Ipv6)
+    | Some x -> fail (Fmt.strf "remote: unknown protocol designation %S" x)
+    | None -> return (None, None)
+   ) >>| fun protos -> port, protos
+  ) >>= fun (port, protos) ->
+  begin match host_or_ip, protos with
+    | `Domain host, (dp, ipv) ->
+      return @@ `Remote (`Domain (host, ipv), port, dp)
+    | `Ip (Ipaddr.V4 _ as i), (dp, (None | Some `Ipv4)) ->
+      return @@ `Remote (`Ip i, port, dp)
+    | `Ip (Ipaddr.V6 _ as i), (dp, (None | Some `Ipv6)) ->
+      return @@ `Remote (`Ip i, port, dp)
+    | `Ip ip, (_, Some (`Ipv4 | `Ipv6 as v)) ->
+      fail (Fmt.strf "remote: ip addr %a is required to be %s."
+              Ipaddr.pp ip (match v with `Ipv4 -> "IPv4" | `Ipv6 -> "IPv6"))
+  end
 
-let a_remote_entry = a_remote >>| fun b -> `Entry b
+let a_remote_entry =
+  a_remote
 
 let a_network_or_gateway =
   choice [ (a_ip >>| fun ip -> `Ip ip) ;
@@ -845,25 +887,24 @@ let a_dhcp_option =
   >>| fun b -> `Entry b
 
 let a_not_implemented =
-  (choice
-     [ string "sndbuf" ;
-       string "rcvbuf" ;
-       string "inactive" ;
-       string "ip-win32" ;
-       string "socket-flags" ;
-       string "remote-cert-ku" ;
-       string "rport" ;
-       string "engine" ;
-       (* TODO: *)
-       string "dhcp-option";
-       string "redirect-gateway" ;
-       string "up" ;
-       string "dh" ;
-     ] <* a_whitespace >>= fun key ->
-   take_while (function '\n' -> false | _ -> true) >>| fun rest ->
-   Logs.warn (fun m ->m "IGNORING %S %S" key rest)
-  ) *> A.many_till (skip (fun _ -> true)) end_of_line
-  *> (*end_of_line *>*) return `Blank
+  choice
+    [ string "sndbuf" ;
+      string "rcvbuf" ;
+      string "inactive" ;
+      string "ip-win32" ;
+      string "socket-flags" ;
+      string "remote-cert-ku" ;
+      string "rport" ;
+      string "engine" ;
+      (* TODO: *)
+      string "dhcp-option";
+      string "redirect-gateway" ;
+      string "up" ;
+      string "dh" ;
+    ] <* a_whitespace >>= fun key ->
+  take_while (function '\n' -> false | _ -> true) >>| fun rest ->
+  Logs.warn (fun m ->m "IGNORING %S %S" key rest) ;
+  `Ignored (key ^ " " ^ rest)
 
 let a_config_entry : line A.t =
   a_ign_whitespace_no_comment *>
@@ -895,7 +936,7 @@ let a_config_entry : line A.t =
     a_tun_mtu ;
     a_cipher ;
     a_replay_window ;
-    a_remote_entry ;
+    a_remote ;
     a_reneg_bytes ;
     a_reneg_pkts ;
     a_reneg_sec ;
@@ -915,7 +956,7 @@ let a_config_entry : line A.t =
     a_route_gateway ;
     a_topology ;
     a_not_implemented ;
-    a_whitespace *> return `Blank ;
+    a_whitespace *> return (`Ignored "") ;
   ]
 
 
@@ -956,7 +997,11 @@ let parse_inline str = let open Rresult in
        explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
        link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
        proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
-    parse_string a_remote str
+    parse_string a_remote str >>= fun (`Remote (host, port, proto)) ->
+    let proto = match proto with None -> `Udp
+                               (* TODO consult `Proto and `Proto_force *)
+                               | Some x -> x in
+    Ok (B(Remote, [host, port, proto]))
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
@@ -1117,7 +1162,8 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               | _ -> false) tl then [hd]
           else begin Logs.warn (fun m ->
               m "Inline block %S seems to be redundant" fname); [] end
-        | `Blank -> loop acc tl
+        | `Ignored _ -> loop acc tl
+        | `Comment _ -> loop acc tl
         | `Rport _ -> Error "TODO rport"
         | `Entry b -> retb b
         | `Entries lst -> multib lst
@@ -1155,6 +1201,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           Logs.warn (fun m -> m"ignoring unimplemented option: %a"
                         pp_line line) ;
           loop acc tl
+        | `Remote _ -> loop acc tl (* TODO *)
       end
     | [] -> Ok (`Done acc : parser_state)
   in
