@@ -428,10 +428,7 @@ let maybe_init_rekey s now ts =
       let n = succ s.channel.keyid mod 8 in
       if n = 0 then 1 else n (* i have no clue why 0 is special... *)
     in
-    let channel = {
-      keyid ; channel_st = Expect_server_reset ; transport = init_transport ;
-      started = ts ; bytes = 0 ; packets = 0
-    } in
+    let channel = new_channel keyid ts in
     let timestamp = ptime_to_ts_exn now in
     let session, transport, header = header s.session channel.transport timestamp in
     let transport, m_id = next_message_id transport in
@@ -449,8 +446,7 @@ let maybe_rekey state now ts =
      - channel has transferred packets >= reneg_packets
      crucial to note: we only check the active channel!
       should we insert some fuzzyness since a rekey takes time, so that the
-      deadlines are always met?
-  *)
+      deadlines are always met? *)
   let should_rekey =
     match
       Config.(find Renegotiate_seconds state.config,
