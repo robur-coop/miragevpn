@@ -1,7 +1,7 @@
 open Mirage
 
 let data_key = Key.(value @@ kv_ro ~group:"data" ())
-let data = generic_kv_ro ~key:data_key "config"
+let data = generic_kv_ro ~key:data_key "configuration"
 
 let private_netif = netif ~group:"private" "private"
 let private_ethernet = etif private_netif
