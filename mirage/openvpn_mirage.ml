@@ -40,7 +40,7 @@ let src = Logs.Src.create "openvpn.mirage" ~doc:"OpenVPN MirageOS layer"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time_lwt.S) (S : Mirage_stack_lwt.V4) = struct
-  module DNS = Dns_mirage_client.Make(S)
+  module DNS = Dns_client_mirage.Make(R)(S)
   module TCP = S.TCPV4
 
   type conn = {
