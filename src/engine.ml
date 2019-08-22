@@ -790,4 +790,4 @@ let handle t now ts ev =
   | _, `Data cs -> incoming t now ts cs
   | s, ev ->
     Rresult.R.error_msgf "unexpected event %a in state %a"
-      pp_event ev pp_state s
+      pp_event ev pp_client_state s

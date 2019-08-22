@@ -172,14 +172,14 @@ let pp_session ppf t =
     t.my_session_id t.my_packet_id t.their_session_id
     t.their_packet_id
 
-type state =
+type client_state =
   | Resolving of int * int64 * int (* index [into remote], timestamp, retry count *)
   | Connecting of int * int64 * int (* index [into remote], ts, retry count *)
   | Handshaking of int * int64 (* index into [remote], ts *)
   | Ready
   | Rekeying of channel
 
-let pp_state ppf = function
+let pp_client_state ppf = function
   | Resolving (_idx, _ts, _) -> Fmt.string ppf "resolving"
   | Connecting (_idx, _ts, retry) -> Fmt.pf ppf "connecting (retry %d)" retry
   | Handshaking (_idx, _ts) -> Fmt.string ppf "handshaking"
@@ -191,7 +191,7 @@ type t = {
   config : Config.t ;
   linger : Cstruct.t ;
   rng : int -> Cstruct.t ;
-  state : state ;
+  state : client_state ;
   session : session ;
   channel : channel ;
   lame_duck : (channel * int64) option ;
@@ -204,7 +204,7 @@ let pp ppf t =
   Fmt.pf ppf "@[linger %d state %a session %a@.active %a@.lame duck %a@.\
               last-rcvd %Lu last-sent %Lu@]"
     (Cstruct.len t.linger)
-    pp_state t.state
+    pp_client_state t.state
     pp_session t.session
     pp_channel t.channel
     Fmt.(option ~none:(unit "no") pp_channel) lame_duck
