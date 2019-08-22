@@ -279,11 +279,15 @@ let pp_tls_data ppf t =
 
 let key_method = 0x02
 
-(* this is client only (since there's a pre_master!) *)
 let encode_tls_data t =
   let prefix = Cstruct.create 5 in
   Cstruct.set_uint8 prefix 4 key_method;
-  let key_source = Cstruct.concat [ t.pre_master ; t.random1 ; t.random2 ] in
+  let key_source =
+    if Cstruct.(equal empty t.pre_master) then
+      Cstruct.concat [ t.random1 ; t.random2 ]
+    else
+      Cstruct.concat [ t.pre_master ; t.random1 ; t.random2 ]
+  in
   let opt_len = Cstruct.create 2 in
   let null = Cstruct.create 1 in
   Cstruct.BE.set_uint16 opt_len 0 (succ (String.length t.options));
@@ -304,18 +308,26 @@ let maybe_string buf off = function
   | x -> Cstruct.(to_string (sub buf off (pred x)))
 
 (* this is client only (parsing a server tls_data -- there's no pre_master!) *)
-let decode_tls_data buf =
-  let opt_start = 7 + 64 in
+let decode_tls_data ?(with_premaster = false) buf =
+  let opt_start =
+    let base = 7 + 64 in
+    if with_premaster then 48 + base else base
+  in
   guard (Cstruct.len buf >= opt_start) `Partial >>= fun () ->
   guard (Cstruct.BE.get_uint32 buf 0 = 0l)
     (`Malformed "tls data must start with 32 bit 0") >>= fun () ->
   guard (Cstruct.get_uint8 buf 4 = key_method)
     (`Malformed "tls data key_method wrong") >>= fun () ->
-  (* skip pre_master *)
-  let random1 = Cstruct.sub buf 5 32
-  and random2 = Cstruct.sub buf (32 + 5) 32
+  let pre_master, off =
+    if with_premaster then
+      Cstruct.sub buf 5 48, 5 + 48
+    else
+      Cstruct.empty, 5
   in
-  let opt_len = Cstruct.BE.get_uint16 buf (64 + 5) in
+  let random1 = Cstruct.sub buf off 32
+  and random2 = Cstruct.sub buf (32 + off) 32
+  in
+  let opt_len = Cstruct.BE.get_uint16 buf (64 + off) in
   guard (Cstruct.len buf >= opt_start + opt_len) `Partial >>= fun () ->
   let options = maybe_string buf opt_start opt_len in
   guard (Cstruct.get_uint8 buf (pred (opt_start + opt_len)) = 0)
@@ -339,8 +351,15 @@ let decode_tls_data buf =
         (`Malformed "tls data password not null-terminated") >>| fun () ->
       (* for some reason there may be some slack here... *)
       if Cstruct.len buf > end_of_data then
-        Logs.warn (fun m -> m "slack at end of tls_data %a"
-                      Cstruct.hexdump_pp (Cstruct.shift buf end_of_data));
+        let data = Cstruct.shift buf end_of_data in
+        Logs.warn (fun m -> m "slack at end of tls_data %s (p is %s)@.%a"
+                      (Cstruct.to_string data) p Cstruct.hexdump_pp data)
+      else
+        () ;
       match u, p with "", "" -> None | _ -> Some (u, p)
   end >>| fun user_pass ->
-  { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
+  { pre_master ; random1 ; random2 ; options ; user_pass }
+
+let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
+
+let push_reply = Cstruct.of_string "PUSH_REPLY"

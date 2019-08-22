@@ -39,6 +39,177 @@ open Lwt.Infix
 let src = Logs.Src.create "openvpn.mirage" ~doc:"OpenVPN MirageOS layer"
 module Log = (val Logs.src_log src : Logs.LOG)
 
+(* NB for the internal/VPN thingy, a stack is needed that is not backed by an
+   ethernet interface or similar, but only virtual (i.e. using 10.8.0.1,
+   send/recv operations local only) *)
+module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
+  module TCP = S.TCPV4
+
+  module IPM = Map.Make(Ipaddr.V4)
+
+  type t = {
+    server : Openvpn.server ;
+    ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t ;
+    mutable connections : (TCP.flow * Openvpn.t ref) IPM.t ;
+  }
+
+  let now () = Ptime.v (P.now_d_ps ())
+
+  let pp_dst ppf (dst, port) =
+    Fmt.pf ppf "%a:%u" Ipaddr.V4.pp dst port
+
+  let write t dst cs =
+    match IPM.find_opt dst t.connections with
+    | None -> Log.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst); Lwt.return_unit
+    | Some (flow, state) ->
+      match Openvpn.outgoing !state (M.elapsed_ns ()) cs with
+      | Error `Not_ready ->
+        Log.err (fun m -> m "error not_ready while writing to %a" Ipaddr.V4.pp dst);
+        Lwt.return_unit
+      | Ok (state', enc) ->
+        (* TODO fragmentation!? *)
+        state := state';
+        TCP.writev flow [ enc ] >|= function
+        | Error e ->
+          Log.err (fun m -> m "%a tcp write failed %a"
+                      Ipaddr.V4.pp dst TCP.pp_write_error e);
+          t.connections <- IPM.remove dst t.connections;
+        | Ok () -> ()
+
+  let callback t flow =
+    let is_not_taken ip = not (IPM.mem ip t.connections) in
+    let client_state = ref (Openvpn.new_connection t.server (M.elapsed_ns ())) in
+    let dst = TCP.dst flow in
+    Log.info (fun m -> m "%a new connection" pp_dst dst);
+    let rec read ?ip f =
+      let rm () =
+        match ip with
+        | None -> ()
+        | Some ip ->
+          Log.info (fun m -> m "%a removing ip %a from connections"
+                       pp_dst dst Ipaddr.V4.pp ip);
+          t.connections <- IPM.remove ip t.connections
+      in
+      TCP.read f >>= function
+      | Error e ->
+        Log.err (fun m -> m "%a error %a while reading"
+                    pp_dst dst TCP.pp_error e);
+        rm ();
+        Lwt.return_unit
+      | Ok `Eof ->
+        Log.warn (fun m -> m "%a eof" pp_dst dst);
+        rm ();
+        Lwt.return_unit
+      | Ok `Data cs ->
+        match
+          Openvpn.handle !client_state (now ()) (M.elapsed_ns ()) ~is_not_taken (`Data cs)
+        with
+        | Error msg ->
+          Log.err (fun m -> m "%a internal openvpn error %a"
+                      pp_dst dst Openvpn.pp_error msg);
+          rm ();
+          Lwt.return_unit
+        | Ok (s', out, action) ->
+          client_state := s';
+          let ip =
+            match action with
+            | Some `Established  ({ Openvpn.ip ; _ }, _) ->
+              Log.info (fun m -> m "%a insert ip %a, registering flow"
+                           pp_dst dst Ipaddr.V4.pp ip);
+              t.connections <- IPM.add ip (f, client_state) t.connections;
+              `Continue (Some ip)
+            | Some `Exit ->
+              rm ();
+              Log.info (fun m -> m "%a exiting" pp_dst dst);
+              `Stop
+            | Some `Payload datas ->
+              List.iter (fun data ->
+                  begin match Ipv4_packet.Unmarshal.of_cstruct data with
+                    | Error e ->
+                      Log.warn (fun m -> m "%a received payload (error %s) %a"
+                                   pp_dst dst e Cstruct.hexdump_pp data)
+                    | Ok (ip, payload) when
+                        ip.Ipv4_packet.proto = Ipv4_packet.Marshal.protocol_to_int `ICMP &&
+                        Ipaddr.V4.compare ip.Ipv4_packet.dst (fst t.ip) = 0 ->
+                      (* also check for icmp echo request! *)
+                      begin match Icmpv4_packet.Unmarshal.of_cstruct payload with
+                        | Ok (icmp, payload) ->
+                          let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
+                          and ip' = { ip with src = ip.dst ; dst = ip.src }
+                          in
+                          let data = Cstruct.append (Icmpv4_packet.Marshal.make_cstruct ~payload reply) payload in
+                          let hdr = Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.len data) ip' in
+                          Lwt.async (fun () -> write t ip.src (Cstruct.append hdr data))
+                        | Error e ->
+                          Log.warn (fun m -> m "ignoring icmp frame from, decoding error %s" e)
+                      end
+                    | Ok (ip, _) ->
+                      Log.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip)
+                  end) datas ;
+              `Continue ip
+            | Some a ->
+              Log.warn (fun m -> m "%a ignoring action %a"
+                           pp_dst dst Openvpn.pp_action a);
+              `Continue ip
+            | None -> `Continue ip
+          in
+          TCP.writev f out >>= function
+          | Error e ->
+            Log.err (fun m -> m "%a tcp write failed %a"
+                        pp_dst dst TCP.pp_write_error e);
+            rm ();
+            Lwt.return_unit
+          | Ok () ->
+            match ip with
+            | `Stop -> Lwt.return_unit
+            | `Continue ip -> read ?ip f
+    in
+    read flow
+
+  let rec timer server () =
+    (* foreach connection, call handle `Tick and follow instructions! *)
+    IPM.fold (fun k (flow, t) acc ->
+        acc >>= fun acc ->
+        match Openvpn.handle !t (now ()) (M.elapsed_ns ()) `Tick with
+        | Error e ->
+          Log.err (fun m -> m "error in timer %a" Openvpn.pp_error e);
+          Lwt.return acc
+        | Ok (_, _, Some `Exit) ->
+          Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
+          Lwt.return acc
+        | Ok (t', out, act) ->
+          (* TODO anything to do with "_act"? (apart from exit) *)
+          (match act with
+           | None -> ()
+           | Some a -> Log.warn (fun m -> m "in timer, ignoring action %a"
+                                    Openvpn.pp_action a));
+          t := t';
+          TCP.writev flow out >|= function
+          | Error e ->
+            Log.err (fun m -> m "%a TCP write failed %a"
+                        Ipaddr.V4.pp k TCP.pp_write_error e);
+            acc
+          | Ok () -> IPM.add k (flow, t) acc)
+      server.connections (Lwt.return IPM.empty) >>= fun connections ->
+    server.connections <- connections;
+    T.sleep_ns (Duration.of_sec 1) >>= fun () ->
+    timer server ()
+
+  let connect config stack =
+    match Openvpn.server config R.generate with
+    | Error `Msg msg ->
+      Log.err (fun m -> m "server construction failed %s" msg);
+      assert false
+    | Ok (server, ip, port) ->
+      Log.info (fun m -> m "openvpn server listening on port %d, using %a/%d"
+                   port Ipaddr.V4.pp (fst ip) (Ipaddr.V4.Prefix.bits (snd ip)));
+      let server = { server ; ip ; connections = IPM.empty } in
+      S.listen_tcpv4 stack ~port (callback server);
+      Lwt.async (timer server);
+      server
+
+end
+
 module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
   module DNS = Dns_client_mirage.Make(R)(M)(S)
   module TCP = S.TCPV4
