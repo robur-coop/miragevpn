@@ -21,6 +21,7 @@ module Config : sig
     *)
 
     | Auth_user_pass : (string * string) k (** username, password*)
+    | Auth_user_pass_verify : (string * [`Via_env | `Via_file]) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
                                | `Ip of Ipaddr.t] option) option k
     (** local [port],[host] to bind to.
@@ -107,6 +108,7 @@ module Config : sig
     *)
 
     | Ping_timeout : [`Restart of int | `Exit of int] k
+    | Port : int k
     | Pull     : flag k
 
     | Proto    : ([`Ipv6 | `Ipv4] option
@@ -148,7 +150,9 @@ module Config : sig
     | Route_metric : [`Default | `Metric of int] k
     (** Default metric for [Route _] directives *)
 
+    | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Server : (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) k
 
     | Tls_auth : ([`Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
@@ -188,6 +192,8 @@ module Config : sig
 
     | Verb : int k
 
+    | Verify_client_cert : [ `None | `Optional | `Required ] k
+
   include Gmap.S with type 'a key = 'a k
 
   val pp : Format.formatter -> t -> unit
@@ -218,6 +224,9 @@ module Config : sig
       conflict with [client_config].
       TODO return conflicting subset as error
   *)
+
+  val parse : string_of_file:(string -> (string, R.msg) result) ->
+    string -> (t, [> R.msg]) result
 
   val parse_client : string_of_file:(string -> (string, R.msg) result) ->
     string -> (t, [> R.msg]) result
