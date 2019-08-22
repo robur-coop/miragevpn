@@ -81,7 +81,7 @@ module Conf_map = struct
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (* see socket.c:static const struct proto_names proto_names[] *)
 
-    | Remote : ([`Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6] option
+    | Remote : ([`Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
                 | `Ip of Ipaddr.t] * int * [`Udp | `Tcp]) list k
 
     | Remote_cert_tls : [`Server | `Client] k
@@ -241,7 +241,7 @@ module Conf_map = struct
                 | `Domain (name, prot) ->
                   (fun ppf () -> Domain_name.pp ppf name),
                   (match prot with
-                     Some `Ipv4 -> "4" | Some `Ipv6 -> "6" | None -> "")
+                     `Ipv4 -> "4" | `Ipv6 -> "6" | `Any -> "")
                 | `Ip ip ->
                   (fun ppf () -> Ipaddr.pp ppf ip),
                   (match ip with V4 _ -> "4" | V6 _ -> "6")
@@ -347,7 +347,7 @@ type line = [
   | `Ignored of string
   | `Inline of string * string
   | `Keepalive of int * int (* interval * timeout *)
-  | `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4] option
+  | `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
                | `Ip of Ipaddr.t] * int * [`Udp | `Tcp] option
   | `Rport of int (* remote port number used by --remote option *)
   | `Proto_force of [ `Tcp | `Udp ]
@@ -787,30 +787,30 @@ let a_ifconfig =
 (* TODO
    what are the semantics if proto and remote proto is provided? *)
 let a_remote
-  : [>  `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4] option
+  : [>  `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
                    | `Ip of Ipaddr.t] * int * [`Udp | `Tcp] option] A.t =
   (string "remote" *> a_whitespace *> a_domain_or_ip) >>= fun host_or_ip ->
   (option 1194 (a_whitespace *> a_number) >>= fun port ->
    ((option None (a_whitespace *> a_single_param >>| fun p -> Some p))
     >>= function
-    | Some "udp" -> return (Some `Udp, None)
-    | Some "udp4" -> return (Some `Udp, Some `Ipv4)
-    | Some "udp6" -> return (Some `Udp, Some `Ipv6)
-    | Some "tcp" -> return (Some `Tcp, None)
-    | Some "tcp4" -> return (Some `Tcp, Some `Ipv4)
-    | Some "tcp6" -> return (Some `Tcp, Some `Ipv6)
+    | Some "udp" -> return (Some `Udp, `Any)
+    | Some "udp4" -> return (Some `Udp, `Ipv4)
+    | Some "udp6" -> return (Some `Udp, `Ipv6)
+    | Some "tcp" -> return (Some `Tcp, `Any)
+    | Some "tcp4" -> return (Some `Tcp, `Ipv4)
+    | Some "tcp6" -> return (Some `Tcp, `Ipv6)
     | Some x -> fail (Fmt.strf "remote: unknown protocol designation %S" x)
-    | None -> return (None, None)
+    | None -> return (None, `Any)
    ) >>| fun protos -> port, protos
   ) >>= fun (port, protos) ->
   begin match host_or_ip, protos with
     | `Domain host, (dp, ipv) ->
       return @@ `Remote (`Domain (host, ipv), port, dp)
-    | `Ip (Ipaddr.V4 _ as i), (dp, (None | Some `Ipv4)) ->
+    | `Ip (Ipaddr.V4 _ as i), (dp, (`Any | `Ipv4)) ->
       return @@ `Remote (`Ip i, port, dp)
-    | `Ip (Ipaddr.V6 _ as i), (dp, (None | Some `Ipv6)) ->
+    | `Ip (Ipaddr.V6 _ as i), (dp, (`Any | `Ipv6)) ->
       return @@ `Remote (`Ip i, port, dp)
-    | `Ip ip, (_, Some (`Ipv4 | `Ipv6 as v)) ->
+    | `Ip ip, (_, (`Ipv4 | `Ipv6 as v)) ->
       fail (Fmt.strf "remote: ip addr %a is required to be %s."
               Ipaddr.pp ip (match v with `Ipv4 -> "IPv4" | `Ipv6 -> "IPv6"))
   end

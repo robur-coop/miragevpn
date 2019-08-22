@@ -82,7 +82,7 @@ module Config : sig
 
     | Link_mtu : int k
     (** MTU of the network interface used to receive/transmit encrypted packets,
-	e.g. the network interface that connects OpenVPN client and server. *)
+        e.g. the network interface that connects OpenVPN client and server. *)
 
     | Mssfix   : int k
     | Mute_replay_warnings : flag k
@@ -109,8 +109,8 @@ module Config : sig
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (** TODO should Proto be bound to a remote? *)
 
-    | Remote : ([ `Domain of [ `host ] Domain_name.t
-                | `Ip of Ipaddr.t] * int) list k
+    | Remote : ([ `Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
+                | `Ip of Ipaddr.t] * int * [`Udp | `Tcp]) list k
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
 
@@ -243,8 +243,8 @@ type event = [
 val pp_event : event Fmt.t
 
 type action = [
-  | `Resolve of [ `host ] Domain_name.t
-  | `Connect of Ipaddr.t * int
+  | `Resolve of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
+  | `Connect of Ipaddr.t * int * [`Tcp | `Udp]
   | `Disconnect
   | `Exit
   | `Established of ip_config * int

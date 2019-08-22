@@ -190,25 +190,18 @@ let decode_instruction (prev_state:copy_trailing) c =
     then count_zeroes (fun l -> with_length (2 + 31 + l))
     else Ok (with_length (2 + l))
 
-  | '\064'..'\127', _ (* x40 - 7F *)->
-    (* Copy 3-4 bytes from dict within 1..2048 distance*)
+  | '\064'..'\255', _ (* x40 - FF *)->
+    (* x40 .. 7F: Copy 3-4 bytes from dict within 1..2048 distance*)
+    (* x80 .. FF: Copy 5-8 bytes from block within 1..2048 distance *)
     let length, d =
-      3 + ((b lsr 5) land 1), (* 3 + ((b >> 5) & 1) *)
+      let shift = (b lsr 7) lsl 1 in
+      (* 3 + shift + ((b >> 5) & (shift+1)): *)
+      3 + shift + ((b lsr 5) land (1 lor shift)),
       (b lsr 2) land 0b111 in (*      (b >> 2) & 7  *)
     Ok (Read_byte (fun h ->
         let distance = (h lsl 3) + d + 1 in
         Ok (Copy_block (length, distance,
                      copy_trailing_of_int b))))
-
-  | '\128'..'\255', _ (* x80 - FF *)->
-    (* Copy 5-8 bytes from block within 1..2048 distance *)
-    let length, d, state =
-      5 + ((b lsr 5) land 0b11), (*  5 + ((b>>5) & 3) *)
-      ((b lsr 2) land 0b111),    (*       (b>>2) & 7  *)
-      copy_trailing_of_int b in
-    Ok (Read_byte (fun h ->
-        let distance = (h lsl 3) + d + 1 in
-        Ok (Copy_block (length, distance, state))))
 
 let decompress (input:string) =
   let out = Buffer.create 1500 in

@@ -106,8 +106,8 @@ let pp_event ppf = function
   | `Data cs -> Fmt.pf ppf "data %d bytes" (Cstruct.len cs)
 
 type action = [
-  | `Resolve of [ `host ] Domain_name.t
-  | `Connect of Ipaddr.t * int
+  | `Resolve of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
+  | `Connect of Ipaddr.t * int * [`Tcp | `Udp]
   | `Disconnect
   | `Exit
   | `Established of ip_config * int
@@ -116,7 +116,10 @@ type action = [
 
 let pp_action ppf = function
   | `Resolve host -> Fmt.pf ppf "resolve %a" Domain_name.pp host
-  | `Connect (ip, port) -> Fmt.pf ppf "connect %a:%d" Ipaddr.pp ip port
+  | `Connect (ip, port, proto) ->
+    Fmt.pf ppf "connect %s%a:%d"
+      (match proto with `Any -> "" | `Ipv6 -> "IPv6:" | `Ipv4 -> "IPv4:")
+      Ipaddr.pp ip port
   | `Disconnect -> Fmt.string ppf "disconect"
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) -> Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu

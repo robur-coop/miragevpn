@@ -36,19 +36,20 @@ while ./testmini > test_case.ml && utop ; do : ; done
 
 # Other implementations and resources that may be of interest
 
+- https://www.mjmwired.net/kernel/Documentation/lzo.txt
+- http://www.infradead.org/~mchehab/kernel_docs/unsorted/lzo.html
 - https://ethw.org/History_of_Lossless_Data_Compression_Algorithms
 - https://www.csoonline.com/article/2375206/twenty-year-old-vulnerability-in-lzo-finally-patched.html
-- https://synopse.info/fossil/artifact/85d08b1143a99dea
-- https://github.com/joyent/syslinux/blob/master/lzo/src/lzo1x_1o.c#L43
-- https://github.com/ir193/python-lzo/blob/master/lzo.py
-- https://github.com/shevek/lzo-java
-- https://github.com/rasky/go-lzo/blob/master/decompress.go
+- [Pure Python implementation](https://github.com/tohojo/pylzo)
+- [Golang implementation](https://github.com/rasky/go-lzo/blob/master/decompress.go) TODO tests
+- [Pascal implementation](https://synopse.info/fossil/artifact/85d08b1143a99dea)
+- https://github.com/joyent/syslinux/blob/master/lzo/src/lzo1x_1o.c#L43 (copied from minilzo)
+- [Python bindings to minilzo.c](https://github.com/ir193/python-lzo/blob/master/lzo.py)
+- [Java bindings to liblzo2](https://github.com/shevek/lzo-java)
 - https://github.com/nemequ/lzo/blob/master/src/config1x.h
 - https://github.com/jrmuizel/rust-lzo/blob/master/src/lzo1x_decompress_safe.rs
 - https://bugzilla.redhat.com/show_bug.cgi?id=1131795
-- https://www.mjmwired.net/kernel/Documentation/lzo.txt
-- http://www.infradead.org/~mchehab/kernel_docs/unsorted/lzo.html
 - https://github.com/dgelessus/old-lzo-ports/blob/master/java-lzo/org/lzo/Lzo1xDecompressor.java
-- https://github.com/zzattack/MiniLZO/blob/master/MiniLZO/MiniLZO.cs
-- https://www.codeproject.com/articles/16239/pure-c-minilzo-port
+- [C# port of minilzo.c 2.06](https://github.com/zzattack/MiniLZO/blob/master/MiniLZO/MiniLZO.cs)
+  - https://www.codeproject.com/articles/16239/pure-c-minilzo-port
 
