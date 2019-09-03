@@ -20,17 +20,17 @@ depends: [
   "ocaml" {>= "4.07.0"}
   "odoc" {with-doc}
 
-  "fmt"      { >= "0.8.6"  &  < "0.9.0" }
-  "logs"     { >= "0.6.2"  &  < "0.7.0" }
-  "rresult"  { >= "0.6.0"  &  < "0.7.0" }
+  "fmt"      { >= "0.8.6" }
+  "logs"     { >= "0.6.2" }
+  "rresult"  { >= "0.6.0" }
 
   "angstrom"
   "cstruct"  { >= "4.0.0" }
   "cmdliner"
   "domain-name" { >= "0.2.0" }
   "fmt"
-  "gmap"     { >= "0.3.0"  & < "0.4.0" }
-  "hex"      { >= "1.4.0"  & < "1.5.0" }
+  "gmap"     { >= "0.3.0" }
+  "hex"      { >= "1.4.0" }
   "ipaddr"   { >= "3.1.0" }
   "logs"
   "cstruct-lwt"
@@ -39,7 +39,7 @@ depends: [
   "ptime"
   "rresult"
   "tls"
-  "dns-client-lwt"
+  "dns-client" {>= "4.0.0"}
   "x509" {>= "0.7.0"}
   "duration"
 
@@ -49,5 +49,4 @@ depends: [
   "tcpip"
   "mirage-random"
   "mirage-clock"
-  "dns-mirage-client"
 ]

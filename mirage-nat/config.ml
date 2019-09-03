@@ -10,15 +10,10 @@ let private_ipv4 = create_ipv4 ~group:"private" private_ethernet private_arp
 
 let openvpn_handler =
   let packages =
-    let pin = "https://git.robur.io/openvpn.git"
-    and udns = "https://github.com/roburio/udns.git"
-    in
+    let pin = "https://git.robur.io/openvpn.git" in
     [
       package "logs" ;
       package ~pin ~sublibs:["mirage"] "openvpn";
-      package ~pin:udns "dns";
-      package ~pin:udns "dns-client";
-      package ~pin:udns "dns-mirage-client";
       package "mirage-kv";
       package "mirage-nat"
     ]
