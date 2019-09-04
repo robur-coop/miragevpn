@@ -322,10 +322,10 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
         proto = Ipv4_packet.Marshal.protocol_to_int proto }
     in
     (* now we take chunks of (mtu - hdr_len) one at a time *)
-    let ip_payload_len = mtu t - Ipv4_wire.sizeof_ipv4 in
-    assert (ip_payload_len > 0);
-    if not fragment && ip_payload_len < pay_len then
-      invalid_arg "don't fragment set, but too much payload!"
+    let mtu = mtu t in
+    let ip_payload_len = mtu - Ipv4_wire.sizeof_ipv4 in
+    if (not fragment && ip_payload_len < pay_len) || ip_payload_len <= 0 then
+      Lwt.return (Error `Would_fragment)
     else
       let outs =
         if pay_len <= ip_payload_len then
@@ -333,31 +333,14 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
           let out = encode hdr payload in
           [ out ]
         else
-          (* complex case: loop, set more_fragments and offset *)
-          (* set an ip ID *)
-          (* we also need to ensure that our v4 payload is 8byte-bounded *)
-          (*  ~~> since we're at max, we may need to reduce mtu again... *)
+          (* fragment payload: set ip ID and more_fragments in header *)
+          (* need to ensure that our v4 payload is 8byte-bounded *)
           let ip_payload_len' = ip_payload_len - (ip_payload_len mod 8) in
-          let frags = (pay_len + pred ip_payload_len') / ip_payload_len' in
-          (* do not set more_fragments in last one *)
-          let hdr = { hdr with id = Randomconv.int16 R.generate } in
-          let outs =
-            List.fold_left (fun outs idx ->
-                let start = idx * ip_payload_len' in
-                let off =
-                  (if idx = pred frags then 0 else 0x2000) (* more frags *) +
-                  (start / 8)
-                in
-                let hdr' = { hdr with off } in
-                let data =
-                  let len = min ip_payload_len' (Cstruct.len payload - start) in
-                  Cstruct.sub payload start len
-                in
-                let out = encode hdr' data in
-                out :: outs)
-              [] (List.init frags (fun i -> i))
-          in
-          List.rev outs
+          let hdr = { hdr with id = Randomconv.int16 R.generate ; off = 0x2000 } in
+          let pay, rest = Cstruct.split payload ip_payload_len' in
+          let first = encode hdr pay in
+          let outs = Fragments.fragment ~mtu hdr rest in
+          first :: outs
       in
       Lwt_list.fold_left_s (fun acc data ->
           match acc with

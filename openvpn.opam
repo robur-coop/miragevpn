@@ -46,7 +46,7 @@ depends: [
   # mirage:
   "mirage-stack-lwt"
   "mirage-protocols-lwt" {>= "3.0.0"}
-  "tcpip"
+  "tcpip" {>= "3.7.8"}
   "mirage-random"
   "mirage-clock"
 ]
