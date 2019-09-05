@@ -679,15 +679,16 @@ let handle t now ts ev =
       Error (`Msg "maximum connection retries exceeded")
     else
       Ok (match v with
-          | `Domain (name, ip_version), _, _ -> Resolving (idx', ts, retry'), `Resolve (name, ip_version)
-          | `Ip ip, port, dp -> Connecting (idx', ts, retry'), `Connect (ip, port, dp))
+          | `Domain (name, ip_version), _, _ ->
+            Resolving (idx', ts, retry'), `Resolve (name, ip_version)
+          | `Ip ip, port, dp ->
+            Connecting (idx', ts, retry'), `Connect (ip, port, dp))
   in
   match t.state, ev with
-  | Resolving (idx, _, retry), `Resolved ip ->
+  | Resolving (i, _, retry), `Resolved ip ->
     (* TODO enforce ipv4/ipv6 *)
-    let endp = match (remote idx) with _, port, dp -> (ip, port, dp) in
-    Ok ({ t with state = Connecting (idx, ts, retry) }, [],
-        Some (`Connect endp))
+    let endp = match remote i with _, port, dp -> (ip, port, dp) in
+    Ok ({ t with state = Connecting (i, ts, retry) }, [], Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
     next_or_fail idx retry >>| fun (state, action) ->
     { t with state }, [], Some action
