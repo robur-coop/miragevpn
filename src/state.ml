@@ -114,16 +114,26 @@ type action = [
   | `Payload of Cstruct.t list
 ]
 
+let pp_ip_version ppf = function
+  | `Ipv4 -> Fmt.string ppf "ipv4"
+  | `Ipv6 -> Fmt.string ppf "ipv6"
+  | `Any -> Fmt.string ppf "any"
+
+let pp_proto ppf = function
+  | `Tcp -> Fmt.string ppf "tcp"
+  | `Udp -> Fmt.string ppf "udp"
+
 let pp_action ppf = function
-  | `Resolve host -> Fmt.pf ppf "resolve %a" Domain_name.pp host
+  | `Resolve (host, ip_version) ->
+    Fmt.pf ppf "resolve %a (%a)" Domain_name.pp host pp_ip_version ip_version
   | `Connect (ip, port, proto) ->
-    Fmt.pf ppf "connect %s%a:%d"
-      (match proto with `Any -> "" | `Ipv6 -> "IPv6:" | `Ipv4 -> "IPv4:")
-      Ipaddr.pp ip port
+    Fmt.pf ppf "connect %a %a:%d" pp_proto proto Ipaddr.pp ip port
   | `Disconnect -> Fmt.string ppf "disconect"
   | `Exit -> Fmt.string ppf "exit"
-  | `Established (ip, mtu) -> Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
-  | `Payload xs -> Fmt.pf ppf "payload %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)
+  | `Established (ip, mtu) ->
+    Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
+  | `Payload xs ->
+    Fmt.pf ppf "payload %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with

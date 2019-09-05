@@ -143,16 +143,16 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let conn_est = ref (Lwt_switch.create ())
 
   let handle_action s conn = function
-    | `Resolve name ->
+    | `Resolve (name, _ip_version) ->
       Lwt_switch.turn_off !conn_est >>= fun () ->
       resolve_hostname s name >>= fun r ->
       let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
       Lwt_mvar.put conn.event_mvar ev
-    | `Connect endp ->
+    | `Connect (ip, port, _proto) ->
       Lwt_switch.turn_off !conn_est >>= fun () ->
       let sw = Lwt_switch.create () in
       conn_est := sw;
-      connect_tcp sw s endp >>= fun (sw', r) ->
+      connect_tcp sw s (ip, port) >>= fun (sw', r) ->
       if Lwt_switch.is_on sw' then
         let ev =
           match r with
@@ -161,7 +161,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             conn.tcp_flow <- Some flow;
             Lwt.async (fun () -> reader conn.event_mvar flow);
             Log.warn (fun m -> m "successfully established connection to %a:%d"
-                         Ipaddr.pp (fst endp) (snd endp));
+                         Ipaddr.pp ip port);
             `Connected
         in
         Lwt_mvar.put conn.event_mvar ev

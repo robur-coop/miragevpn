@@ -58,8 +58,8 @@ let client config ts rng =
     let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
     let channel = new_channel 0 ts in
     (match Config.get Remote config with
-     | (`Domain name_and_ipv, _, _dp_TODO) :: _ ->
-       Ok (`Resolve name_and_ipv, Resolving (0, ts, 0))
+     | (`Domain (name, ip_version), _port, _proto) :: _ ->
+       Ok (`Resolve (name, ip_version), Resolving (0, ts, 0))
      | (`Ip ip, port, dp) :: _ ->
        Ok (`Connect (ip, port, dp), Connecting (0, ts, 0))
      | [] -> Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
@@ -539,7 +539,7 @@ let wrap_hmac_control now session key transport outs =
   in
   session, transport, List.rev outs
 
-let incoming state now ts buf : (t * _ list * action option,'a) result =
+let incoming state now ts buf =
   let state = { state with last_received = ts } in
   let rec multi buf (state, out, act) =
     match Packet.decode buf with
@@ -642,7 +642,7 @@ let incoming state now ts buf : (t * _ list * action option,'a) result =
   Logs.debug (fun m -> m "out state is %a" State.pp s');
   Logs.debug (fun m -> m "%d outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
   Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(unit "no") pp_action) act);
-  s', out, (act' : action option)
+  s', out, act'
 
 let maybe_timeout state ts =
   (* timeout fires if no data was received within the configured interval *)
@@ -658,7 +658,7 @@ let maybe_timeout state ts =
   end else
     None
 
-let handle t now ts ev : (t * _ list * action option,'a) result =
+let handle t now ts ev =
   let remote, next_remote =
     let remotes = Config.get Remote t.config in
     let r idx = List.nth remotes idx in
@@ -679,8 +679,7 @@ let handle t now ts ev : (t * _ list * action option,'a) result =
       Error (`Msg "maximum connection retries exceeded")
     else
       Ok (match v with
-          | `Domain name_ipv, _, _ ->
-            Resolving (idx', ts, retry'), `Resolve name_ipv
+          | `Domain (name, ip_version), _, _ -> Resolving (idx', ts, retry'), `Resolve (name, ip_version)
           | `Ip ip, port, dp -> Connecting (idx', ts, retry'), `Connect (ip, port, dp))
   in
   match t.state, ev with
