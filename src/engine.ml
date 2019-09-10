@@ -15,13 +15,13 @@ let header session transport timestamp =
     else
       id :: acked_message_ids (Int32.succ id)
   in
-  let ack_message_ids = acked_message_ids transport.their_last_acked_message_id in
+  let ack_message_ids = acked_message_ids transport.last_acked_message_id in
   let remote_session = match ack_message_ids with [] -> None | _ -> Some session.their_session_id in
   let packet_id = session.my_packet_id
-  and their_last_acked_message_id = transport.their_message_id
+  and last_acked_message_id = transport.their_message_id
   in
   let my_packet_id = Int32.succ packet_id in
-  { session with my_packet_id }, { transport with their_last_acked_message_id },
+  { session with my_packet_id }, { transport with last_acked_message_id },
   { Packet.local_session = session.my_session_id ;
     hmac = Cstruct.create_unsafe Packet.hmac_len ;
     packet_id ; timestamp ; ack_message_ids ; remote_session }
@@ -270,14 +270,10 @@ let incoming_control config rng session channel now op data =
 
 let expected_packet session transport data =
   (* expects monotonic packet + message id, session ids matching *)
-  (* TODO track ack'ed message ids from them (only really important for UDP) *)
-  (* there may be rekeying, if this is the case we setup a fresh transport
-     (with new key id, msg id, etc.) and don't accept any further messages with
-     the old one. we also require to set the client_state so it'll output
-     packets... *)
   let hdr = Packet.header data
   and msg_id = Packet.message_id data
   in
+  (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
   guard (Int32.equal session.their_packet_id hdr.Packet.packet_id)
     (`Non_monotonic_packet_id (transport, hdr)) >>= fun () ->
   guard (Int64.equal session.their_session_id 0L ||

@@ -8,17 +8,17 @@ type key_source = {
 type transport = {
   my_message_id : int32 ; (* this starts from 0l, indicates the next to-be-send *)
   their_message_id : int32 ; (* the first should be 0l, indicates the next to-be-received *)
-  their_last_acked_message_id : int32 ;
+  last_acked_message_id : int32 ;
 }
 
 let pp_transport ppf t =
   Fmt.pf ppf "my message %lu@.their message %lu (acked %lu)"
-    t.my_message_id t.their_message_id t.their_last_acked_message_id
+    t.my_message_id t.their_message_id t.last_acked_message_id
 
 let init_transport = {
   my_message_id = 0l ;
   their_message_id = 0l ;
-  their_last_acked_message_id = 0l ;
+  last_acked_message_id = 0l ;
 }
 
 type keys = {
