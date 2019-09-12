@@ -35,11 +35,11 @@ let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
   Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
-let hmac_and_out key hmac_key (p : Packet.pkt) =
+let hmac_and_out protocol key hmac_key (p : Packet.pkt) =
   let hmac = compute_hmac key p hmac_key in
   let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
-  Packet.encode (key, p')
+  Packet.encode protocol (key, p')
 
 let client config ts rng =
   match Config.find Tls_auth config with
@@ -357,7 +357,7 @@ let unpad block_size cs =
   else
     Error (`Msg "bad padding")
 
-let data_out (ctx : keys) compress rng key data =
+let data_out (ctx : keys) compress protocol rng key data =
   (* output is: packed_id 0xfa data, then wrap openvpn partial header
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
@@ -376,7 +376,7 @@ let data_out (ctx : keys) compress rng key data =
   let payload = Cstruct.append iv enc in
   let hmac = Nocrypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
   let payload' = Cstruct.append hmac payload in
-  let out = Packet.encode (key, `Data payload') in
+  let out = Packet.encode protocol (key, `Data payload') in
   (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
   let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
   Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
@@ -387,7 +387,7 @@ let outgoing s ts data =
   match keys_opt s.channel with
   | None -> Error `Not_ready
   | Some ctx ->
-    let ctx, data = data_out ctx s.session.compress s.rng s.channel.keyid data in
+    let ctx, data = data_out ctx s.session.compress s.session.protocol s.rng s.channel.keyid data in
     let ch = set_keys s.channel ctx in
     let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
     Ok ({ s with channel ; last_sent = ts }, data)
@@ -416,7 +416,7 @@ let init_channel how session keyid now ts =
   let session, transport, header = header session channel.transport timestamp in
   let transport, m_id = next_message_id transport in
   let p = `Control (how, (header, m_id, Cstruct.empty)) in
-  let out = hmac_and_out channel.keyid session.my_hmac p in
+  let out = hmac_and_out session.protocol channel.keyid session.my_hmac p in
   session, { channel with transport }, out
 
 let maybe_init_rekey s now ts =
@@ -529,7 +529,7 @@ let wrap_hmac_control now session key transport outs =
             transport, `Control (Packet.Control, (header, m_id, out))
         in
         (* hmac each outgoing frame and encode *)
-        let out = hmac_and_out key session.my_hmac p in
+        let out = hmac_and_out session.protocol key session.my_hmac p in
         session, transport, out :: acc)
       (session, transport, []) outs
   in
@@ -538,7 +538,7 @@ let wrap_hmac_control now session key transport outs =
 let incoming state now ts buf =
   let state = { state with last_received = ts } in
   let rec multi buf (state, out, act) =
-    match Packet.decode buf with
+    match Packet.decode state.session.protocol buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out, act)
     | Ok (key, p, linger) ->

@@ -150,16 +150,17 @@ type session = {
   their_packet_id : int32 ; (* the first should be 1l, indicates the next to-be-received *)
   their_hmac : Cstruct.t ;
   compress : bool ;
+  protocol : [ `Tcp | `Udp ] ;
 }
 
-let init_session ~my_session_id ?(their_session_id = 0L) ~my_hmac ~their_hmac () =
+let init_session ~my_session_id ?(their_session_id = 0L) ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
   { my_session_id ; my_packet_id = 1l ; my_hmac ;
     their_session_id ; their_packet_id = 1l ; their_hmac ;
-    compress = false }
+    compress = false ; protocol }
 
 let pp_session ppf t =
-  Fmt.pf ppf "compression %B my session %Lu packet %lu@.their session %Lu packet %lu"
-    t.compress
+  Fmt.pf ppf "compression %B protocol %a my session %Lu packet %lu@.their session %Lu packet %lu"
+    t.compress pp_proto t.protocol
     t.my_session_id t.my_packet_id t.their_session_id
     t.their_packet_id
 
