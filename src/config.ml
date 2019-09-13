@@ -1201,7 +1201,15 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           Logs.warn (fun m -> m"ignoring unimplemented option: %a"
                         pp_line line) ;
           loop acc tl
-        | `Remote _ -> loop acc tl (* TODO *)
+        | `Remote (host, port, proto) ->
+          let proto = match proto with
+            | Some x -> x
+            | None -> match Conf_map.find Proto acc with
+              | Some (_, `Tcp _)  -> `Tcp
+              | _ -> `Udp
+          in
+          (* TODO consult `Proto_force *)
+          retb (B(Remote, [host, port, proto]))
       end
     | [] -> Ok (`Done acc : parser_state)
   in
