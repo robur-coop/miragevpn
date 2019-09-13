@@ -214,7 +214,7 @@ let encode proto (key, p) =
   let buf =
     match proto with
     | `Tcp ->
-      let buf = Cstruct.create 3 in
+      let buf = Cstruct.create 2 in
       Cstruct.BE.set_uint16 buf 0 (succ len);
       buf
     | `Udp -> Cstruct.empty
