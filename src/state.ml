@@ -5,20 +5,25 @@ type key_source = {
   random2 : Cstruct.t ; (* 32 bytes *)
 }
 
+module IM = Map.Make(Int32)
+
 type transport = {
   my_message_id : int32 ; (* this starts from 0l, indicates the next to-be-send *)
   their_message_id : int32 ; (* the first should be 0l, indicates the next to-be-received *)
   last_acked_message_id : int32 ;
+  out_packets : (int64 * Cstruct.t) IM.t ;
 }
 
 let pp_transport ppf t =
-  Fmt.pf ppf "my message %lu@.their message %lu (acked %lu)"
+  Fmt.pf ppf "my message %lu@.their message %lu (acked %lu) out %d"
     t.my_message_id t.their_message_id t.last_acked_message_id
+    (IM.cardinal t.out_packets)
 
 let init_transport = {
   my_message_id = 0l ;
   their_message_id = 0l ;
   last_acked_message_id = 0l ;
+  out_packets = IM.empty ;
 }
 
 type keys = {

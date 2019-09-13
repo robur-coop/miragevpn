@@ -274,13 +274,15 @@ let expected_packet session transport data =
   and msg_id = Packet.message_id data
   in
   (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
-  guard (Int32.equal session.their_packet_id hdr.Packet.packet_id)
-    (`Non_monotonic_packet_id (transport, hdr)) >>= fun () ->
+  opt_guard (Int64.equal session.my_session_id) hdr.Packet.remote_session
+    (`Mismatch_my_session_id (transport, hdr)) >>= fun () ->
   guard (Int64.equal session.their_session_id 0L ||
          Int64.equal session.their_session_id hdr.Packet.local_session)
     (`Mismatch_their_session_id (transport, hdr)) >>= fun () ->
-  opt_guard (Int64.equal session.my_session_id) hdr.Packet.remote_session
-    (`Mismatch_my_session_id (transport, hdr)) >>= fun () ->
+  (* TODO deal with it, properly: packets may be lost (e.g. udp)
+     both from their side, and acks from our side *)
+  guard (Int32.equal session.their_packet_id hdr.Packet.packet_id)
+    (`Non_monotonic_packet_id (transport, hdr)) >>= fun () ->
   opt_guard (Int32.equal transport.their_message_id) msg_id
     (`Non_monotonic_message_id (transport, msg_id, hdr)) >>| fun () ->
   let session = {
@@ -292,8 +294,11 @@ let expected_packet session transport data =
     | None -> transport.their_message_id
     | Some x -> Int32.succ x
   in
-  (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
-  let transport = { transport with their_message_id } in
+  let out_packets =
+    List.fold_left (fun m id -> IM.remove id m)
+      transport.out_packets hdr.Packet.ack_message_ids
+  in
+  let transport = { transport with their_message_id ; out_packets } in
   session, transport
 
 type error = [
@@ -417,6 +422,8 @@ let init_channel how session keyid now ts =
   let transport, m_id = next_message_id transport in
   let p = `Control (how, (header, m_id, Cstruct.empty)) in
   let out = hmac_and_out session.protocol channel.keyid session.my_hmac p in
+  let out_packets = IM.add m_id (ts, out) transport.out_packets in
+  let transport = { transport with out_packets } in
   session, { channel with transport }, out
 
 let maybe_init_rekey s now ts =
@@ -515,21 +522,24 @@ let check_control_integrity err key p hmac_key =
   guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
   Logs.info (fun m -> m "mac good")
 
-let wrap_hmac_control now session key transport outs =
-  let ts = ptime_to_ts_exn now in
+let wrap_hmac_control now ts session key transport outs =
+  let now_ts = ptime_to_ts_exn now in
   let session, transport, outs =
     List.fold_left (fun (session, transport, acc) out ->
         (* add the OpenVPN header *)
-        let session, transport, header = header session transport ts in
-        let transport, p =
+        let session, transport, header = header session transport now_ts in
+        let sign_enc = hmac_and_out session.protocol key session.my_hmac in
+        let transport, out =
           if Cstruct.equal Cstruct.empty out then
-            transport, `Ack header
+            transport, sign_enc (`Ack header)
           else
             let transport, m_id = next_message_id transport in
-            transport, `Control (Packet.Control, (header, m_id, out))
+            let out =
+              sign_enc (`Control (Packet.Control, (header, m_id, out)))
+            in
+            let out_packets = IM.add m_id (ts, out) transport.out_packets in
+            { transport with out_packets }, out
         in
-        (* hmac each outgoing frame and encode *)
-        let out = hmac_and_out session.protocol key session.my_hmac p in
         session, transport, out :: acc)
       (session, transport, []) outs
   in
@@ -584,51 +594,58 @@ let incoming state now ts buf =
                set_ch state ch, out, act
            end
          | (`Ack _ | `Control _) as d ->
-           check_control_integrity bad_mac key p state.session.their_hmac >>= fun () ->
-           (* _first_ update state with most recent received packet_id *)
-           expected_packet state.session ch.transport d >>= fun (session, transport) ->
-           let state' = { state with session }
-           and ch' = { ch with transport }
-           in
-           match d with
-           | `Ack _ ->
-             (* TODO nothing to do for an ack, should bump ack number *)
-             Logs.info (fun m -> m "ignoring acknowledgement");
-             Ok (set_ch state' ch', out, act)
-           | `Control (typ, (_, _, data)) ->
-             incoming_control state.config state.rng state'.session ch' now typ data
-             >>| fun (est, config', ch'', outs) ->
-             Logs.debug (fun m -> m "out channel %a, pkts %d"
-                            pp_channel ch'' (List.length outs));
-             (* each control needs to be acked! *)
-             let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
-             (* now prepare outgoing packets *)
-             let session, transport, encs =
-               wrap_hmac_control now state'.session key ch''.transport outs
+           match
+             check_control_integrity bad_mac key p state.session.their_hmac >>= fun () ->
+             (* _first_ update state with most recent received packet_id *)
+             expected_packet state.session ch.transport d
+           with
+           | Error e ->
+             (* only in udp mode? *)
+             Logs.warn (fun m -> m "ignoring bad packet %a" pp_error e);
+             Ok (state, out, None)
+           | Ok (session, transport) ->
+             let state' = { state with session }
+             and ch' = { ch with transport }
              in
-             let out' = out @ encs in
-             let ch''' = { ch'' with transport } in
-             let state' = { state' with config = config' ; session } in
-             if est then
-               match state'.state with
-               | Handshaking _ ->
-                 let ip_config = ip_from_config config'
-                 and compress = match Config.find Comp_lzo config' with
-                   | None -> false | Some () -> true
-                 in
-                 let session = { state'.session with compress } in
-                 let mtu = mtu config' compress in
-                 let act' =
-                   match act with None -> Some (`Established (ip_config, mtu))
-                                | _ -> assert false
-                 in
-                 { state' with state = Ready ; session ; channel = ch''' }, out', act'
-               | Rekeying _ ->
-                 (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-                 let lame_duck = Some (state'.channel, ts) in
-                 { state' with state = Ready ; channel = ch''' ; lame_duck }, out', act
-               | _ -> assert false
-             else
+             match d with
+             | `Ack _ ->
+               (* effect already handled in expected_packet (removed acked ids from out_packets) *)
+               Logs.info (fun m -> m "ignoring acknowledgement");
+               Ok (set_ch state' ch', out, act)
+             | `Control (typ, (_, _, data)) ->
+               incoming_control state.config state.rng state'.session ch' now typ data
+               >>| fun (est, config', ch'', outs) ->
+               Logs.debug (fun m -> m "out channel %a, pkts %d"
+                              pp_channel ch'' (List.length outs));
+               (* each control needs to be acked! *)
+               let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
+               (* now prepare outgoing packets *)
+               let session, transport, encs =
+                 wrap_hmac_control now ts state'.session key ch''.transport outs
+               in
+               let out' = out @ encs in
+               let ch''' = { ch'' with transport } in
+               let state' = { state' with config = config' ; session } in
+               if est then
+                 match state'.state with
+                 | Handshaking _ ->
+                   let ip_config = ip_from_config config'
+                   and compress = match Config.find Comp_lzo config' with
+                     | None -> false | Some () -> true
+                   in
+                   let session = { state'.session with compress } in
+                   let mtu = mtu config' compress in
+                   let act' =
+                     match act with None -> Some (`Established (ip_config, mtu))
+                                  | _ -> assert false
+                   in
+                   { state' with state = Ready ; session ; channel = ch''' }, out', act'
+                 | Rekeying _ ->
+                   (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+                   let lame_duck = Some (state'.channel, ts) in
+                   { state' with state = Ready ; channel = ch''' ; lame_duck }, out', act
+                 | _ -> assert false
+               else
                  set_ch state' ch''', out', act) >>= multi linger
   in
   multi (Cstruct.append state.linger buf) (state, [], None) >>| fun (s', out, act) ->
@@ -640,7 +657,7 @@ let incoming state now ts buf =
   Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(unit "no") pp_action) act);
   s', out, act'
 
-let maybe_timeout state ts =
+let maybe_ping_timeout state ts =
   (* timeout fires if no data was received within the configured interval *)
   let s_since_rcvd = Duration.to_sec (Int64.sub ts state.last_received) in
   let timeout, action =
@@ -653,6 +670,27 @@ let maybe_timeout state ts =
     Some action
   end else
     None
+
+let maybe_hand_timeout timeout ts transport =
+  let t = Duration.of_sec timeout in
+  IM.fold (fun _ (ts', _) m ->
+      if Int64.sub ts ts' >= t then
+        Error `Hand_timeout
+      else
+        m)
+      transport.out_packets (Ok ())
+
+let retransmit timeout ts transport =
+  let t = Duration.of_sec timeout in
+  (* TODO should I update the timestamp in the packet? *)
+  let out, out_packets = IM.fold (fun k (ts', data) (acc, m) ->
+      if Int64.sub ts ts' >= t then
+        data :: acc, IM.add k (ts, data) m
+      else
+        acc, IM.add k (ts', data) m)
+      transport.out_packets ([], IM.empty)
+  in
+  { transport with out_packets }, out
 
 let handle t now ts ev =
   let remote, next_remote =
@@ -693,7 +731,8 @@ let handle t now ts ev =
     and my_hmac = t.session.my_hmac
     and their_hmac = t.session.their_hmac
     in
-    let session = init_session ~my_session_id ~my_hmac ~their_hmac () in
+    let protocol = match remote idx with _, _, proto -> proto in
+    let session = init_session ~my_session_id ~protocol ~my_hmac ~their_hmac () in
     let session, channel, out =
       init_channel Packet.Hard_reset_client session 0 now ts
     in
@@ -718,15 +757,37 @@ let handle t now ts ev =
     (* re-start from scratch *)
     next_or_fail (-1) 0 >>| fun (state, action) ->
     { t with state }, [], Some action
-  | _, `Tick ->
-    begin match maybe_timeout t ts with
-      | Some `Exit -> Ok (t, [], Some `Exit)
+  | s, `Tick ->
+    begin
+      match
+        match t.session.protocol, s with
+        | `Udp, Handshaking _ -> Some (t.channel, fun channel -> { t with channel })
+        | `Udp, Rekeying ch -> Some (ch, fun channel -> { t with state = Rekeying channel })
+        | _ -> None
+      with
+      | None -> Ok (t, [], None)
+      | Some (ch, set_ch) ->
+        (* TODO exponential back-off mentioned in openvpn man page *)
+        let tls_timeout = Config.get Tls_timeout t.config in
+        match maybe_hand_timeout (Config.get Handshake_window t.config) ts ch.transport with
+        | Ok () ->
+          let transport, out = retransmit tls_timeout ts ch.transport in
+          let channel = { ch with transport } in
+          Ok (set_ch channel, out, None)
+        | Error `Hand_timeout ->
+          next_or_fail (-1) 0 >>| fun (state, action) ->
+          { t with state }, [], Some action
+    end >>= begin function
+    | (t, out, Some action) -> Ok (t, out, Some action)
+    | (t, out, None) ->
+      match maybe_ping_timeout t ts with
+      | Some `Exit -> Ok (t, out, Some `Exit)
       | Some `Restart ->
         next_or_fail (-1) 0 >>| fun (state, action) ->
-        { t with state }, [], Some action
+        { t with state }, out, Some action
       | None ->
         let t', outs = timer t now ts in
-        Ok (t', outs, None)
+        Ok (t', out @ outs, None)
     end
   | _, `Data cs -> incoming t now ts cs
   | s, ev ->
