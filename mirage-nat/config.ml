@@ -10,7 +10,7 @@ let private_ipv4 = create_ipv4 ~group:"private" private_ethernet private_arp
 
 let openvpn_handler =
   let packages =
-    let pin = "https://git.robur.io/openvpn.git" in
+    let pin = "git+https://github.com/roburio/openvpn.git" in
     [
       package "logs" ;
       package ~pin ~sublibs:["mirage"] "openvpn";

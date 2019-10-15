@@ -157,10 +157,10 @@ module Conf_map = struct
            # Key fingerprint (sha256): %a\n%s</%s>"
         entry_typ
         entry_typ
-        (match X509.Distinguished_name.(find CN (X509.Certificate.subject cert)) with
+        (match X509.(Distinguished_name.common_name (Certificate.subject cert)) with
          | None -> "NO common name" | Some x -> x)
-        (Fmt.(pair ~sep:(unit" -> ") Ptime.(pp_human()) Ptime.(pp_human()))
-        ) (X509.Certificate.validity cert)
+        (Fmt.(pair ~sep:(unit" -> ") Ptime.(pp_human()) Ptime.(pp_human())))
+        (X509.Certificate.validity cert)
         Fmt.(list ~sep:(unit " ") Domain_name.pp)
         (Domain_name.Set.elements (X509.Certificate.hostnames cert))
         Hex.pp (Hex.of_cstruct (X509.Certificate.fingerprint `SHA256 cert))
