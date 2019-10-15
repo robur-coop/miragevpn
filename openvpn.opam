@@ -40,7 +40,7 @@ depends: [
   "rresult"
   "tls"
   "dns-client" {>= "4.0.0"}
-  "x509" {>= "0.7.0"}
+  "x509" {>= "0.8.0"}
   "duration"
 
   # mirage:
@@ -49,4 +49,7 @@ depends: [
   "tcpip" {>= "3.7.8"}
   "mirage-random"
   "mirage-clock"
+
+  "crowbar" {with-test}
+  "alcotest" {with-test}
 ]
