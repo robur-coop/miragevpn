@@ -4,6 +4,8 @@ eval `opam config env`
 
 opam install mirage
 
+export OPAMIGNOREPINDEPENDS=true
+
 cd mirage-client &&
 mirage configure -t $MIRAGE_MODE && make depend && mirage build && mirage clean &&
 
