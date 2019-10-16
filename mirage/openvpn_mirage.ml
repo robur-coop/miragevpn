@@ -254,7 +254,7 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
 
   type t = {
     ovpn : O.t ;
-    mutable frags : Fragments.Cache.t ;
+    frags : Fragments.Cache.t ;
   }
 
   (* boilerplate i don't understand *)
@@ -271,7 +271,6 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
   let pp_error ppf = function
     | #Mirage_protocols.Ip.error as e -> Mirage_protocols.Ip.pp_error ppf e
     | `Msg m -> Fmt.pf ppf "message %s" m
-    | `Would_fragment -> Fmt.string ppf "would fragment, but fragmentation is disabled"
     | `Openvpn e -> Openvpn.pp_error ppf e
 
   let disconnect _ =
@@ -281,10 +280,6 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
   let get_ip t = O.get_ip t.ovpn
 
   let mtu t = O.mtu t.ovpn
-
-  let set_ip _ _ =
-    Log.warn (fun m -> m "set ip not supported by OpenVPN");
-    Lwt.return_unit
 
   let encode hdr data =
     let payload_len = Cstruct.len data
@@ -358,8 +353,7 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
     | Ok (packet, payload) ->
       Log.info (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
                    Ipv4_packet.pp packet (Cstruct.len payload));
-      let frags, r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
-      t.frags <- frags;
+      let r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
       match r with
       | None -> Lwt.return_unit
       | Some (pkt, payload) ->
@@ -381,7 +375,7 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
     O.connect cfg s >|= function
     | Error e -> Error e
     | Ok ovpn ->
-      let frags = Fragments.Cache.empty (1024 * 256) in
+      let frags = Fragments.Cache.create (1024 * 256) in
       Ok ({ ovpn ; frags }, process_data)
 
   let pseudoheader t ?src dst proto len =
