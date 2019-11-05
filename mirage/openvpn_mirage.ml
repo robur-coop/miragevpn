@@ -39,8 +39,8 @@ open Lwt.Infix
 let src = Logs.Src.create "openvpn.mirage" ~doc:"OpenVPN MirageOS layer"
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time_lwt.S) (S : Mirage_stack_lwt.V4) = struct
-  module DNS = Dns_client_mirage.Make(R)(S)
+module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
+  module DNS = Dns_client_mirage.Make(R)(M)(S)
   module TCP = S.TCPV4
 
   type conn = {
@@ -249,7 +249,7 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Ok t
 end
 
-module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time_lwt.S) (S : Mirage_stack_lwt.V4) = struct
+module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
   module O = Make(R)(M)(P)(T)(S)
 
   type t = {
@@ -258,10 +258,8 @@ module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
   }
 
   (* boilerplate i don't understand *)
-  type 'a io = 'a Lwt.t
-  type buffer = Cstruct.t
   type ipaddr = Ipaddr.V4.t
-  type callback = src:ipaddr -> dst:ipaddr -> buffer -> unit Lwt.t
+  type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit Lwt.t
   let pp_ipaddr = Ipaddr.V4.pp
 
   type error = [ Mirage_protocols.Ip.error

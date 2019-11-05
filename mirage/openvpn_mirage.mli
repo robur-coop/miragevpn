@@ -1,5 +1,5 @@
 
-module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time_lwt.S) (S : Mirage_stack_lwt.V4) : sig
+module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) : sig
   type t
 
   val mtu : t -> int
@@ -16,10 +16,10 @@ module Make (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   val write : t -> Cstruct.t -> bool Lwt.t
 end
 
-module Make_stack (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time_lwt.S) (S : Mirage_stack_lwt.V4) : sig
-  include Mirage_protocols_lwt.IPV4
+module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) : sig
+  include Mirage_protocols.IPV4
 
   val connect : Openvpn.Config.t -> S.t ->
-    (t * (tcp:callback -> udp:callback -> default:(proto:int -> callback) -> t -> unit io),
-     [ `Msg of string ]) result io
+    (t * (tcp:callback -> udp:callback -> default:(proto:int -> callback) -> t -> unit Lwt.t),
+     [ `Msg of string ]) result Lwt.t
 end
