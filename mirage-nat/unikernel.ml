@@ -8,10 +8,10 @@
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time_lwt.S)
-    (S : Mirage_stack_lwt.V4)
-    (N : Mirage_net_lwt.S) (E : Mirage_protocols_lwt.ETHERNET) (A : Mirage_protocols_lwt.ARP) (I : Mirage_protocols_lwt.IPV4)
-    (FS: Mirage_kv_lwt.RO) = struct
+module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S)
+    (S : Mirage_stack.V4)
+    (N : Mirage_net.S) (E : Mirage_protocols.ETHERNET) (A : Mirage_protocols.ARP) (I : Mirage_protocols.IPV4)
+    (FS: Mirage_kv.RO) = struct
 
   module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)
 
@@ -26,7 +26,7 @@ module Main (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   module Log = (val Logs.src_log log : Logs.LOG)
   module Private_routing = Routing.Make(Log)(A)
 
-  let start _ _ _ _ s net eth arp ip data _ =
+  let start _ _ _ _ s net eth arp _ip data _ =
     let private_ip_net, private_ip = Key_gen.private_ipv4 () in
     read_config data >>= function
     | Error (`Msg m) -> Lwt.fail_with m

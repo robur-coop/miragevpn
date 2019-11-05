@@ -15,7 +15,7 @@ let openvpn_handler =
       package "logs" ;
       package ~pin ~sublibs:["mirage"] "openvpn";
       package "mirage-kv";
-      package "mirage-nat"
+      package ~pin:"git+https://github.com/hannesm/mirage-nat.git#easy" "mirage-nat"
     ]
   in
   foreign
