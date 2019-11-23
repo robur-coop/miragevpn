@@ -7,9 +7,9 @@
 ;             ipaddr ipaddr.unix ptime.clock.os dns-client.lwt nocrypto.lwt
 ;             mtime.clock.os tuntap cstruct-lwt))
 
-;(executable
-;  (name openvpn_config_parser)
-;  (public_name openvpn-config-parser)
-;  (package openvpn)
-;  (modules openvpn_config_parser)
-;  (libraries openvpn logs.fmt fmt.tty rresult))
+(executable
+  (name openvpn_config_parser)
+  (public_name openvpn-config-parser)
+  (package openvpn)
+  (modules openvpn_config_parser)
+  (libraries openvpn logs.fmt fmt.tty rresult))
