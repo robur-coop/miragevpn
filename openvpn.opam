@@ -44,11 +44,11 @@ depends: [
   "duration"
 
   # mirage:
-  "mirage-stack-lwt"
-  "mirage-protocols-lwt" {>= "3.0.0"}
-  "tcpip" {>= "3.7.9"}
-  "mirage-random"
-  "mirage-clock"
+  "mirage-stack" {>= "2.0.0"}
+  "mirage-protocols" {>= "4.0.0"}
+  "tcpip" {>= "4.0.0"}
+  "mirage-random" {>= "2.0.0"}
+  "mirage-clock" {>= "3.0.0"}
 
   "crowbar" {with-test}
   "alcotest" {with-test}
