@@ -1,6 +1,6 @@
 open Lwt.Infix
 
-let open_tun config {Openvpn.ip ; gateway ; prefix }
+let open_tun config {Openvpn.ip ; gateway ; _ }
   : (Openvpn.Config.t * Lwt_unix.file_descr, [> `Msg of string]) Lwt_result.t =
   (* This returns a Config with updated MTU, and a file descriptor for
      the TUN interface *)
