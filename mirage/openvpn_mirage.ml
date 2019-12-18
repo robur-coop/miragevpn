@@ -174,6 +174,9 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "no IPv6");
       Lwt_mvar.put conn.event_mvar `Connection_failed
     | `Connect (Ipaddr.V4 ip, port, `Udp) ->
+      (* we don't use the switch, but an earlier connection attempt may have used TCP *)
+      Lwt_switch.turn_off !conn_est >>= fun () ->
+      conn_est := Lwt_switch.create ();
       (* TODO we may wish to filter certain ports (< 1024) *)
       let our_port = Randomconv.int16 R.generate in
       let peer = our_port, ip, port in
