@@ -5,11 +5,6 @@ let open_tun config {Openvpn.ip ; gateway ; prefix }
   (* This returns a Config with updated MTU, and a file descriptor for
      the TUN interface *)
   let open Lwt_result.Infix in
-  let _netmask =
-    (* openvpn solves this problem by modifying the routing table: *)
-    if Ipaddr.V4.Prefix.mem gateway prefix
-    then Ipaddr.V4.Prefix.of_addr ip
-    else prefix in
   begin match Openvpn.Config.find Dev config with
     | None | Some `Tun None -> Ok None
     | Some `Tun (Some n) -> Ok (Some ("tun" ^ string_of_int n))
@@ -23,10 +18,12 @@ let open_tun config {Openvpn.ip ; gateway ; prefix }
     Logs.debug (fun m -> m "opened TUN interface %s" dev);
     Tuntap.set_up_and_running dev;
     Logs.debug (fun m -> m "set TUN interface up and running");
+    (* TODO set the mtu of the device *)
     let config = match Openvpn.Config.find Tun_mtu config with
       | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
       | None -> Openvpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config in
     begin
+      (* TODO factor the uname -s out into a separate library *)
       let local, remote = Ipaddr.V4.to_string ip, Ipaddr.V4.to_string gateway in
       match
         let cmd = "uname -s" in
@@ -35,6 +32,7 @@ let open_tun config {Openvpn.ip ; gateway ; prefix }
         let _ = Unix.close_process_in process in
         output
       with
+      (* TODO handle errors appropriately (use bos) *)
       | "Linux" ->
         Unix.system (Format.sprintf "ip addr add dev %s %s remote %s"
                        dev local remote) |> ignore
@@ -44,7 +42,8 @@ let open_tun config {Openvpn.ip ; gateway ; prefix }
         Logs.err (fun m -> m "unknown system %s, no tun setup %s (local %s remote %s)."
                      s dev local remote)
     end;
-    (* Tuntap.set_ipv4 ~netmask dev ip ;*)
+    (* TODO add stuff to routing table if desired/demanded by server *)
+    (* TODO use tuntap API once it does the right thing Tuntap.set_ipv4 ~netmask dev ip ;*)
     Logs.debug (fun m -> m "allocated TUN interface %s" dev);
     Lwt_result.return (config, Lwt_unix.of_unix_file_descr fd)
   end with
