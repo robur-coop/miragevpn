@@ -124,6 +124,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.err (fun m -> m "connection failed, terminating reader");
       Lwt.return_unit
 
+  (* TODO the "sw" argument is not used and should be removed! *)
   let connect_tcp sw s (ip, port) =
     match ip with
     | Ipaddr.V6 _ ->
@@ -140,6 +141,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                     Ipaddr.V4.pp ip' port TCP.pp_error tcp_err);
         (sw, None)
 
+  (* TODO could be part of type conn above *)
   let conn_est = ref (Lwt_switch.create ())
 
   let handle_action s conn = function
@@ -160,6 +162,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           | Some flow ->
             conn.tcp_flow <- Some flow;
             Lwt.async (fun () -> reader conn.event_mvar flow);
+            (* TODO log on app level *)
             Log.warn (fun m -> m "successfully established connection to %a:%d"
                          Ipaddr.pp ip port);
             `Connected
