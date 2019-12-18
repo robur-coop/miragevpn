@@ -897,10 +897,10 @@ let a_not_implemented =
       string "rport" ;
       string "engine" ;
       (* TODO: *)
-      string "dhcp-option";
       string "redirect-gateway" ;
       string "up" ;
       string "dh" ;
+      string "explicit-exit-notify" ;
     ] <* a_whitespace >>= fun key ->
   take_while (function '\n' -> false | _ -> true) >>| fun rest ->
   Logs.warn (fun m ->m "IGNORING %S %S" key rest) ;

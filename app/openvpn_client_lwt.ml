@@ -110,8 +110,7 @@ let read_from_fd fd =
       let cs = Cstruct.of_bytes ~len:count buf in
       Logs.debug (fun m -> m "read %d bytes" count) ;
       Lwt.return cs)
-  |> Lwt_result.map_err (fun e ->
-      Rresult.R.msgf "read error %s" (Printexc.to_string e))
+  |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_tcp mvar fd =
   read_from_fd fd >>= function
@@ -135,8 +134,7 @@ let read_udp (sa, fd) =
       Lwt.return (Some cs)
     else
       Lwt.return None)
-  |> Lwt_result.map_err (fun e ->
-      Rresult.R.msgf "read error %s" (Printexc.to_string e))
+  |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
   read_udp r >>= function
