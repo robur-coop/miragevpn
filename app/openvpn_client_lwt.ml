@@ -26,11 +26,24 @@ let open_tun config {Openvpn.ip ; gateway ; prefix }
     let config = match Openvpn.Config.find Tun_mtu config with
       | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
       | None -> Openvpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config in
-    let _ =
-      Unix.system (Format.sprintf "ifconfig %s %s %s" dev
-                     (Ipaddr.V4.to_string ip)
-                     (Ipaddr.V4.to_string gateway))
-    in
+    begin
+      let local, remote = Ipaddr.V4.to_string ip, Ipaddr.V4.to_string gateway in
+      match
+        let cmd = "uname -s" in
+        let process = Unix.open_process_in cmd in
+        let output = input_line process in
+        let _ = Unix.close_process_in process in
+        output
+      with
+      | "Linux" ->
+        Unix.system (Format.sprintf "ip addr add dev %s %s remote %s"
+                       dev local remote) |> ignore
+      | "FreeBSD" ->
+        Unix.system (Format.sprintf "ifconfig %s %s %s" dev local remote) |> ignore
+      | s ->
+        Logs.err (fun m -> m "unknown system %s, no tun setup %s (local %s remote %s)."
+                     s dev local remote)
+    end;
     (* Tuntap.set_ipv4 ~netmask dev ip ;*)
     Logs.debug (fun m -> m "allocated TUN interface %s" dev);
     Lwt_result.return (config, Lwt_unix.of_unix_file_descr fd)
