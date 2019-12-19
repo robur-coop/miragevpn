@@ -46,8 +46,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   type conn = {
     mutable o_client : Openvpn.t ;
-    mutable peer : [ `Udp of int * Ipaddr.V4.t * int | `Tcp of TCP.flow ] option ;
-    udp : UDP.t ;
+    mutable peer : [ `Udp of UDP.t * (int * Ipaddr.V4.t * int) | `Tcp of TCP.flow ] option ;
     data_mvar : Cstruct.t list Lwt_mvar.t ;
     est_mvar : (Openvpn.ip_config * int) Lwt_mvar.t ;
     event_mvar : Openvpn.event Lwt_mvar.t ;
@@ -86,11 +85,11 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             Log.err (fun m -> m "udp write failed %a" UDP.pp_error e); false)
         true xs
 
-  let transmit udp where data =
+  let transmit where data =
     match data, where with
     | [], _ -> Lwt.return true
     | _, Some `Tcp flow -> transmit_tcp flow data
-    | _, Some `Udp peer -> transmit_udp udp peer data
+    | _, Some `Udp (udp, peer) -> transmit_udp udp peer data
     | _, None -> Log.err (fun m -> m "transmit, but no peer") ; Lwt.return false
 
   let write t data =
@@ -100,7 +99,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Lwt.return false
     | Ok (c', out) ->
       t.conn.o_client <- c';
-      transmit t.conn.udp t.conn.peer [out]
+      transmit t.conn.peer [out]
 
   let read t = Lwt_mvar.take t.conn.data_mvar
 
@@ -143,9 +142,9 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Log.info (fun m -> m "read %a:%d (%d bytes)" Ipaddr.V4.pp src src_port (Cstruct.len data));
       Lwt_mvar.put c (`Data data)
     end else begin
-      Log.err (fun m -> m "ignoring unsolicited data from %a:%d (expected %a:%d, our %d dst %d)"
-                  Ipaddr.V4.pp src src_port Ipaddr.V4.pp peer_ip their_port
-                  our_port port);
+      Log.warn (fun m -> m "ignoring unsolicited data from %a:%d (expected %a:%d, our %d dst %d)"
+                   Ipaddr.V4.pp src src_port Ipaddr.V4.pp peer_ip their_port
+                   our_port port);
       Lwt.return_unit
     end
 
@@ -153,7 +152,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let connect_tcp sw s (ip, port) =
     TCP.create_connection (S.tcpv4 s) (ip, port) >|= function
     | Ok flow ->
-      Log.warn (fun m -> m "connectiong to %a:%d established"
+      Log.warn (fun m -> m "connection to %a:%d established"
                    Ipaddr.V4.pp ip port);
       (sw, Some flow)
     | Error tcp_err ->
@@ -171,7 +170,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
       Lwt_mvar.put conn.event_mvar ev
     | `Connect (Ipaddr.V6 _, _, _) ->
-      Log.err (fun m -> m "no IPv6");
+      Log.err (fun m -> m "IPv6 not implemented yet, won't connect");
       Lwt_mvar.put conn.event_mvar `Connection_failed
     | `Connect (Ipaddr.V4 ip, port, `Udp) ->
       (* we don't use the switch, but an earlier connection attempt may have used TCP *)
@@ -180,7 +179,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       (* TODO we may wish to filter certain ports (< 1024) *)
       let our_port = Randomconv.int16 R.generate in
       let peer = our_port, ip, port in
-      conn.peer <- Some (`Udp peer);
+      conn.peer <- Some (`Udp (S.udpv4 s, peer));
       S.listen_udpv4 s ~port:our_port (udp_read_cb our_port conn.event_mvar peer);
       (* TODO for UDP, we atm can't figure out connection failures
          (timeout should work, but ICMP refused/.. won't be delivered here) *)
@@ -239,7 +238,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
        | [] -> ()
        | _ ->
          Lwt.async (fun () ->
-             (transmit conn.udp conn.peer outs >>= function
+             (transmit conn.peer outs >>= function
                | true -> Lwt.return_unit
                | false -> Lwt_mvar.put conn.event_mvar `Connection_failed)));
       (match action with
@@ -257,7 +256,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       and est_mvar = Lwt_mvar.create_empty ()
       and event_mvar = Lwt_mvar.create_empty ()
       in
-      let conn = { o_client ; udp = S.udpv4 s ; peer = None ; data_mvar ; est_mvar ; event_mvar } in
+      let conn = { o_client ; peer = None ; data_mvar ; est_mvar ; event_mvar } in
       (* handle initial action *)
       Lwt.async (fun () -> event s conn);
       let rec tick () =

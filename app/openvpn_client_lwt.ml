@@ -60,15 +60,7 @@ let rec write_to_fd fd data =
         Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
       (fun e ->
          Lwt_result.lift
-           (Rresult.R.error_msgf "write error %s" (Printexc.to_string e)))
-
-let write_udp sa fd data =
-  Lwt.catch (fun () ->
-      Lwt_unix.sendto fd (Cstruct.to_bytes data) 0 (Cstruct.len data) [] sa >|= fun _ ->
-      Ok ())
-    (fun e ->
-       Lwt_result.lift
-         (Rresult.R.error_msgf "write error %s" (Printexc.to_string e)))
+           (Rresult.R.error_msgf "TCP write error %s" (Printexc.to_string e)))
 
 let write_multiple_to_fd fd bufs =
   Lwt_list.fold_left_s (fun r buf ->
@@ -76,11 +68,22 @@ let write_multiple_to_fd fd bufs =
         write_to_fd fd buf >|= function
         | Ok () -> true
         | Error `Msg msg ->
-          Logs.err (fun m -> m "error %s while writing" msg);
+          Logs.err (fun m -> m "TCP error %s while writing" msg);
           false
       else
         Lwt.return r)
     true bufs
+
+let write_udp sa fd data =
+  Lwt.catch (fun () ->
+      let len = Cstruct.len data in
+      Lwt_unix.sendto fd (Cstruct.to_bytes data) 0 len [] sa >|= fun sent ->
+      if sent <> len then
+        Logs.warn (fun m -> m "UDP short write (length %d, written %d)" len sent);
+      Ok ())
+    (fun e ->
+       Lwt_result.lift
+         (Rresult.R.error_msgf "UDP write error %s" (Printexc.to_string e)))
 
 let write_multiple_udp sa fd bufs =
   Lwt_list.fold_left_s (fun r buf ->
@@ -121,19 +124,27 @@ let rec reader_tcp mvar fd =
     Lwt_mvar.put mvar (`Data data) >>= fun () ->
     reader_tcp mvar fd
 
-let read_udp (sa, fd) =
-  Lwt_result.catch (
-    let bufsize = 2048 in
-    let buf = Bytes.create bufsize in
-    Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
-    if count = 0 then
-      Lwt.fail_with "end of file from server"
-    else if sa = sa' then
-      let cs = Cstruct.of_bytes ~len:count buf in
-      Logs.debug (fun m -> m "read %d bytes" count) ;
-      Lwt.return (Some cs)
-    else
-      Lwt.return None)
+let read_udp =
+  let bufsize = 65535 in
+  let buf = Bytes.create bufsize in
+  fun (sa, fd) ->
+    Lwt_result.catch (
+      Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
+      if count = 0 then
+        Lwt.fail_with "end of file from server"
+      else if sa = sa' then
+        let cs = Cstruct.of_bytes ~len:count buf in
+        Logs.debug (fun m -> m "read %d bytes" count) ;
+        Lwt.return (Some cs)
+      else
+        let pp_sockaddr ppf = function
+          | Unix.ADDR_UNIX s -> Fmt.pf ppf "unix %s" s
+          | Unix.ADDR_INET (ip, port) ->
+            Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr ip) port
+        in
+        Logs.warn (fun m -> m "ignoring unsolicited data from %a (expected %a)"
+                      pp_sockaddr sa' pp_sockaddr sa);
+        Lwt.return None)
   |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
@@ -216,7 +227,10 @@ let connect_udp ip port =
   and src_port = Randomconv.int16 Nocrypto.Rng.generate
   in
   let fd = Lwt_unix.(socket dom SOCK_DGRAM 0) in
-  Lwt_unix.(bind fd (ADDR_INET (Unix.inet_addr_any, src_port))) >|= fun () ->
+  let any =
+    Ipaddr.(Unix.(match ip with V4 _ -> inet_addr_any | V6 _ -> inet6_addr_any))
+  in
+  Lwt_unix.(bind fd (ADDR_INET (any, src_port))) >|= fun () ->
   Unix.ADDR_INET (unix_ip, port), fd
 
 type conn = {
