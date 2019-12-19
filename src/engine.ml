@@ -545,6 +545,27 @@ let wrap_hmac_control now ts session key transport outs =
   in
   session, transport, List.rev outs
 
+let merge_payload a b = match a, b with
+  | None, None -> None
+  | Some a, None -> Some a
+  | None, Some b -> Some (`Payload [b])
+  | Some `Payload a, Some b -> Some (`Payload (b :: a))
+  | _ -> assert false
+
+let find_channel state ts key p =
+  match channel_of_keyid key state with
+  | Some (ch, set_ch) -> Some (ch, set_ch)
+  | None ->
+    Logs.warn (fun m -> m "no channel found! %d" key);
+    match state.state, p with
+    | Ready, `Control (Packet.Soft_reset, _)  ->
+      let channel = new_channel key ts in
+      Some (channel, fun s ch -> { s with state = Rekeying ch })
+    | _ ->
+      Logs.warn (fun m -> m "ignoring unexpected packet %a in %a"
+                    Packet.pp (key, p) pp state);
+      None
+
 let incoming state now ts buf =
   let state = { state with last_received = ts } in
   let rec multi buf (state, out, act) =
@@ -553,27 +574,12 @@ let incoming state now ts buf =
     | Error `Partial -> Ok ({ state with linger = buf }, out, act)
     | Ok (key, p, linger) ->
       (* ok, at first find proper channel for key (or create a fresh channel) *)
-      match
-        match channel_of_keyid key state with
-        | Some (ch, set_ch) -> Ok (ch, set_ch)
-        | None ->
-          Logs.warn (fun m -> m "no channel found! %d" key);
-          match state.state, p with
-          | Ready, `Control (Packet.Soft_reset, _)  ->
-            let channel = new_channel key ts in
-            Ok (channel, fun s ch -> { s with state = Rekeying ch })
-          | _ ->
-            Logs.warn (fun m -> m "ignoring unexpected packet %a in %a"
-                          Packet.pp (key, p) pp state);
-            Error ()
-      with
-      | Error () ->
-        Logs.err (fun m -> m "no channel, continue") ;
-        Ok (state, out, act)
-      | Ok (ch, set_ch) ->
+      match find_channel state ts key p with
+      | None -> Ok (state, out, act)
+      | Some (ch, set_ch) ->
         Logs.debug (fun m -> m "channel %a - received %a"
                        pp_channel ch Packet.pp (key, p));
-        let bad_mac hmac' = `Bad_mac (state, hmac', (key, p)) in
+        let bad_mac hmac = `Bad_mac (state, hmac, (key, p)) in
         (match p with
          | `Data data ->
            begin match keys_opt ch with
@@ -581,16 +587,9 @@ let incoming state now ts buf =
                Logs.warn (fun m -> m "received data, but no keys yet");
                Ok (state, out, None)
              | Some keys ->
-               let bytes = Cstruct.len data + ch.bytes in
-               let ch = { ch with packets = succ ch.packets ; bytes } in
-               incoming_data bad_mac keys state.session.compress data >>| fun data ->
-               let act = match act, data with
-                 | None, None -> None
-                 | None, Some x -> Some (`Payload [x])
-                 | Some x, None -> Some x
-                 | Some (`Payload y), Some x -> Some (`Payload (x::y))
-                 | _ -> assert false
-               in
+               let ch = received_packet ch data in
+               incoming_data bad_mac keys state.session.compress data >>| fun payload ->
+               let act = merge_payload act payload in
                set_ch state ch, out, act
            end
          | (`Ack _ | `Control _) as d ->
@@ -604,49 +603,48 @@ let incoming state now ts buf =
              Logs.warn (fun m -> m "ignoring bad packet %a" pp_error e);
              Ok (state, out, None)
            | Ok (session, transport) ->
-             let state' = { state with session }
-             and ch' = { ch with transport }
+             let state = { state with session }
+             and ch = { ch with transport }
              in
              match d with
              | `Ack _ ->
                (* effect already handled in expected_packet (removed acked ids from out_packets) *)
-               Logs.info (fun m -> m "ignoring acknowledgement");
-               Ok (set_ch state' ch', out, act)
+               Logs.debug (fun m -> m "ignoring acknowledgement");
+               Ok (set_ch state ch, out, act)
              | `Control (typ, (_, _, data)) ->
-               incoming_control state.config state.rng state'.session ch' now typ data
-               >>| fun (est, config', ch'', outs) ->
+               incoming_control state.config state.rng state.session ch now typ data
+               >>| fun (est, config, ch, outs) ->
                Logs.debug (fun m -> m "out channel %a, pkts %d"
-                              pp_channel ch'' (List.length outs));
+                              pp_channel ch (List.length outs));
                (* each control needs to be acked! *)
                let outs = match outs with [] -> [ Cstruct.empty ] | xs -> xs in
                (* now prepare outgoing packets *)
                let session, transport, encs =
-                 wrap_hmac_control now ts state'.session key ch''.transport outs
+                 wrap_hmac_control now ts state.session key ch.transport outs
                in
-               let out' = out @ encs in
-               let ch''' = { ch'' with transport } in
-               let state' = { state' with config = config' ; session } in
+               let out = out @ encs
+               and ch = { ch with transport }
+               and state = { state with config ; session }
+               in
                if est then
-                 match state'.state with
+                 match state.state with
                  | Handshaking _ ->
-                   let ip_config = ip_from_config config'
-                   and compress = match Config.find Comp_lzo config' with
-                     | None -> false | Some () -> true
+                   let ip_config = ip_from_config config
+                   and compress = match Config.find Comp_lzo config with
+                       None -> false | Some () -> true
                    in
-                   let session = { state'.session with compress } in
-                   let mtu = mtu config' compress in
-                   let act' =
-                     match act with None -> Some (`Established (ip_config, mtu))
-                                  | _ -> assert false
+                   let session = { state.session with compress }
+                   and mtu = mtu config compress
                    in
-                   { state' with state = Ready ; session ; channel = ch''' }, out', act'
+                   let act = Some (`Established (ip_config, mtu)) in
+                   { state with state = Ready ; session ; channel = ch }, out, act
                  | Rekeying _ ->
                    (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-                   let lame_duck = Some (state'.channel, ts) in
-                   { state' with state = Ready ; channel = ch''' ; lame_duck }, out', act
+                   let lame_duck = Some (state.channel, ts) in
+                   { state with state = Ready ; channel = ch ; lame_duck }, out, act
                  | _ -> assert false
                else
-                 set_ch state' ch''', out', act) >>= multi linger
+                 set_ch state ch, out, act) >>= multi linger
   in
   multi (Cstruct.append state.linger buf) (state, [], None) >>| fun (s', out, act) ->
   let act' =

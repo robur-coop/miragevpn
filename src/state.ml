@@ -62,6 +62,9 @@ type channel = {
   packets : int ;
 }
 
+let received_packet ch data =
+  { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes }
+
 let pp_channel ppf c =
   Fmt.pf ppf "channel %d %a@ started %Lu bytes %d packets %d@ transport %a"
     c.keyid pp_channel_state c.channel_st
