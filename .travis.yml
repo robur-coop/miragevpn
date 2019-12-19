@@ -7,7 +7,6 @@ sudo: false
 env:
   global:
     - PACKAGE="openvpn"
-    - PINS="mirage-nat:git+https://github.com/hannesm/mirage-nat.git#easy"
     - POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh"
     - TESTS=false
     - DISTRO=alpine
