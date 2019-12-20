@@ -36,8 +36,15 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       | Ok ovpn ->
         Logs.info (fun m -> m "tunnel established");
         let output_tunnel packet =
-          O.write ovpn (Cstruct.concat (Nat_packet.to_cstruct packet)) >|= fun res ->
-          if not res then Log.err (fun m -> m "failed to write data via tunnel")
+          match Nat_packet.to_cstruct ~mtu:(O.mtu ovpn) packet with
+          | Ok pkts ->
+            Lwt_list.fold_left_s
+              (fun r p -> if r then O.write ovpn p else Lwt.return r)
+              true pkts >|= fun res ->
+            if not res then Log.err (fun m -> m "failed to write data via tunnel")
+          | Error e ->
+            Log.err (fun m -> m "NAT to_cstruct failed %a" Nat_packet.pp_error e);
+            Lwt.return_unit
         and output_private packet =
           let dst = match packet with `IPv4 (p, _) -> p.Ipv4_packet.dst in
           Private_routing.destination_mac private_ip_net None arp dst >>= function
@@ -46,16 +53,35 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                         (match e with `Local -> "local" | `Gateway -> "gateway"));
             Lwt.return_unit
           | Ok dst ->
+            let more = ref [] in
             E.write eth dst `IPv4 (fun b ->
                 match Nat_packet.into_cstruct packet b with
-                | Ok n -> n
+                | Ok (n, adds) -> more := adds ; n
                 | Error e ->
+                  (* E.write takes a fill function (Cstruct.t -> int), which
+                     can not result in an error. Now, if Nat_packet results in
+                     an error (e.g. need to fragment, but fragmentation is not
+                     allowed (don't fragment bit is set)), we can't pass this
+                     information up the stack. Instead we log an error and
+                     return 0 -- thus an empty Ethernet header will be
+                     transmitted on the wire. *)
+                  (* TODO an ICMP error should be sent to the packet origin *)
                   Log.err (fun m -> m "error %a while Nat_packet.into_cstruct"
                               Nat_packet.pp_error e);
-                  0) >|= function
-            | Ok () -> ()
-            | Error e ->
-              Log.err (fun m -> m "error %a while writing" E.pp_error e)
+                  0) >>=
+            begin function
+              | Ok () ->
+                Lwt_list.iter_s (fun pkt ->
+                    let size = Cstruct.len pkt in
+                    E.write eth dst `IPv4 ~size
+                      (fun buf -> Cstruct.blit pkt 0 buf 0 size ; size) >|= function
+                    | Error e -> Log.err (fun f -> f "Failed to send packet to private %a"
+                                             E.pp_error e)
+                    | Ok () -> ()) !more
+              | Error e ->
+                Log.err (fun m -> m "error %a while writing" E.pp_error e);
+                Lwt.return_unit
+            end
         in
         let rec ingest_private table packet =
           Log.debug (fun f -> f "Private interface got a packet: %a"
@@ -69,25 +95,27 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             | Ok packet -> output_tunnel packet
             | Error `Untranslated -> add_rule table packet
             | Error `TTL_exceeded ->
+              (* TODO should report ICMP error message to src *)
               Log.warn (fun f -> f "TTL exceeded"); Lwt.return_unit
         and add_rule table packet =
           let public_ip = O.get_ip ovpn
           and port = Randomconv.int16 R.generate
           in
-          Mirage_nat_lru.add table ~now:(M.elapsed_ns ()) packet (public_ip, port) `NAT >>= function
+          Mirage_nat_lru.add table packet (public_ip, port) `NAT >>= function
           | Error e ->
             Log.debug (fun m -> m "Failed to add a NAT rule: %a"
                           Mirage_nat.pp_error e);
             Lwt.return_unit
           | Ok () -> ingest_private table packet
         in
-        let ingest_public table cs =
-          match Nat_packet.of_ipv4_packet cs with
+        let ingest_public cache now table cs =
+          match Nat_packet.of_ipv4_packet cache ~now cs with
           | Error e ->
             Log.err (fun m -> m "ingest_public nat_packet.of_ipv4 err %a"
                         Nat_packet.pp_error e);
             Lwt.return_unit
-          | Ok packet ->
+          | Ok None -> Lwt.return_unit
+          | Ok Some packet ->
             Mirage_nat_lru.translate table packet >>= function
             | Ok packet -> output_private packet
             | Error e ->
@@ -99,12 +127,14 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         in
         Mirage_nat_lru.empty ~tcp_size:1024 ~udp_size:1024 ~icmp_size:20 >>= fun table ->
         let listen_private =
-          let ipv4 p = match Nat_packet.of_ipv4_packet p with
+          let cache = Fragments.Cache.create (256 * 1024) in
+          let ipv4 p = match Nat_packet.of_ipv4_packet cache ~now:(M.elapsed_ns ()) p with
             | Error e ->
               Log.err (fun m -> m "listen_private failed Nat.of_ipv4_packet %a"
                           Nat_packet.pp_error e);
               Lwt.return_unit
-            | Ok pkt -> ingest_private table pkt
+            | Ok None -> Lwt.return_unit
+            | Ok Some pkt -> ingest_private table pkt
           and arpv4 = A.input arp
           in
           let header_size = Ethernet_wire.sizeof_ethernet
@@ -114,9 +144,10 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                                      N.pp_error e)
           | Ok () -> Log.debug (fun m -> m "private interface terminated normally")
         in
+        let ovpn_cache = Fragments.Cache.create (256 * 1024) in
         let rec listen_ovpn () =
           O.read ovpn >>= fun datas ->
-          Lwt_list.iter_s (ingest_public table) datas >>= fun () ->
+          Lwt_list.iter_s (ingest_public ovpn_cache (M.elapsed_ns ()) table) datas >>= fun () ->
           listen_ovpn ()
         in
         Lwt.pick [ listen_private ; listen_ovpn () ]
