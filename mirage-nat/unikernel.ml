@@ -58,20 +58,29 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                 match Nat_packet.into_cstruct packet b with
                 | Ok (n, adds) -> more := adds ; n
                 | Error e ->
+                  (* E.write takes a fill function (Cstruct.t -> int), which
+                     can not result in an error. Now, if Nat_packet results in
+                     an error (e.g. need to fragment, but fragmentation is not
+                     allowed (don't fragment bit is set)), we can't pass this
+                     information up the stack. Instead we log an error and
+                     return 0 -- thus an empty Ethernet header will be
+                     transmitted on the wire. *)
                   Log.err (fun m -> m "error %a while Nat_packet.into_cstruct"
                               Nat_packet.pp_error e);
-                  0) >>= function
-            | Ok () ->
-              Lwt_list.iter_s (fun f ->
-                  let size = Cstruct.len f in
-                  E.write eth dst `IPv4 ~size
-                    (fun b -> Cstruct.blit f 0 b 0 size ; size) >|= function
-                  | Error e -> Log.err (fun f -> f "Failed to send packet to private %a"
-                                           E.pp_error e)
-                  | Ok () -> ()) !more
-            | Error e ->
-              Log.err (fun m -> m "error %a while writing" E.pp_error e);
-              Lwt.return_unit
+                  0) >>=
+            begin function
+              | Ok () ->
+                Lwt_list.iter_s (fun pkt ->
+                    let size = Cstruct.len pkt in
+                    E.write eth dst `IPv4 ~size
+                      (fun buf -> Cstruct.blit pkt 0 buf 0 size ; size) >|= function
+                    | Error e -> Log.err (fun f -> f "Failed to send packet to private %a"
+                                             E.pp_error e)
+                    | Ok () -> ()) !more
+              | Error e ->
+                Log.err (fun m -> m "error %a while writing" E.pp_error e);
+                Lwt.return_unit
+            end
         in
         let rec ingest_private table packet =
           Log.debug (fun f -> f "Private interface got a packet: %a"
