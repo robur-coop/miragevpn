@@ -131,12 +131,9 @@ let read_udp =
     Lwt_result.catch (
       Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
       if sa = sa' then
-        if count = 0 then
-          Lwt.fail_with "end of file from server"
-        else
-          let cs = Cstruct.of_bytes ~len:count buf in
-          Logs.debug (fun m -> m "read %d bytes" count) ;
-          Lwt.return (Some cs)
+        let cs = Cstruct.of_bytes ~len:count buf in
+        Logs.debug (fun m -> m "read %d bytes" count) ;
+        Lwt.return (Some cs)
       else
         let pp_sockaddr ppf = function
           | Unix.ADDR_UNIX s -> Fmt.pf ppf "unix %s" s
