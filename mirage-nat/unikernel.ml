@@ -65,6 +65,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                      information up the stack. Instead we log an error and
                      return 0 -- thus an empty Ethernet header will be
                      transmitted on the wire. *)
+                  (* TODO an ICMP error should be sent to the packet origin *)
                   Log.err (fun m -> m "error %a while Nat_packet.into_cstruct"
                               Nat_packet.pp_error e);
                   0) >>=
