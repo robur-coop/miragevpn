@@ -60,22 +60,47 @@ let rec write_to_fd fd data =
         Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
       (fun e ->
          Lwt_result.lift
-           (Rresult.R.error_msgf "write error %s" (Printexc.to_string e)))
+           (Rresult.R.error_msgf "TCP write error %s" (Printexc.to_string e)))
 
 let write_multiple_to_fd fd bufs =
-  match fd with
+  Lwt_list.fold_left_s (fun r buf ->
+      if r then
+        write_to_fd fd buf >|= function
+        | Ok () -> true
+        | Error `Msg msg ->
+          Logs.err (fun m -> m "TCP error %s while writing" msg);
+          false
+      else
+        Lwt.return r)
+    true bufs
+
+let write_udp sa fd data =
+  Lwt.catch (fun () ->
+      let len = Cstruct.len data in
+      Lwt_unix.sendto fd (Cstruct.to_bytes data) 0 len [] sa >|= fun sent ->
+      if sent <> len then
+        Logs.warn (fun m -> m "UDP short write (length %d, written %d)" len sent);
+      Ok ())
+    (fun e ->
+       Lwt_result.lift
+         (Rresult.R.error_msgf "UDP write error %s" (Printexc.to_string e)))
+
+let write_multiple_udp sa fd bufs =
+  Lwt_list.fold_left_s (fun r buf ->
+      if r then
+        write_udp sa fd buf >|= function
+        | Ok () -> true
+        | Error `Msg msg ->
+          Logs.err (fun m -> m "error %s while writing" msg);
+          false
+      else
+        Lwt.return r)
+    true bufs
+
+let transmit data = function
+  | Some `Tcp fd -> write_multiple_to_fd fd data
+  | Some `Udp (sa, fd) -> write_multiple_udp sa fd data
   | None -> Lwt.return false
-  | Some fd ->
-    Lwt_list.fold_left_s (fun r buf ->
-        if r then
-          write_to_fd fd buf >|= function
-          | Ok () -> true
-          | Error `Msg msg ->
-            Logs.err (fun m -> m "error %s while writing" msg);
-            false
-        else
-          Lwt.return r)
-      true bufs
 
 let read_from_fd fd =
   Lwt_result.catch (
@@ -88,17 +113,47 @@ let read_from_fd fd =
       let cs = Cstruct.of_bytes ~len:count buf in
       Logs.debug (fun m -> m "read %d bytes" count) ;
       Lwt.return cs)
-  |> Lwt_result.map_err (fun e ->
-      Rresult.R.msgf "read error %s" (Printexc.to_string e))
+  |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
 
-let rec reader mvar fd =
+let rec reader_tcp mvar fd =
   read_from_fd fd >>= function
   | Error `Msg msg ->
     Logs.err (fun m -> m "read error from remote %s" msg);
     Lwt_mvar.put mvar `Connection_failed
   | Ok data ->
     Lwt_mvar.put mvar (`Data data) >>= fun () ->
-    reader mvar fd
+    reader_tcp mvar fd
+
+let read_udp =
+  let bufsize = 65535 in
+  let buf = Bytes.create bufsize in
+  fun (sa, fd) ->
+    Lwt_result.catch (
+      Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
+      if sa = sa' then
+        let cs = Cstruct.of_bytes ~len:count buf in
+        Logs.debug (fun m -> m "read %d bytes" count) ;
+        Lwt.return (Some cs)
+      else
+        let pp_sockaddr ppf = function
+          | Unix.ADDR_UNIX s -> Fmt.pf ppf "unix %s" s
+          | Unix.ADDR_INET (ip, port) ->
+            Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr ip) port
+        in
+        Logs.warn (fun m -> m "ignoring unsolicited data from %a (expected %a)"
+                      pp_sockaddr sa' pp_sockaddr sa);
+        Lwt.return None)
+  |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
+
+let rec reader_udp mvar r =
+  read_udp r >>= function
+  | Error `Msg msg ->
+    Logs.err (fun m -> m "read error from remote %s" msg);
+    Lwt_mvar.put mvar `Connection_failed
+  | Ok Some data ->
+    Lwt_mvar.put mvar (`Data data) >>= fun () ->
+    reader_udp mvar r
+  | Ok None -> reader_udp mvar r
 
 let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
 
@@ -163,9 +218,22 @@ let connect_tcp ip port =
      TODO this will be fixed in upcoming PR to mirage-tuntap.
   *)
 
+let connect_udp ip port =
+  let dom =
+    Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
+  and unix_ip = Ipaddr_unix.to_inet_addr ip
+  and src_port = Randomconv.int16 Nocrypto.Rng.generate
+  in
+  let fd = Lwt_unix.(socket dom SOCK_DGRAM 0) in
+  let any =
+    Ipaddr.(Unix.(match ip with V4 _ -> inet_addr_any | V6 _ -> inet6_addr_any))
+  in
+  Lwt_unix.(bind fd (ADDR_INET (any, src_port))) >|= fun () ->
+  Unix.ADDR_INET (unix_ip, port), fd
+
 type conn = {
   mutable o_client : Openvpn.t ;
-  mutable fd : Lwt_unix.file_descr option ;
+  mutable peer : ([ `Udp of Lwt_unix.sockaddr * Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ]) option ;
   mutable est_switch : Lwt_switch.t ;
   data_mvar : Cstruct.t list Lwt_mvar.t ;
   est_mvar : (Openvpn.ip_config * int) Lwt_mvar.t ;
@@ -181,18 +249,26 @@ let handle_action conn = function
     resolve data >>= fun r ->
     let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
     Lwt_mvar.put conn.event_mvar ev
-  | `Connect (ip, port, _proto) ->
+  | `Connect (ip, port, `Udp) ->
+    Lwt_switch.turn_off conn.est_switch >>= fun () ->
+    conn.est_switch <- Lwt_switch.create ();
+    Logs.app (fun m -> m "connecting udp %a" Ipaddr.pp ip);
+    connect_udp ip port >>= fun r ->
+    conn.peer <- Some (`Udp r);
+    Lwt.async (fun () -> reader_udp conn.event_mvar r);
+    Lwt_mvar.put conn.event_mvar `Connected
+  | `Connect (ip, port, `Tcp) ->
     Lwt_switch.turn_off conn.est_switch >>= fun () ->
     let sw = Lwt_switch.create () in
     conn.est_switch <- sw;
-    Logs.app (fun m -> m "connecting %a" Ipaddr.pp ip);
+    Logs.app (fun m -> m "connecting tcp %a" Ipaddr.pp ip);
     connect_tcp ip port >>= fun r ->
     if Lwt_switch.is_on sw then
       let ev = match r with
         | None -> `Connection_failed
         | Some fd ->
-          conn.fd <- Some fd;
-          Lwt.async (fun () -> reader conn.event_mvar fd);
+          conn.peer <- Some (`Tcp fd);
+          Lwt.async (fun () -> reader_tcp conn.event_mvar fd);
           `Connected
       in
       Lwt_mvar.put conn.event_mvar ev
@@ -201,13 +277,13 @@ let handle_action conn = function
       match r with None -> Lwt.return_unit | Some x -> safe_close x
     end
   | `Disconnect ->
-    begin match conn.fd with
+    begin match conn.peer with
       | None ->
         Logs.err (fun m -> m "cannot disconnect: no open connection");
         Lwt.return_unit
-      | Some fd ->
+      | Some `Tcp fd | Some `Udp (_, fd) ->
         Logs.warn (fun m -> m "disconnecting!");
-        conn.fd <- None;
+        conn.peer <- None;
         safe_close fd
     end
   | `Exit -> Lwt.fail_with "exit called"
@@ -232,7 +308,7 @@ let rec event conn =
      | [] -> ()
      | _ ->
        Lwt.async (fun () ->
-           (write_multiple_to_fd conn.fd outs >>= function
+           (transmit outs conn.peer >>= function
              | true -> Lwt.return_unit
              | false -> Lwt_mvar.put conn.event_mvar `Connection_failed)));
     (match action with
@@ -266,7 +342,7 @@ let send_recv conn config ip_config _mtu =
       | Ok (s', out) ->
         conn.o_client <- s';
         let open Lwt.Infix in
-        write_multiple_to_fd conn.fd [out] >>= fun sent ->
+        transmit [out] conn.peer >>= fun sent ->
         if sent then
           process_outgoing tun_fd
         else
@@ -284,7 +360,7 @@ let establish_tunnel config =
     and est_mvar = Lwt_mvar.create_empty ()
     and event_mvar = Lwt_mvar.create_empty ()
     in
-    let conn = { o_client ; fd = None ; est_switch = Lwt_switch.create () ;
+    let conn = { o_client ; peer = None ; est_switch = Lwt_switch.create () ;
                  data_mvar ; est_mvar ; event_mvar }
     in
     (* handle initial action *)
