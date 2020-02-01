@@ -40,7 +40,7 @@ depends: [
   "rresult"
   "tls"
   "dns-client" {>= "4.0.0"}
-  "x509" {>= "0.8.0"}
+  "x509" {>= "0.9.0"}
   "duration"
 
   # mirage:
