@@ -8,7 +8,7 @@ module A = Angstrom
 type inlineable =
   [ `Auth_user_pass | `Ca | `Connection | `Pkcs12
   | `Tls_auth of [`Incoming | `Outgoing] option
-  | `Tls_cert | `Tls_key ]
+  | `Tls_cert | `Tls_key | `Secret ]
 let string_of_inlineable = function
   | `Auth_user_pass -> "auth-user-pass"
   | `Ca -> "ca"
@@ -17,6 +17,7 @@ let string_of_inlineable = function
   | `Tls_auth _ -> "tls-auth"
   | `Tls_cert -> "cert"
   | `Tls_key -> "key"
+  | `Secret -> "secret"
 type inline_or_path = [ `Need_inline of inlineable
                       | `Path of string * inlineable ]
 
@@ -102,6 +103,7 @@ module Conf_map = struct
                       | `Default
                       | `Dhcp ] k
     | Route_metric : [`Default | `Metric of int] k
+    | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_auth : ([ `Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert   : X509.Certificate.t k
@@ -147,6 +149,12 @@ module Conf_map = struct
         (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
            Error "remote-cert-tls is not SERVER?!" else Ok ())
       )
+
+  let pp_key ppf (a, b, c, d) =
+    Fmt.pf ppf "-----BEGIN OpenVPN Static key V1-----\n%a\n-----END OpenVPN Static key V1-----"
+      Fmt.(array ~sep:(unit"\n") string)
+      (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
+       | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
 
   let pp_b ?(sep=Fmt.unit "@.") ppf (b:b) =
     let p () = Fmt.pf ppf in
@@ -287,16 +295,13 @@ module Conf_map = struct
     | Route_gateway, `Default -> p() "route-gateway default"
     | Route_gateway, `Dhcp ->  p() "route-gateway dhcp"
     | Route_gateway, `Ip ip -> p() "route-gateway %a" Ipaddr.pp ip
+    | Secret, (a, b, c, d) ->
+      p() "<secret>\n%a\n</secret>" pp_key (a, b, c, d)
     | Tls_auth, (direction, a,b,c,d) ->
-      p() "tls-auth [inline]%s\n<tls-auth>\n\
-           -----BEGIN OpenVPN Static key V1-----\n\
-           %a\n%s\n</tls-auth>"
+      p() "tls-auth [inline]%s\n<tls-auth>\n%a\n</tls-auth>"
         (match direction with
          | Some `Incoming -> " 1" | Some `Outgoing -> " 0" | None -> "")
-        Fmt.(array ~sep:(unit"\n") string)
-        (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
-         | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
-        "-----END OpenVPN Static key V1-----"
+        pp_key (a, b, c, d)
     | Route_metric, `Metric i -> p() "route-metric %d" i
     | Route_metric, `Default -> p() "route-metric default"
     | Tls_cert, cert -> pp_x509 "cert" cert
@@ -539,8 +544,8 @@ let a_tls_auth =
   | `Need_inline () -> `Need_inline (`Tls_auth direction)
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
 
-let a_tls_auth_payload direction =
-  let abort s = fail ("Invalid TLS AUTH HMAC key: " ^ s) in
+let inline_payload element =
+  let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line) *>
   (string "-----BEGIN OpenVPN Static key V1-----\n"
    <|> abort "Missing Static key V1 -----BEGIN mark") *>
@@ -556,15 +561,22 @@ let a_tls_auth_payload direction =
       if 256 = sz then return lst else
         abort @@ "Wrong size ("^(string_of_int sz)^"); need exactly 256 bytes")
   >>| Cstruct.concat >>| fun cs ->
-  B (Tls_auth,
-     Cstruct.(direction,
-              sub cs 0        64,
-              sub cs 64       64,
-              sub cs 128      64,
-              sub cs (128+64) 64))
+  Cstruct.(sub cs 0        64,
+           sub cs 64       64,
+           sub cs 128      64,
+           sub cs (128+64) 64)
+
+let a_tls_auth_payload direction =
+  inline_payload "TLS AUTH" >>| fun (a, b, c, d) ->
+  B (Tls_auth, (direction, a, b, c, d))
 
 let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
+
+let a_secret str =
+  match parse_string (inline_payload "secret") str with
+  | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
+  | Error e -> Error e
 
 let a_auth_user_pass_payload =
   (* To protect against a client passing a maliciously  formed  user‐
@@ -1020,6 +1032,7 @@ let parse_inline str = let open Rresult in
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
+  | `Secret -> a_secret str
   | kind -> Error ("config-parser: not sure how to parse inline " ^
                    (string_of_inlineable kind))
 
@@ -1164,6 +1177,9 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           end
         | `Inline ("connection", x) ->
           parse_inline x `Connection >>= resolve_add_conflict acc >>= fun acc ->
+          loop acc tl
+        | `Inline ("secret", payload) ->
+          parse_inline payload `Secret >>= resolve_add_conflict acc >>= fun acc ->
           loop acc tl
         | `Inline (fname, _) ->
           (* Except for "connection" all blocks must be warranted by an
