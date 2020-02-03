@@ -58,6 +58,10 @@ module Config : sig
     | Dev      : [`Null | `Tun of int option | `Tap of int option] k
     (** if Tap/Tun is [None], a device must be allocated dynamically. *)
 
+    | Dev_type : [ `Tun | `Tap ] k
+    (** The device type, use only if the device name used with Dev does not
+        begin with [tun] or [tap]. *)
+
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
     | Dhcp_ntp: Ipaddr.t list k

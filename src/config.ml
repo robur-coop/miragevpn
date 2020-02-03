@@ -60,6 +60,7 @@ module Conf_map = struct
     | Connect_retry_max : [`Unlimited | `Times of int] k
     | Connect_timeout : int k
     | Dev      : [`Null | `Tun of int option | `Tap of int option] k
+    | Dev_type : [ `Tun | `Tap ] k
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
     | Dhcp_ntp: Ipaddr.t list k
@@ -179,7 +180,7 @@ module Conf_map = struct
         (X509.Private_key.encode_pem key |> Cstruct.to_string)
     in
     match k,v with
-    | Auth_nocache, () -> p() "auto-nocache"
+    | Auth_nocache, () -> p() "auth-nocache"
     | Auth_retry, `None -> p() "auth-retry none"
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
     | Auth_retry, `Interact -> p() "auth-retry interact"
@@ -207,6 +208,8 @@ module Conf_map = struct
     | Dev, `Tun None -> p() "dev tun"
     | Dev, `Tun Some i -> p() "dev tun%d" i
     | Dev, `Null -> p() "dev null"
+    | Dev_type, `Tap -> p() "dev-type tap"
+    | Dev_type, `Tun -> p() "dev-type tun"
     | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
     | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
     | Dhcp_ntp, ips ->
@@ -456,6 +459,13 @@ let a_dev =
   in
   string "dev" *> a_whitespace *> a_device_name >>| fun name ->
   `Entry (B (Dev,name))
+
+let a_dev_type =
+  string "dev-type" *> a_whitespace *>
+  choice [
+    (string "tun" >>| fun _ -> `Tun) ;
+    (string "tap" >>| fun _ -> `Tap) ] >>| fun typ ->
+  `Entry (B (Dev_type, typ))
 
 let a_proto =
   string "proto" *> a_whitespace *> choice [
@@ -898,13 +908,13 @@ let a_not_implemented =
       string "ip-win32" ;
       string "socket-flags" ;
       string "remote-cert-ku" ;
-      string "rport" ;
       string "engine" ;
       (* TODO: *)
       string "redirect-gateway" ;
       string "up" ;
       string "dh" ;
       string "explicit-exit-notify" ;
+      string "script-security" ;
     ] <* a_whitespace >>= fun key ->
   take_while (function '\n' -> false | _ -> true) >>| fun rest ->
   Logs.warn (fun m ->m "IGNORING %S %S" key rest) ;
@@ -915,6 +925,7 @@ let a_config_entry : line A.t =
   Angstrom.choice [
     a_client ;
     a_dev ;
+    a_dev_type ;
     a_local ;
     a_dhcp_option ;
     a_proto ;
