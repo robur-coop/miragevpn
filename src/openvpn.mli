@@ -148,6 +148,8 @@ module Config : sig
     | Route_metric : [`Default | `Metric of int] k
     (** Default metric for [Route _] directives *)
 
+    | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+
     | Tls_auth : ([`Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert     : X509.Certificate.t k
