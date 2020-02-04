@@ -1,0 +1,12 @@
+(test
+  (name test_engine)
+  (modules test_engine config_tests)
+  (libraries alcotest crowbar fmt logs.fmt rresult openvpn)
+)
+
+;(executable
+;  (public_name config_afl)
+;  (name config_afl)
+;  (modules config_afl)
+;  (libraries crowbar afl-persistent rresult openvpn)
+;)
