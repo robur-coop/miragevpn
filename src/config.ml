@@ -52,6 +52,7 @@ module Conf_map = struct
     | Auth_nocache : flag k
     | Auth_retry : [`Interact | `Nointeract | `None] k
     | Auth_user_pass : (string * string) k
+    | Auth_user_pass_verify : (string * [`Via_env | `Via_file]) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
                                | `Ip of Ipaddr.t] option) option k
     | Ca       : X509.Certificate.t k
@@ -78,6 +79,7 @@ module Conf_map = struct
     | Persist_tun : flag k
     | Ping_interval : [`Not_configured | `Seconds of int] k
     | Ping_timeout : [`Restart of int | `Exit of int] k
+    | Port : int k
     | Pull     : flag k
     | Proto    : ([`Ipv6 | `Ipv4] option
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
@@ -103,7 +105,9 @@ module Conf_map = struct
                       | `Default
                       | `Dhcp ] k
     | Route_metric : [`Default | `Metric of int] k
+    | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Server : (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) k
     | Tls_auth : ([ `Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert   : X509.Certificate.t k
@@ -115,6 +119,7 @@ module Conf_map = struct
     | Transition_window : int k
     | Tun_mtu : int k
     | Verb : int k
+    | Verify_client_cert : [ `None | `Optional | `Required ] k
 
   module K = struct
     type 'a t = 'a k
@@ -193,7 +198,9 @@ module Conf_map = struct
     | Auth_retry, `Nointeract -> p() "auth-retry nointeract"
     | Auth_retry, `Interact -> p() "auth-retry interact"
     | Auth_user_pass, (user,pass) ->
-      Fmt.pf ppf "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
+      p() "auth-user-pass [inline]\n<auth-user-pass>\n%s\n%s\n</auth-user-pass>" user pass
+    | Auth_user_pass_verify, (cmd, mode) ->
+      p() "auth-user-pass-verify %s %s" cmd (match mode with `Via_file -> "via-file" | `Via_env -> "via-env")
     | Bind, None -> p() "nobind"
     | Bind, Some opts ->
       p() "bind" ;
@@ -240,6 +247,7 @@ module Conf_map = struct
     | Passtos, () -> p() "passtos"
     | Persist_key, () -> p() "persist-key"
     | Persist_tun, () -> p() "persist-tun"
+    | Port, port -> p() "port %u" port
     | Proto, (ip_v, kind) ->
       p() "proto %s%s%s"
         (match kind with `Udp -> "udp" | `Tcp _ -> "tcp")
@@ -295,8 +303,12 @@ module Conf_map = struct
     | Route_gateway, `Default -> p() "route-gateway default"
     | Route_gateway, `Dhcp ->  p() "route-gateway dhcp"
     | Route_gateway, `Ip ip -> p() "route-gateway %a" Ipaddr.pp ip
+    | Script_security, d -> p() "script-security %u" d
     | Secret, (a, b, c, d) ->
       p() "<secret>\n%a\n</secret>" pp_key (a, b, c, d)
+    | Server, (ip, mask) ->
+      p() "server %a %a" Ipaddr.V4.pp ip Ipaddr.V4.pp
+        (Ipaddr.V4.Prefix.netmask mask)
     | Tls_auth, (direction, a,b,c,d) ->
       p() "tls-auth [inline]%s\n<tls-auth>\n%a\n</tls-auth>"
         (match direction with
@@ -318,6 +330,9 @@ module Conf_map = struct
     | Transition_window, seconds -> p() "tran-window %d" seconds
     | Tun_mtu, int -> p() "tun-mtu %d" int
     | Verb, int -> p() "verb %d" int
+    | Verify_client_cert, mode ->
+      p() "verify-client-cert %s"
+        (match mode with `None -> "none" | `Optional -> "optional" | `Required -> "require")
 
   let pp_with_sep ?(sep=Fmt.unit "@.") ppf t =
     let minimized_t =
@@ -794,6 +809,40 @@ let a_topology =
     string "subnet" *> return `Subnet ;
   ] >>| fun v -> `Entry (B( Topology, v))
 
+let a_port =
+  (string "port" *> a_whitespace *> a_number_range 0 65535) >>| fun port ->
+  `Entry (B(Port, port))
+
+let a_auth_user_pass_verify =
+  let path = take_while1 (function ' ' -> false | _ -> true) in
+  let aupv a b = `Entry (B (Auth_user_pass_verify, (a, b))) in
+  lift2 aupv
+    (string "auth-user-pass-verify" *> a_whitespace *> path)
+    (a_whitespace *> choice [
+        (string "via-env" >>| fun _ -> `Via_env) ;
+        (string "via-file" >>| fun _ -> `Via_file) ;
+      ])
+
+let a_script_security =
+  (string "script-security" *> a_whitespace *> a_number) >>| fun ss ->
+  `Entry (B(Script_security, ss))
+
+let a_verify_client_cert =
+  string "verify-client-cert" *> a_whitespace *>
+  choice [
+    string "none" *> return `None ;
+    string "optional" *> return `Optional ;
+    string "require" *> return `Required ;
+  ] >>| fun v -> `Entry (B (Verify_client_cert, v))
+
+let a_server =
+  let server ip mask =
+    `Entry (B(Server, (ip, Ipaddr.V4.Prefix.of_netmask mask ip)))
+  in
+  lift2 server
+    (string "server" *> a_whitespace *> a_ipv4_dotted_quad)
+    (a_whitespace *> a_ipv4_dotted_quad)
+
 let a_cipher =
   string "cipher" *> a_whitespace *>
   a_single_param >>| fun v -> `Entry (B(Cipher, v))
@@ -921,12 +970,14 @@ let a_not_implemented =
       string "socket-flags" ;
       string "remote-cert-ku" ;
       string "engine" ;
+      string "ifconfig-pool-persist" ;
+      string "status" ;
+      string "log-append" ;
       (* TODO: *)
       string "redirect-gateway" ;
       string "up" ;
       string "dh" ;
       string "explicit-exit-notify" ;
-      string "script-security" ;
     ] <* a_whitespace >>= fun key ->
   take_while (function '\n' -> false | _ -> true) >>| fun rest ->
   Logs.warn (fun m ->m "IGNORING %S %S" key rest) ;
@@ -958,10 +1009,15 @@ let a_config_entry : line A.t =
     a_tls_version_min ;
     a_keepalive ;
     a_socks_proxy ;
+    a_auth_user_pass_verify ;
     a_auth_user_pass ;
     a_link_mtu ;
     a_tun_mtu ;
     a_cipher ;
+    a_port ;
+    a_server ;
+    a_verify_client_cert ;
+    a_script_security ;
     a_replay_window ;
     a_remote ;
     a_reneg_bytes ;
@@ -1372,6 +1428,9 @@ let client_generate_connect_options t =
   Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
                 serialized) ;
   Ok serialized
+
+let server_generate_connect_options _config =
+  "V4,dev-type tun,link-mtu 1559,tun-mtu 1500,proto TCPv4_SERVER,keydir 0,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-server"
 
 let client_merge_server_config client server_str =
   (* TODO: Mutate client config,

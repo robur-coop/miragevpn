@@ -279,17 +279,19 @@ let pp_tls_data ppf t =
 
 let key_method = 0x02
 
-(* this is client only (since there's a pre_master!) *)
 let encode_tls_data t =
-  let prefix = Cstruct.create 5 in
+  let prefix = Cstruct.create 5 in (* 4 zero bytes, and one byte key_method *)
   Cstruct.set_uint8 prefix 4 key_method;
   let key_source = Cstruct.concat [ t.pre_master ; t.random1 ; t.random2 ] in
   let opt_len = Cstruct.create 2 in
+  (* the options field, and also username and password are zero-terminated
+     in addition to be length-prefixed... *)
   let null = Cstruct.create 1 in
   Cstruct.BE.set_uint16 opt_len 0 (succ (String.length t.options));
   let u_p = match t.user_pass with
     | None -> Cstruct.empty
     | Some (u, p) ->
+      (* username and password are each 2 byte length, <value>, 0x00 *)
       let u_l = Cstruct.create 2 and p_l = Cstruct.create 2 in
       Cstruct.BE.set_uint16 u_l 0 (succ (String.length u));
       Cstruct.BE.set_uint16 p_l 0 (succ (String.length p));
@@ -299,48 +301,63 @@ let encode_tls_data t =
   in
   Cstruct.concat [ prefix ; key_source ; opt_len ; opt ; null ; u_p ]
 
-let maybe_string buf off = function
-  | 0 | 1 -> ""
-  | x -> Cstruct.(to_string (sub buf off (pred x)))
+let maybe_string prefix buf off = function
+  | 0 | 1 -> Ok ""
+  | x ->
+    let actual_len = pred x in (* null-terminated string *)
+    let data = Cstruct.(to_string (sub buf off actual_len)) in
+    if Cstruct.get_uint8 buf (off + actual_len) = 0x00
+    then Ok data
+    else Error (`Malformed (prefix ^ " is not null-terminated"))
 
-(* this is client only (parsing a server tls_data -- there's no pre_master!) *)
-let decode_tls_data buf =
-  let opt_start = 7 + 64 in
+let decode_tls_data ?(with_premaster = false) buf =
+  let pre_master_start = 5 (* 4 (zero) + 1 (key_method) *) in
+  let pre_master_len = if with_premaster then 48 else 0 in
+  let random_len = 32 in
+  let opt_start =
+    (* the options start at
+       pre_master_start + 2 (options length) + 32 random1 + 32 random2
+       + pre_master_len (if its a client tls data) *)
+    pre_master_start + 2 + random_len + random_len + pre_master_len
+  in
   guard (Cstruct.len buf >= opt_start) `Partial >>= fun () ->
   guard (Cstruct.BE.get_uint32 buf 0 = 0l)
-    (`Malformed "tls data must start with 32 bit 0") >>= fun () ->
+    (`Malformed "tls data must start with 32 bits set to 0") >>= fun () ->
   guard (Cstruct.get_uint8 buf 4 = key_method)
     (`Malformed "tls data key_method wrong") >>= fun () ->
-  (* skip pre_master *)
-  let random1 = Cstruct.sub buf 5 32
-  and random2 = Cstruct.sub buf (32 + 5) 32
+  let pre_master = Cstruct.sub buf pre_master_start pre_master_len in
+  let random_start = pre_master_start + pre_master_len in
+  let random1 = Cstruct.sub buf random_start random_len
+  and random2 = Cstruct.sub buf (random_start + random_len) random_len
   in
-  let opt_len = Cstruct.BE.get_uint16 buf (64 + 5) in
+  let opt_len = Cstruct.BE.get_uint16 buf (opt_start - 2) in
   guard (Cstruct.len buf >= opt_start + opt_len) `Partial >>= fun () ->
-  let options = maybe_string buf opt_start opt_len in
-  guard (Cstruct.get_uint8 buf (pred (opt_start + opt_len)) = 0)
-    (`Malformed "tls data option not null-terminated") >>= fun () ->
+  maybe_string "TLS data options" buf opt_start opt_len >>= fun options ->
   begin if Cstruct.len buf = opt_start + opt_len then
       Ok None
     else
+      (* more bytes - there's username and password (2 bytes len, value, 0x00) *)
       let u_start = opt_start + opt_len in
       guard (Cstruct.len buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial >>= fun () ->
       let u_len = Cstruct.BE.get_uint16 buf (opt_start + opt_len) in
       guard (Cstruct.len buf >= u_start + 4 + u_len) `Partial >>= fun () ->
-      let u = maybe_string buf (u_start + 2) u_len in
-      guard (u_len = 0 || Cstruct.get_uint8 buf (pred (u_start + 2 + u_len)) = 0)
-        (`Malformed "tls data username not null-terminated") >>= fun () ->
+      maybe_string "username" buf (u_start + 2) u_len >>= fun u ->
       let p_start = u_start + 2 + u_len in
       let p_len = Cstruct.BE.get_uint16 buf p_start in
       guard (Cstruct.len buf >= p_start + 2 + u_len + p_len) `Partial >>= fun () ->
-      let p = maybe_string buf (p_start + 2) p_len in
+      maybe_string "password" buf (p_start + 2) p_len >>| fun p ->
       let end_of_data = p_start + 2 + p_len in
-      guard (p_len = 0 || Cstruct.get_uint8 buf (pred end_of_data) = 0)
-        (`Malformed "tls data password not null-terminated") >>| fun () ->
       (* for some reason there may be some slack here... *)
       if Cstruct.len buf > end_of_data then
-        Logs.warn (fun m -> m "slack at end of tls_data %a"
-                      Cstruct.hexdump_pp (Cstruct.shift buf end_of_data));
+        let data = Cstruct.shift buf end_of_data in
+        Logs.warn (fun m -> m "slack at end of tls_data %s (p is %s)@.%a"
+                      (Cstruct.to_string data) p Cstruct.hexdump_pp data)
+      else
+        () ;
       match u, p with "", "" -> None | _ -> Some (u, p)
   end >>| fun user_pass ->
-  { pre_master = Cstruct.empty ; random1 ; random2 ; options ; user_pass }
+  { pre_master ; random1 ; random2 ; options ; user_pass }
+
+let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
+
+let push_reply = Cstruct.of_string "PUSH_REPLY"

@@ -1,4 +1,20 @@
 
+(* control flow of a server (forwarding only)
+    - config + stack (+rng +pclock +mclock) -> Openvpn.server ++ int
+    - Listen / accept on returned port
+    - new_connection server ts -> Openvpn.t [ server loop ]
+     - established / connected -> Openvpn.established <ip> session
+    - established ++ read on connection -> handle + forward/write to destination
+
+*)
+module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) : sig
+  type t
+
+  val connect : Openvpn.Config.t -> S.t -> t
+
+  val write : t -> Ipaddr.V4.t -> Cstruct.t -> unit Lwt.t
+end
+
 module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) : sig
   type t
 

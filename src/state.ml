@@ -40,14 +40,14 @@ let pp_keys ppf t =
     t.my_packet_id t.their_packet_id
 
 type channel_state =
-  | Expect_server_reset
+  | Expect_reset
   | TLS_handshake of Tls.Engine.state
   | TLS_established of Tls.Engine.state * key_source
   | Push_request_sent of Tls.Engine.state * keys
   | Established of Tls.Engine.state * keys
 
 let pp_channel_state ppf = function
-  | Expect_server_reset -> Fmt.string ppf "expecting server reset"
+  | Expect_reset -> Fmt.string ppf "expecting reset"
   | TLS_handshake _ -> Fmt.string ppf "TLS handshake in process"
   | TLS_established _ -> Fmt.string ppf "TLS handshake established"
   | Push_request_sent _ -> Fmt.string ppf "push request sent"
@@ -70,7 +70,7 @@ let pp_channel ppf c =
     c.keyid pp_channel_state c.channel_st
     c.started c.bytes c.packets pp_transport c.transport
 
-let new_channel ?(state = Expect_server_reset) keyid started = {
+let new_channel ?(state = Expect_reset) keyid started = {
   keyid ; channel_st = state ; transport = init_transport ; started ;
   bytes = 0 ; packets = 0
 }
@@ -150,6 +150,33 @@ let ip_from_config config =
     { ip ; prefix ; gateway }
   | _ -> assert false
 
+let server_ip config =
+  let ip, prefix = Config.get Server config in
+  let network = Ipaddr.V4.Prefix.network prefix in
+  if Ipaddr.V4.Prefix.mem ip prefix && not (Ipaddr.V4.compare ip network = 0) then
+    ip, prefix
+  else
+    (* take first IP in subnet (unless server a.b.c.d/netmask) with a.b.c.d not being the network address *)
+    let ip' = Ipaddr.V4.of_int32 (Int32.succ (Ipaddr.V4.to_int32 network)) in
+    assert (Ipaddr.V4.Prefix.mem ip' prefix);
+    ip', prefix
+
+let next_free_ip config is_not_taken =
+  let _, prefix = Config.get Server config in
+  let network = Ipaddr.V4.Prefix.network prefix in
+  let server_ip = fst (server_ip config) in
+  (* could be smarter than a linear search *)
+  let rec isit ip =
+    if Ipaddr.V4.Prefix.mem ip prefix then
+      if not (Ipaddr.V4.compare ip server_ip = 0) && not (Ipaddr.V4.compare ip network = 0) && is_not_taken ip then
+        Ok (ip, prefix)
+      else
+        isit Ipaddr.V4.(of_int32 (Int32.succ (to_int32 ip)))
+    else
+      Error (`Msg "all ips are taken")
+  in
+  isit network
+
 type session = {
   my_session_id : int64 ;
   my_packet_id : int32 ; (* this starts from 1l, indicates the next to-be-send *)
@@ -172,20 +199,37 @@ let pp_session ppf t =
     t.my_session_id t.my_packet_id t.their_session_id
     t.their_packet_id
 
-type state =
+type client_state =
   | Resolving of int * int64 * int (* index [into remote], timestamp, retry count *)
   | Connecting of int * int64 * int (* index [into remote], ts, retry count *)
   | Handshaking of int * int64 (* index into [remote], ts *)
   | Ready
   | Rekeying of channel
 
-let pp_state ppf = function
+let pp_client_state ppf = function
   | Resolving (_idx, _ts, _) -> Fmt.string ppf "resolving"
   | Connecting (_idx, _ts, retry) -> Fmt.pf ppf "connecting (retry %d)" retry
   | Handshaking (_idx, _ts) -> Fmt.string ppf "handshaking"
   | Ready -> Fmt.string ppf "ready"
-  | Rekeying c ->
-    Fmt.pf ppf "rekeying %a" pp_channel c
+  | Rekeying c -> Fmt.pf ppf "rekeying %a" pp_channel c
+
+type server_state =
+  | Server_handshaking
+  | Server_ready
+  | Server_rekeying of channel
+
+let pp_server_state ppf = function
+  | Server_handshaking -> Fmt.string ppf "server handshaking"
+  | Server_ready -> Fmt.string ppf "server ready"
+  | Server_rekeying c -> Fmt.pf ppf "server rekeying %a" pp_channel c
+
+type state =
+  | Client of client_state
+  | Server of server_state
+
+let pp_state ppf = function
+  | Client c -> pp_client_state ppf c
+  | Server s -> pp_server_state ppf s
 
 type t = {
   config : Config.t ;
@@ -250,10 +294,26 @@ let channel_of_keyid keyid s =
     | Some (ch, ts) when ch.keyid = keyid ->
       Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
     | _ -> match s.state with
-      | Rekeying channel when channel.keyid = keyid ->
+      | Client Rekeying channel when channel.keyid = keyid ->
         let set s ch =
-          let state = Rekeying ch in
+          let state = Client (Rekeying ch) in
+          { s with state }
+        in
+        Some (channel, set)
+      | Server Server_rekeying channel when channel.keyid = keyid ->
+        let set s ch =
+          let state = Server (Server_rekeying ch) in
           { s with state }
         in
         Some (channel, set)
       | _ -> None
+
+type server = {
+  server_config : Config.t ;
+  server_rng : int -> Cstruct.t ;
+  server_hmac : Cstruct.t ;
+  client_hmac : Cstruct.t ;
+}
+
+let pp_server ppf _s =
+  Fmt.pf ppf "server"

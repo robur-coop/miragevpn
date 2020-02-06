@@ -21,6 +21,7 @@ module Config : sig
     *)
 
     | Auth_user_pass : (string * string) k (** username, password*)
+    | Auth_user_pass_verify : (string * [`Via_env | `Via_file]) k
     | Bind     : (int option * [`Domain of [ `host ] Domain_name.t
                                | `Ip of Ipaddr.t] option) option k
     (** local [port],[host] to bind to.
@@ -107,6 +108,7 @@ module Config : sig
     *)
 
     | Ping_timeout : [`Restart of int | `Exit of int] k
+    | Port : int k
     | Pull     : flag k
 
     | Proto    : ([`Ipv6 | `Ipv4] option
@@ -148,7 +150,9 @@ module Config : sig
     | Route_metric : [`Default | `Metric of int] k
     (** Default metric for [Route _] directives *)
 
+    | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Server : (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) k
 
     | Tls_auth : ([`Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
@@ -188,6 +192,8 @@ module Config : sig
 
     | Verb : int k
 
+    | Verify_client_cert : [ `None | `Optional | `Required ] k
+
   include Gmap.S with type 'a key = 'a k
 
   val pp : Format.formatter -> t -> unit
@@ -219,6 +225,9 @@ module Config : sig
       TODO return conflicting subset as error
   *)
 
+  val parse : string_of_file:(string -> (string, R.msg) result) ->
+    string -> (t, [> R.msg]) result
+
   val parse_client : string_of_file:(string -> (string, R.msg) result) ->
     string -> (t, [> R.msg]) result
   (** Parses a configuration string, looking up references to external files
@@ -228,6 +237,8 @@ end
 
 type t
 (** The abstract type of an OpenVPN connection. *)
+
+type server
 
 type ip_config = {
   ip : Ipaddr.V4.t ;
@@ -265,14 +276,20 @@ val client : Config.t -> int64 -> (int -> Cstruct.t) ->
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
 
+val server : Config.t -> (int -> Cstruct.t) ->
+  (server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int, Rresult.R.msg) result
+
 type error
 (** The type of errors when processing incoming data. *)
 
 val pp_error : error Fmt.t
 (** [pp_error ppf e] pretty prints the error [e]. *)
 
-val handle : t -> Ptime.t -> int64 -> event -> (t * Cstruct.t list * action option, error) result
+val handle : t -> Ptime.t -> int64 -> ?is_not_taken:(Ipaddr.V4.t -> bool) ->
+  event -> (t * Cstruct.t list * action option, error) result
 
 val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
 (** [outgoing t ts data] prepares [data] to be sent over the OpenVPN connection.
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
+
+val new_connection : server -> int64 -> t
