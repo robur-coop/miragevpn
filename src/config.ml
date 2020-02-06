@@ -1420,9 +1420,9 @@ let client_generate_connect_options t =
       | _ -> false) t in
   let serialized =
     (Fmt.strf "V4,tls-client,%s%a"
-       (match Conf_map.find Dev t with
-        | Some `Tun _ -> "dev-type tun,"
-        | Some `Tap _ -> "dev-type tap,"
+       (match Conf_map.find Dev t, Conf_map.find Dev_type t with
+        | Some `Tun _, _ | None, Some `Tun -> "dev-type tun,"
+        | Some `Tap _, _ | None, Some `Tap -> "dev-type tap,"
         | _ -> "")
        (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
   Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
