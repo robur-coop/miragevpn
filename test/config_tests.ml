@@ -47,6 +47,53 @@ remote 10.0.0.1|} in
     (Ok minimal_config)
     (parse_noextern basic)
 
+let test_dev_type () =
+  let tun0 =
+    let open Openvpn.Config in
+    minimal_config
+    |> add Dev (`Tun, Some "tun0") in
+
+  let implicit_dev_type_tun =
+    Fmt.strf {|%a
+dev tun0
+|} Openvpn.Config.pp minimal_config |> parse_noextern in
+  Alcotest.(check (result conf_map pmsg))
+    "explicit dev, implicit dev-type"
+    (Ok tun0) implicit_dev_type_tun ;
+
+  let explicit_dynamic_tun =
+    (* here [dev-type] is implied, and the client should pick its own number
+       for the tun device: *)
+    Fmt.strf {|%a
+dev tun
+|} Openvpn.Config.pp minimal_config |> parse_noextern in
+  Alcotest.(check (result conf_map pmsg))
+    "explicit dev tun specifying dynamic allocation"
+    (Ok (minimal_config |> Openvpn.Config.add Dev (`Tun, None)))
+    explicit_dynamic_tun ;
+
+  let explicit_tun =
+    (* this is interesting because it results in multiple
+       dev-type stanzas since [dev tun0] implie [dev-type tun] *)
+    Fmt.strf {|%a
+dev tun0
+dev-type tun
+|} Openvpn.Config.pp minimal_config |> parse_noextern in
+  Alcotest.(check (result conf_map pmsg))
+    "explicit dev and dev-type"
+    (Ok tun0) explicit_tun ;
+
+  let custom_name_tap =
+    (* here we specify a custom name, which necessitates a [dev-type] *)
+    Fmt.strf {|%a
+dev-type tap
+dev myvlan
+|} Openvpn.Config.pp minimal_config |> parse_noextern in
+  Alcotest.(check (result conf_map pmsg))
+    "explicit dev, implicit dev-type"
+    (Ok (minimal_config |> Openvpn.Config.add Dev (`Tap, Some "myvlan")))
+    custom_name_tap
+
 let auth_user_pass_trailing_whitespace () =
   (* Seems to me that the OpenVPN upstream accepts this and we don't.
      It should also be tested if the upstream version strips prefixed/trailing
@@ -121,6 +168,7 @@ let crowbar_fuzz_config () =
 
 let tests = [
   "minimal client config", `Quick, ok_minimal_client ;
+  "test [dev] and [dev-type]", `Quick, test_dev_type ;
   "auth-user-pass trailing whitespace", `Quick,
   auth_user_pass_trailing_whitespace ;
   "rport precedence", `Quick, rport_precedence ;

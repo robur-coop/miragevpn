@@ -61,8 +61,7 @@ module Conf_map = struct
     | Connect_retry : (int * int) k
     | Connect_retry_max : [`Unlimited | `Times of int] k
     | Connect_timeout : int k
-    | Dev      : [`Null | `Tun of int option | `Tap of int option] k
-    | Dev_type : [ `Tun | `Tap ] k
+    | Dev      : ([`Tun | `Tap] * string option) k
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
     | Dhcp_ntp: Ipaddr.t list k
@@ -218,13 +217,13 @@ module Conf_map = struct
     | Connect_retry_max, `Unlimited -> p() "connect-retry-max unlimited"
     | Connect_retry_max, `Times i -> p() "connect-retry-max %d" i
     | Connect_timeout, seconds -> p() "connect-timeout %d" seconds
-    | Dev, `Tap None -> p() "dev tap"
-    | Dev, `Tap Some i -> p() "dev tap%d" i
-    | Dev, `Tun None -> p() "dev tun"
-    | Dev, `Tun Some i -> p() "dev tun%d" i
-    | Dev, `Null -> p() "dev null"
-    | Dev_type, `Tap -> p() "dev-type tap"
-    | Dev_type, `Tun -> p() "dev-type tun"
+    | Dev, (`Tap, None) -> p() "dev tap"
+    | Dev, (`Tun, None) -> p() "dev tun"
+    | Dev, (typ, Some name) ->
+      p() "dev %s%adev-type %s" name
+        sep() (match typ with
+            | `Tun -> "tun"
+            | `Tap -> "tap")
     | Dhcp_disable_nbt, () -> p() "dhcp-option disable-nbt"
     | Dhcp_domain, n -> p() "dhcp-option domain %a" Domain_name.pp n
     | Dhcp_ntp, ips ->
@@ -380,6 +379,8 @@ type line = [
   | `Proto_force of [ `Tcp | `Udp ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
   | inline_or_path
+  | `Dev of string (* [dev name] stanza requiring a [dev-type]*)
+  | `Dev_type of [`Tun | `Tap] (* [dev-type] stanza requiring [dev name]*)
 ]
 
 let pp_line ppf (x : line) =
@@ -399,6 +400,9 @@ let pp_line ppf (x : line) =
    | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
    | `Path (fn, _) -> v ppf "inline-or-path: %s" fn
    | `Need_inline _ -> v ppf "inline-or-path: Need_inline"
+   | `Dev name -> v ppf "dev %S" name
+   | `Dev_type `Tun -> v ppf "dev-type tun"
+   | `Dev_type `Tap -> v ppf "dev-type tap"
   )
 
 let a_comment =
@@ -466,26 +470,32 @@ let a_dev =
   let a_device_name =
     choice [
       (string "tun" *>
-       choice
-         [ (a_number_range 0 128 >>| fun x -> `Tun (Some x)) ;
-           (return (`Tun None))] );
+       option None (a_number_range 0 128 >>| fun x ->
+                    Some ("tun" ^ (string_of_int x)))
+       >>| fun name -> (Some `Tun, name));
       (string "tap" *>
-       choice
-         [ (a_number_range 0 128 >>| fun x -> `Tap (Some x)) ;
-           (return (`Tap None)) ;
-         ]) ;
-      string "null" *> return `Null ;
+       option None (a_number_range 0 128 >>| fun x ->
+                    Some ("tap" ^ (string_of_int x)))
+       >>| fun name -> (Some `Tap, name));
+      (a_single_param >>| fun name -> (None, Some name));
     ]
   in
-  string "dev" *> a_whitespace *> a_device_name >>| fun name ->
-  `Entry (B (Dev,name))
+  string "dev" *> a_whitespace *> a_device_name >>|
+  function
+  | (Some typ, name) -> `Entry (B (Dev,(typ, name)))
+  | None, Some name -> `Dev name
+  | None, None ->
+    failwith "config dev stanza with no name or type; \
+              this is a bug in the config parser"
 
 let a_dev_type =
+  (* this is used to specify the type of a [dev] stanza
+     giving a custom name from which the type cannot be inferred *)
   string "dev-type" *> a_whitespace *>
   choice [
     (string "tun" >>| fun _ -> `Tun) ;
     (string "tap" >>| fun _ -> `Tap) ] >>| fun typ ->
-  `Entry (B (Dev_type, typ))
+  `Dev_type typ
 
 let a_proto =
   string "proto" *> a_whitespace *> choice [
@@ -1112,6 +1122,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
   | None -> Ok (Some (k,v))
   | Some v2 -> begin match k with
       (* idempotent, as most of the flags - not a failure, emit warn: *)
+      | Auth_nocache -> warn ()
       | Comp_lzo -> warn () | Float -> warn ()
       | Ifconfig_nowarn -> warn () | Mute_replay_warnings -> warn ()
       | Passtos -> warn () | Persist_key -> warn () | Persist_tun -> warn ()
@@ -1143,6 +1154,16 @@ let resolve_conflict (type a) t (k:a key) (v:a)
               | _ -> Error "conflicting [host] options in [bind] directives"
             end >>= fun (host: _ option) ->
             Ok (Some (Bind, Some (port, host)))
+        end
+      | Dev when fst v = fst v2 ->
+        (* verify that dev-type is the same, and let Dev stanza
+           override an empty name.*)
+        begin match snd v, snd v2 with
+          | (None, (Some _ as name))
+          | ((None | Some _ as name), None) ->
+            Ok (Some (Dev, (fst v2, name)))
+          | Some n, Some n2 ->
+            Error (Fmt.strf "[dev %S] conflicts with [dev %S]" n n2)
         end
       | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
@@ -1297,6 +1318,38 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           in
           (* TODO consult `Proto_force *)
           retb (B(Remote, [host, port, proto]))
+        | (`Dev _ | `Dev_type _) as current ->
+          (* there must be a corresponding `Dev or `Dev_type in [tl]*)
+          let typs, tl = List.partition (function
+              | `Dev_type _ -> true
+              | _ -> false) (current::tl) in
+          let names, tl = List.partition (function
+              | `Dev _ -> true
+              | _ -> false) tl in
+          begin match typs, names with
+            | (`Dev_type typ)::_, [`Dev name]
+              when List.for_all ((=) (`Dev_type typ)) typs ->
+              (* custom named tun/tap device: *)
+              loop (acc |> add Dev (typ, Some name)) tl
+            | (`Dev_type typ)::_, []
+              when List.for_all ((=) (`Dev_type typ)) typs ->
+              (* extraneous dev-type stanzas when dev-type has already been
+                 inferred from the device name, e.g. "tun0" *)
+              begin match find Dev acc with
+                | Some (typ2, _name) when typ = typ2 ->
+                  loop acc tl
+                | Some (_, _name) ->
+                  Error (Fmt.strf "dev-type %S conflicts with \
+                                   inferred type for [dev] stanza"
+                           (match typ with `Tap -> "tap" | `Tun -> "tun"))
+                | None -> Error "[dev-type] stanza without [dev]"
+              end
+            | [], [] -> Error "BUG in config parser: `Dev|`Dev_type empty list"
+            | [], (`Dev name)::_extra_devs ->
+              Error (Fmt.strf
+                       "[dev %S] stanza without required [dev-type]" name)
+            | _ -> Error "multiple conflicting [dev-type] stanzas present"
+          end
       end
     | [] -> Ok (`Done acc : parser_state)
   in
@@ -1421,8 +1474,8 @@ let client_generate_connect_options t =
   let serialized =
     (Fmt.strf "V4,tls-client,%s%a"
        (match Conf_map.find Dev t with
-        | Some `Tun _ -> "dev-type tun,"
-        | Some `Tap _ -> "dev-type tap,"
+        | Some (`Tun, _) -> "dev-type tun,"
+        | Some (`Tap, _) -> "dev-type tap,"
         | _ -> "")
        (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
   Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"

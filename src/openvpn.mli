@@ -56,12 +56,15 @@ module Config : sig
         Timeout a connection attempt to a remote server after [SECONDS].
     *)
 
-    | Dev      : [`Null | `Tun of int option | `Tap of int option] k
-    (** if Tap/Tun is [None], a device must be allocated dynamically. *)
-
-    | Dev_type : [ `Tun | `Tap ] k
-    (** The device type, use only if the device name used with Dev does not
-        begin with [tun] or [tap]. *)
+    | Dev      : ([`Tun | `Tap] * string option) k
+    (** The device to be used for the unencrypted traffic.
+        The optional string is a device name, the [dev] directive.
+        The polymorphic variant specifies the [dev-type].
+        The [dev-type] is inferred from the [dev] name if the latter
+        consists of a "tap" or "tun" prefix followed by an
+        integer between 0 and 128.
+        If no device name is given, or the device name is
+        simply "tun" or "tap", the device must be allocated dynamically. *)
 
     | Dhcp_disable_nbt: flag k
     | Dhcp_dns: Ipaddr.t list k
