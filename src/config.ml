@@ -1320,24 +1320,21 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           retb (B(Remote, [host, port, proto]))
         | (`Dev _ | `Dev_type _) as current ->
           (* there must be a corresponding `Dev or `Dev_type in [tl]*)
-          let typs, tl = List.partition (function
-              | `Dev_type _ -> true
-              | _ -> false) (current::tl) in
-          let names, tl = List.partition (function
-              | `Dev _ -> true
-              | _ -> false) tl in
+          let rec find_them typs nams other = function
+            | [] -> typs, nams, other
+            | `Dev_type typ :: tl -> find_them (typ::typs) nams other tl
+            | `Dev name :: tl -> find_them typs (name::nams) other tl
+            | o::tl -> find_them typs nams (o::other) tl
+          in let typs, names, tl = find_them [] [] [] (current::tl) in
           begin match typs, names with
-            | (`Dev_type typ)::_, [`Dev name]
-              when List.for_all ((=) (`Dev_type typ)) typs ->
+            | [typ], [name] ->
               (* custom named tun/tap device: *)
               loop (acc |> add Dev (typ, Some name)) tl
-            | (`Dev_type typ)::_, []
-              when List.for_all ((=) (`Dev_type typ)) typs ->
+            | [typ], [] ->
               (* extraneous dev-type stanzas when dev-type has already been
                  inferred from the device name, e.g. "tun0" *)
               begin match find Dev acc with
-                | Some (typ2, _name) when typ = typ2 ->
-                  loop acc tl
+                | Some (typ2, _name) when typ = typ2 -> loop acc tl
                 | Some (_, _name) ->
                   Error (Fmt.strf "dev-type %S conflicts with \
                                    inferred type for [dev] stanza"
@@ -1345,7 +1342,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
                 | None -> Error "[dev-type] stanza without [dev]"
               end
             | [], [] -> Error "BUG in config parser: `Dev|`Dev_type empty list"
-            | [], (`Dev name)::_extra_devs ->
+            | [], name::_extra_devs ->
               Error (Fmt.strf
                        "[dev %S] stanza without required [dev-type]" name)
             | _ -> Error "multiple conflicting [dev-type] stanzas present"
