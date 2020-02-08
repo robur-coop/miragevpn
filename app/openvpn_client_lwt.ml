@@ -6,10 +6,12 @@ let open_tun config {Openvpn.ip ; gateway ; _ }
      the TUN interface *)
   let open Lwt_result.Infix in
   begin match Openvpn.Config.find Dev config with
-    | None | Some `Tun None -> Ok None
-    | Some `Tun (Some n) -> Ok (Some ("tun" ^ string_of_int n))
-    | Some `Null -> Error (`Msg "TODO what is this")
-    | Some `Tap _ -> Error (`Msg "using a TAP interface is not supported")
+    | None | Some (`Tun, None) -> Ok None
+    | Some (`Tun, Some name) -> Ok (Some name)
+    | Some (`Tap, name) ->
+      Rresult.R.error_msgf
+        "using a TAP interface (for %S) is not supported"
+        (match name with Some n -> n | None -> "dynamic device")
   end |> Lwt_result.lift >>= fun devname ->
   try begin
     let fd , dev = Tuntap.opentun ?devname () in
