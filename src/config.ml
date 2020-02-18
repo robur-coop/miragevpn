@@ -712,7 +712,15 @@ let a_tls_version_min =
   `Entry (B(Tls_version_min,(v,or_h)))
 
 let a_entry_one_number name =
-  string name *> a_whitespace *> commit *> a_number
+  let fail off reason =
+    fail @@ Fmt.strf
+      "offset %d: Error parsing %s directive as integer: %s" off name reason in
+  string name *> a_whitespace *> pos >>= fun off -> commit *>
+  (a_single_param <|> fail off "parameter needed"
+  ) >>= fun num ->
+  parse_string a_number num |> function
+  | Ok v -> return v
+  | Error msg -> fail off msg
 
 let a_tls_timeout =
   a_entry_one_number "tls-timeout" >>| fun seconds ->
@@ -1338,7 +1346,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           | `Socks_proxy _) as line ->
           Logs.warn (fun m -> m"ignoring unimplemented option: %a"
                         pp_line line) ;
-          loop acc tl
+          multib []
         | `Remote (host, port, proto) ->
           let proto = match proto with
             | Some x -> x
@@ -1359,7 +1367,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           begin match typs, names with
             | [typ], [name] ->
               (* custom named tun/tap device: *)
-              loop (acc |> add Dev (typ, Some name)) tl
+              retb ~tl (B(Dev,(typ, Some name)))
             | [typ], [] ->
               (* extraneous dev-type stanzas when dev-type has already been
                  inferred from the device name, e.g. "tun0" *)

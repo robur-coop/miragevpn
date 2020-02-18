@@ -166,7 +166,7 @@ testpass
       sample
   in
   let expected =
-        {|
+    {|
     tls-client
     auth-user-pass [inline]
     <auth-user-pass>
