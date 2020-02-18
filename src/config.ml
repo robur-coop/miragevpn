@@ -145,7 +145,7 @@ module Conf_map = struct
          | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
         ensure_mem Auth_user_pass "does not have user/password"
-        (* ^-- TODO or has client certificate ? *)
+        (* ^-- TODO or has client certificate ? see options.c:--cert/--key,--pkcs12,or--auth-user-pass *)
         >>= fun () ->
         (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
            Error "currently only supported Cipher is 'AES-256-CBC'"
@@ -611,10 +611,21 @@ let a_auth_user_pass_payload =
      printable characters except for CR or LF.  Any  illegal  charac‐
      ters in either the username or password string will be converted
      to underbar ('_').*)
-  ( a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
-                    | _ -> false) >>= fun user ->
-    a_line not_control_char >>= fun pass ->
-    end_of_input *> return (B (Auth_user_pass, (user,pass)))
+  ( pos >>= fun user_pos ->
+    a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
+                        | _ -> false) >>= (function
+        | "" -> ( *> ) commit @@ fail @@
+          Fmt.strf "auth-user-pass (byte %d): \
+                    username is empty, expected on first line!" user_pos
+        | user -> return user)  >>= fun user ->
+    pos >>= fun pass_pos ->
+    a_line not_control_char >>= (function
+        | "" -> ( *> ) commit @@ fail @@
+          Fmt.strf "auth-user-pass (byte %d): \
+                    password is empty, expected on second line!" pass_pos
+        | pass -> return pass) >>= fun pass ->
+    a_ign_whitespace_no_comment *>
+    return (B (Auth_user_pass, (user,pass)))
   ) <|> fail "reading user/password file failed"
 
 let a_auth_retry =

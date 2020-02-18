@@ -99,18 +99,43 @@ let auth_user_pass_trailing_whitespace () =
      It should also be tested if the upstream version strips prefixed/trailing
      whitespace from the user/pass/end-block lines. TODO.
   *)
-  let common =
+  let common payload =
     "client\n"
     ^ "remote 127.0.0.1\n"
     ^ "auth-user-pass [inline]\n"
     ^ "<auth-user-pass>\n"
-    ^ "testuser\n"
-    ^ "testpass\n" in
-  let expected = common ^ "</auth-user-pass>" |> parse_noextern in
-  let with_trailing = common ^ "\n</auth-user-pass>" |> parse_noextern in
+    ^ payload
+    ^ "\n</auth-user-pass>"
+    |> parse_noextern
+  in
+  let valid = "testuser\ntestpass" in
+  let expected = common valid in
+  Alcotest.(check (result conf_map pmsg))
+    "accept Windows-style newlines after user/pass values"
+    expected (common "testuser\r\ntestpass\r" ) ;
+
+  Alcotest.(check (result conf_map pmsg))
+    "reject empty username"
+    (Error (`Msg ": auth-user-pass (byte 0): username is \
+                  empty, expected on first line!"))
+    (common "\r\ntestpass\n" ) ;
+
+  Alcotest.(check (result conf_map pmsg))
+    "reject empty password"
+    (Error (`Msg ": auth-user-pass (byte 9): password is \
+                  empty, expected on second line!"))
+    (common "testuser\n" ) ;
+
+  Alcotest.(check (result conf_map pmsg))
+    "reject empty Windows-style password"
+    (Error (`Msg ": auth-user-pass (byte 10): password is \
+                  empty, expected on second line!"))
+    (common "testuser\r\n\r" ) ;
+
   Alcotest.(check (result conf_map pmsg))
     "accept trailing whitespace in <auth-user-pass> blocks"
-    expected with_trailing
+    expected (common (valid ^ "\n"))
+
 
 let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
