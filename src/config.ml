@@ -628,7 +628,21 @@ let a_auth_user_pass_payload =
         | "" -> ( *> ) commit @@ fail @@
           Fmt.strf "auth-user-pass (byte %d): \
                     password is empty, expected on second line!" pass_pos
-        | pass -> return pass) >>= fun pass ->
+        | raw_pass ->
+          let bad = ref ~-1 in
+          let count = ref 0 in
+          String.map (function
+              | '\x00'..'\x1f'
+              | '\x7f'..'\xff' ->
+                bad := !count ; incr count ; '_'
+              | ch -> incr count ; ch) raw_pass
+          |> return <* return @@ if 0 <= !bad then
+            Logs.warn (fun m ->
+                m "config: user-auth-pass at (byte offset %d line offset %d) \
+                   contains special character that will be \
+                   turned into an underscore '_' , is this intentional?"
+                  (pass_pos + !bad) !bad);
+      ) >>= fun pass ->
     a_ign_whitespace_no_comment *>
     return (B (Auth_user_pass, (user,pass)))
   ) <|> fail "reading user/password file failed"

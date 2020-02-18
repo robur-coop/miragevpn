@@ -132,6 +132,11 @@ let auth_user_pass_trailing_whitespace () =
                   empty, expected on second line!"))
     (common "testuser\r\n\r" ) ;
 
+    Alcotest.(check (result conf_map pmsg))
+    "Accept password with special characters mapped to underscore"
+    (common "testuser\nfoo_bar\n")
+    (common "testuser\r\nfoo\x99bar\r\n" ) ;
+
   Alcotest.(check (result conf_map pmsg))
     "accept trailing whitespace in <auth-user-pass> blocks"
     expected (common (valid ^ "\n"))
