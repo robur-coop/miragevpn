@@ -118,8 +118,18 @@ module Config : sig
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (** TODO should Proto be bound to a remote? *)
 
-    | Remote : ([ `Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
-                | `Ip of Ipaddr.t] * int * [`Udp | `Tcp]) list k
+    | Remote : ( ( [ `Domain of [ `host ] Domain_name.t
+                                * [`Ipv4 | `Ipv6 | `Any]
+                   | `Ip of Ipaddr.t]
+                   * [`Port of int | `Default_rport]
+                   * [`Udp | `Tcp]) list
+                 * [`Rport of int] ) k
+    (** [Remote (peers, rport)] specifies the list of peers to
+        connect to.
+        [rport] is the port number to use when a peer has [`Default_rport].
+        Each peer consists of the tuple [address,port,protocol].
+    *)
+
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
 

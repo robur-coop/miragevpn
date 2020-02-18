@@ -30,7 +30,8 @@ let minimal_config =
   (* Minimal contents of actual config file: *)
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser","testpass")
-  |> add Remote [`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp]
+  |> add Remote ([`Ip (Ipaddr.of_string_exn "10.0.0.1"),
+                  `Default_rport, `Udp], `Rport 1194)
 
 
 let ok_minimal_client () =
@@ -178,7 +179,11 @@ testpass
     remote 10.0.42.3 1194
     rport 1234
     remote 10.0.42.4 1234
-|} |> parse_noextern |> Rresult.R.get_ok
+|}  |> parse_noextern
+    |> function
+    | Ok conf -> conf
+    | Error `Msg msg ->
+      raise (Invalid_argument ("Can't parse embedded config" ^ msg))
   in
   Alcotest.(check (result conf_map pmsg))
     "rport doesn't override explicits that coincide with the default"
