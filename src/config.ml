@@ -410,6 +410,10 @@ let a_comment =
   ((char '#' <|> char ';') *>
    skip_many (skip @@ function '\n' -> false | _ -> true))
 
+let a_newline =
+  choice [ string "\r\n" *> return () ;
+           char '\n' *> return () ; ]
+
 let a_whitespace_unit =
   skip (function | ' '| '\t' -> true
                  | _ -> false)
@@ -572,14 +576,15 @@ let a_tls_auth =
 let inline_payload element =
   let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line) *>
-  (string "-----BEGIN OpenVPN Static key V1-----\n"
+  (string "-----BEGIN OpenVPN Static key V1-----" *> a_newline
    <|> abort "Missing Static key V1 -----BEGIN mark") *>
   many_till ( take_while (function | 'a'..'f'|'A'..'F'|'0'..'9' -> true
                                    | _ -> false)
               <* (end_of_line <|> abort "Invalid hex character") >>= fun hex ->
       try return (Cstruct.of_hex hex) with
       | Invalid_argument msg -> abort msg)
-    (string "-----END OpenVPN Static key V1-----\n" <|>abort "Missing END mark")
+    (string "-----END OpenVPN Static key V1-----" *> a_newline
+     <|>abort "Missing END mark")
   <* (end_of_input <|> abort "Data after -----END mark")
   >>= (fun lst ->
       let sz = Cstruct.lenv lst in
@@ -965,7 +970,7 @@ let a_route_gateway =
 let a_inline =
   char '<' *> take_while1 (function 'a'..'z' |'-' -> true
                                              | _  -> false)
-  <* char '>' <* char '\n' >>= fun tag ->
+  <* char '>' <* a_newline >>= fun tag ->
   skip_many (a_whitespace_or_comment *> end_of_line) *>
   take_till (function '<' -> true | _ -> false) >>= fun x ->
   return (`Inline (tag, x))
@@ -1065,7 +1070,7 @@ let a_config_entry : line A.t =
 
 
 let parse_internal config_str : (line list, 'x) result =
-  let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
+  let a_ign_ws = skip_many (skip @@ function '\r' | '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string
   @@ fix (fun recurse ->
