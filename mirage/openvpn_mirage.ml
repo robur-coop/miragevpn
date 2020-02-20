@@ -464,7 +464,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
 
   type t = {
     ovpn : O.t ;
-    frags : Fragments.Cache.t ;
+    mutable frags : Fragments.Cache.t ;
   }
 
   (* boilerplate i don't understand *)
@@ -561,7 +561,8 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
     | Ok (packet, payload) ->
       Log.info (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
                    Ipv4_packet.pp packet (Cstruct.len payload));
-      let r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
+      let f', r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
+      t.frags <- f';
       match r with
       | None -> Lwt.return_unit
       | Some (pkt, payload) ->
@@ -583,7 +584,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
     O.connect cfg s >|= function
     | Error e -> Error e
     | Ok ovpn ->
-      let frags = Fragments.Cache.create (1024 * 256) in
+      let frags = Fragments.Cache.empty (1024 * 256) in
       Ok ({ ovpn ; frags }, process_data)
 
   let pseudoheader t ?src dst proto len =

@@ -109,7 +109,9 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           | Ok () -> ingest_private table packet
         in
         let ingest_public cache now table cs =
-          match Nat_packet.of_ipv4_packet cache ~now cs with
+          let cache', res = Nat_packet.of_ipv4_packet !cache ~now cs in
+          cache := cache';
+          match res with
           | Error e ->
             Log.err (fun m -> m "ingest_public nat_packet.of_ipv4 err %a"
                         Nat_packet.pp_error e);
@@ -127,8 +129,11 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         in
         Mirage_nat_lru.empty ~tcp_size:1024 ~udp_size:1024 ~icmp_size:20 >>= fun table ->
         let listen_private =
-          let cache = Fragments.Cache.create (256 * 1024) in
-          let ipv4 p = match Nat_packet.of_ipv4_packet cache ~now:(M.elapsed_ns ()) p with
+          let cache = ref (Fragments.Cache.empty (256 * 1024)) in
+          let ipv4 p =
+            let cache', res = Nat_packet.of_ipv4_packet !cache ~now:(M.elapsed_ns ()) p in
+            cache := cache';
+            match res with
             | Error e ->
               Log.err (fun m -> m "listen_private failed Nat.of_ipv4_packet %a"
                           Nat_packet.pp_error e);
@@ -144,7 +149,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                                      N.pp_error e)
           | Ok () -> Log.debug (fun m -> m "private interface terminated normally")
         in
-        let ovpn_cache = Fragments.Cache.create (256 * 1024) in
+        let ovpn_cache = ref (Fragments.Cache.empty (256 * 1024)) in
         let rec listen_ovpn () =
           O.read ovpn >>= fun datas ->
           Lwt_list.iter_s (ingest_public ovpn_cache (M.elapsed_ns ()) table) datas >>= fun () ->
