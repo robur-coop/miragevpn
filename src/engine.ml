@@ -59,12 +59,11 @@ let client config ts rng =
   let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
   let channel = new_channel 0 ts in
     (match Config.get Remote config with
-     | (`Domain (name, ip_version), _port, _proto) :: _, _ ->
+     | (`Domain (name, ip_version), _port, _proto) :: _ ->
        Ok (`Resolve (name, ip_version), Resolving (0, ts, 0))
-     | (`Ip ip, `Default_rport, dp) :: _, `Rport port
-     | (`Ip ip, `Port port, dp) :: _, _ ->
+     | (`Ip ip, port, dp) :: _ ->
        Ok (`Connect (ip, port, dp), Connecting (0, ts, 0))
-     | [], `Rport _ ->
+     | [] ->
        Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
   let state = {
     config ; state = Client state ; linger = Cstruct.empty ; rng ;
@@ -896,10 +895,8 @@ let retransmit timeout ts transport =
 
 let handle_client t s now ts ev =
   let remote, next_remote =
-    let remotes, rport = Config.get Remote t.config in
-    let r idx = match List.nth remotes idx, rport with
-      | (addr,`Default_rport,proto), `Rport port
-      | (addr,`Port port,proto), `Rport _ -> addr,port,proto in
+    let remotes = Config.get Remote t.config in
+    let r idx = List.nth remotes idx in
     let next idx =
       if succ idx = List.length remotes then None else Some (r (succ idx))
     in

@@ -30,8 +30,7 @@ let minimal_config =
   (* Minimal contents of actual config file: *)
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser","testpass")
-  |> add Remote ([`Ip (Ipaddr.of_string_exn "10.0.0.1"),
-                  `Default_rport, `Udp], `Rport 1194)
+  |> add Remote ([`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp])
 
 
 let ok_minimal_client () =

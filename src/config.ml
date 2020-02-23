@@ -84,12 +84,10 @@ module Conf_map = struct
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (* see socket.c:static const struct proto_names proto_names[] *)
 
-    | Remote : ( ( [`Domain of [ `host ] Domain_name.t
-                               * [`Ipv4 | `Ipv6 | `Any]
-                   | `Ip of Ipaddr.t]
-                   * [`Port of int | `Default_rport]
-                   * [`Udp | `Tcp]) list
-                 * [`Rport of int]) k
+    | Remote : ( [`Domain of [ `host ] Domain_name.t
+                             * [`Ipv4 | `Ipv6 | `Any]
+                 | `Ip of Ipaddr.t]
+                 * int * [`Udp | `Tcp]) list k
 
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
@@ -259,8 +257,8 @@ module Conf_map = struct
                          | `Tcp Some `Server -> "-server"
                          | `Tcp None | `Udp -> "")
     | Pull, () -> p() "pull"
-    | Remote, (lst,`Rport rport) ->
-      p() "rport %d%a%a" rport sep()
+    | Remote, lst ->
+      p() "%a"
       Fmt.(list ~sep @@
            (fun ppf (endp, port, proto) ->
               let pp_endpoint, ip_proto =
@@ -273,12 +271,9 @@ module Conf_map = struct
                   (fun ppf () -> Ipaddr.pp ppf ip),
                   (match ip with V4 _ -> "4" | V6 _ -> "6")
               in
-              pf ppf "remote %a %s%s%s"
+              pf ppf "remote %a %d %s%s"
                 pp_endpoint ()
-                (match port with
-                 | `Default_rport ->
-                   "" (* distinguish between explicit 1194 vs default *)
-                 | `Port i -> string_of_int i^" ")
+                port
                 (match proto with `Udp -> "udp" | `Tcp -> "tcp")
                 ip_proto
            )) lst
@@ -396,7 +391,16 @@ type line = [
 let pp_line ppf (x : line) =
   let v = Fmt.pf in
   (match x with
-   | `Remote _ -> v ppf "remote TODO"
+   | `Remote (host, port, proto) ->
+     let pphost ppf () = (match host with
+        | `Domain (dom , _proto) -> Domain_name.pp ppf dom
+        | `Ip ip -> Ipaddr.pp ppf ip) in
+     v ppf "(remote %a, %s, %s)"
+       pphost ()
+       (match port with `Default_rport -> "default"
+                      | `Port i -> string_of_int i)
+       (match proto with
+          None -> "any"| Some `Tcp -> "tcp" | Some `Udp -> "up")
    | `Entries bs -> v ppf "entries: @[<v>%a@]"
                      Fmt.(list ~sep:(unit"@,") pp_b) bs
    | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b
@@ -916,7 +920,7 @@ let a_ifconfig =
 (* TODO
    what are the semantics if proto and remote proto is provided? *)
 let a_remote
-  : [>  `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
+  : [> `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
                    | `Ip of Ipaddr.t]
                    * [`Port of int | `Default_rport]
                    * [`Udp | `Tcp] option] A.t =
@@ -1137,16 +1141,14 @@ let parse_inline str = let open Rresult in
        explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
        link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
        proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
+    (* TODO basically a Connection block is a subset of Conf_map.t,
+       we should use the same parser.*)
     parse_string a_remote str >>= fun (`Remote (host, port, proto)) ->
     let proto = match proto with None -> `Udp
                                (* TODO consult `Proto and `Proto_force *)
                                | Some x -> x in
-    Ok (B(Remote, ([host, port, proto],
-                   `Rport 1194
-                   (* ^-- TODO obv wrong, but not sure about semantics;
-                      does the outer 'rport' directive override defaults
-                      inside <connection> blocks?*)
-                  )))
+    let port = match port with `Default_rport -> 1194 | `Port i -> i in
+    Ok (B(Remote, ([host, port, proto])))
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
@@ -1155,21 +1157,10 @@ let parse_inline str = let open Rresult in
                    (string_of_inlineable kind))
 
 let eq : eq = { f = fun (type x) (k: x k) (v:x) (v2:x) ->
-    let functionally_equivalent () = match k,v,v2 with
-      | Remote, (p1, `Rport rport1), (p2,`Rport rport2) ->
-        (* We consider two configs equal if their respective
-           default ports end up producing the same values.*)
-        let replace_default rport =
-          List.map (function
-              | a,`Default_rport,p -> a,`Port rport,p
-              | orig -> orig) in
-        replace_default rport1 p1 = replace_default rport2 p2
-      | _ -> false
-    in
-    let eq = v = v2 || functionally_equivalent () in
+    let eq = v = v2 in
     (*TODO non-polymorphic comparison*)
     begin if not eq then Logs.debug
-          (fun m -> m "eq self-test: %a <> %a"
+          (fun m -> m "eq self-test: @[<v>%a@,<>@,%a@]"
               pp (singleton k v)
               pp (singleton k v2))
         ; eq end }
@@ -1232,20 +1223,11 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
       | Remote ->
-        begin match get Remote t, v with
-          | (peers1, `Rport rport1), (peers2,`Rport rport2)
-            when rport1 = rport2
-              || rport1 = 1194 || rport2 = 1194 ->
-            (* TODO: We allow overriding even explicit 'rport 1194' stanzas.
-               This seems like a reasonable trade-off,
-               not complicating the Remote type further.*)
-            let rport = (if rport2 <> 1194 then rport2 else rport1) in
-            Ok (Some (Remote, ((peers1 @ peers2), `Rport rport)))
-          | _ ->
-            Error (Fmt.strf "[%a] conflicts with [%a]"
-                     (pp_b ~sep:(Fmt.unit"@.")) (B(Remote,v))
-                     (pp_b ~sep:(Fmt.unit"@.")) (B(Remote,v2))
-                  )
+        begin match find Remote t, v with
+          | Some [], []
+          | None, [] -> Ok None (* prune empty *)
+          | Some peers1, peers2 -> Ok (Some (Remote, (peers1 @ peers2)))
+          | None, peers2 -> Ok (Some (Remote, peers2))
         end
       | Ping_interval ->
         begin match find Ping_interval t with
@@ -1351,8 +1333,25 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               m "Inline block %S seems to be redundant" fname); [] end
         | `Ignored _ -> loop acc tl
         | `Comment _ -> loop acc tl
-        | `Rport new_port ->
-          retb (B(Remote, ([], `Rport new_port)))
+        | `Rport _ as this_directive ->
+          (* The parser for `Remote will look for `Rport when needed.
+             To avoid an endless loop here we ignore the present `Rport
+             directive when no more `Remote exist in [tl].
+             If there ARE more `Remote (that use `Default_port),
+             we sort [tl] in this order:
+             [`Remote ; `Rport ; ... the rest]:
+          *)
+          if not @@ List.exists (function
+              | `Remote (_, `Default_rport, _) -> true
+              | _ -> false) tl
+          then multib [] (* ignore this directive*)
+          else begin
+            let sorted_tl = List.sort (fun a b -> match a,b with
+                | `Remote _, `Rport _ -> -1 (* remote goes first *)
+                | `Rport _, `Remote _ ->  1 (* remote goes first *)
+                | _ -> compare a b) (this_directive::tl) in
+            loop acc sorted_tl
+          end
         | `Entry b -> retb b
         | `Entries lst -> multib lst
         | `Keepalive (interval, timeout) ->
@@ -1396,18 +1395,23 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               | Some (_, `Tcp _)  -> `Tcp
               | _ -> `Udp
           in
+          (* TODO consult `Proto_force *)
           let rec consult_tl ?rport = function
             | [] -> Ok rport
             | `Rport conf::_ when rport <> None && Some conf <> rport  ->
-              Error "conflicting rport directives TODO"
-            | `Rport rport::tl ->
-              consult_tl ~rport tl
-            | _hd::tl -> consult_tl tl in
-          (consult_tl tl >>| function
-            | None -> `Rport 1194 (* hardcoded default *)
-            | Some port -> `Rport port) >>= fun rport ->
-          (* TODO consult `Proto_force *)
-          retb (B(Remote,([host, port, proto], rport)))
+              Error (Fmt.strf "conflicting rport directives: %d <> %a"
+                       conf Fmt.(option int) rport)
+            | `Rport rport::tl -> consult_tl ~rport tl
+            | _hd::tl -> consult_tl ?rport tl in
+          begin match port with
+            | `Default_rport ->
+              (consult_tl tl >>| function
+                | None -> 1194 (* hardcoded default *)
+                | Some port -> port) >>= fun port ->
+              retb (B(Remote,([host, port, proto])))
+            | `Port port ->
+              retb (B(Remote,([host, port, proto])))
+          end
         | (`Dev _ | `Dev_type _) as current ->
           (* there must be a corresponding `Dev or `Dev_type in [tl]*)
           let rec find_them typs nams other = function
