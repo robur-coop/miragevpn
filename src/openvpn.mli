@@ -118,8 +118,21 @@ module Config : sig
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (** TODO should Proto be bound to a remote? *)
 
-    | Remote : ([ `Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
-                | `Ip of Ipaddr.t] * int * [`Udp | `Tcp]) list k
+    | Remote : ( [ `Domain of [ `host ] Domain_name.t
+                              * [`Ipv4 | `Ipv6 | `Any]
+                 | `Ip of Ipaddr.t]
+                 * int
+                 * [`Udp | `Tcp]) list k
+    (** [Remote _] specifies the list of peers to connect to.
+        Each peer consists of the tuple [address,port,protocol].
+        The [rport] directive is supported while parsing the configuration,
+        so the [port] tuple element for each peer that did not explicitly
+        specify a port number will have the value of the given [rport].
+        However, the original value of the [rport] directive is not preserved,
+        so an OpenVPN config serialized from a {!t} will have the port number
+        spelled out explicitly for each peer.
+    *)
+
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
 

@@ -63,7 +63,8 @@ let client config ts rng =
        Ok (`Resolve (name, ip_version), Resolving (0, ts, 0))
      | (`Ip ip, port, dp) :: _ ->
        Ok (`Connect (ip, port, dp), Connecting (0, ts, 0))
-     | [] -> Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
+     | [] ->
+       Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
   let state = {
     config ; state = Client state ; linger = Cstruct.empty ; rng ;
     session ; channel ; lame_duck = None ;

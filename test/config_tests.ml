@@ -30,7 +30,7 @@ let minimal_config =
   (* Minimal contents of actual config file: *)
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser","testpass")
-  |> add Remote [`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp]
+  |> add Remote ([`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp])
 
 
 let ok_minimal_client () =
@@ -99,18 +99,48 @@ let auth_user_pass_trailing_whitespace () =
      It should also be tested if the upstream version strips prefixed/trailing
      whitespace from the user/pass/end-block lines. TODO.
   *)
-  let common =
+  let common payload =
     "client\n"
     ^ "remote 127.0.0.1\n"
     ^ "auth-user-pass [inline]\n"
     ^ "<auth-user-pass>\n"
-    ^ "testuser\n"
-    ^ "testpass\n" in
-  let expected = common ^ "</auth-user-pass>" |> parse_noextern in
-  let with_trailing = common ^ "\n</auth-user-pass>" |> parse_noextern in
+    ^ payload
+    ^ "\n</auth-user-pass>"
+    |> parse_noextern
+  in
+  let valid = "testuser\ntestpass" in
+  let expected = common valid in
+  Alcotest.(check (result conf_map pmsg))
+    "accept Windows-style newlines after user/pass values"
+    expected (common "testuser\r\ntestpass\r" ) ;
+
+  Alcotest.(check (result conf_map pmsg))
+    "reject empty username"
+    (Error (`Msg ": auth-user-pass (byte 0): username is \
+                  empty, expected on first line!"))
+    (common "\r\ntestpass\n" ) ;
+
+  Alcotest.(check (result conf_map pmsg))
+    "reject empty password"
+    (Error (`Msg ": auth-user-pass (byte 9): password is \
+                  empty, expected on second line!"))
+    (common "testuser\n" ) ;
+
+  Alcotest.(check (result conf_map pmsg))
+    "reject empty Windows-style password"
+    (Error (`Msg ": auth-user-pass (byte 10): password is \
+                  empty, expected on second line!"))
+    (common "testuser\r\n\r" ) ;
+
+    Alcotest.(check (result conf_map pmsg))
+    "Accept password with special characters mapped to underscore"
+    (common "testuser\nfoo_bar\n")
+    (common "testuser\r\nfoo\x99bar\r\n" ) ;
+
   Alcotest.(check (result conf_map pmsg))
     "accept trailing whitespace in <auth-user-pass> blocks"
-    expected with_trailing
+    expected (common (valid ^ "\n"))
+
 
 let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
@@ -136,7 +166,7 @@ testpass
       sample
   in
   let expected =
-        {|
+    {|
     tls-client
     auth-user-pass [inline]
     <auth-user-pass>
@@ -148,7 +178,11 @@ testpass
     remote 10.0.42.3 1194
     rport 1234
     remote 10.0.42.4 1234
-|} |> parse_noextern |> Rresult.R.get_ok
+|}  |> parse_noextern
+    |> function
+    | Ok conf -> conf
+    | Error `Msg msg ->
+      raise (Invalid_argument ("Can't parse embedded config" ^ msg))
   in
   Alcotest.(check (result conf_map pmsg))
     "rport doesn't override explicits that coincide with the default"

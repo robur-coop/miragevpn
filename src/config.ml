@@ -84,8 +84,10 @@ module Conf_map = struct
                   * [`Udp | `Tcp of [`Server | `Client] option]) k
     (* see socket.c:static const struct proto_names proto_names[] *)
 
-    | Remote : ([`Domain of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
-                | `Ip of Ipaddr.t] * int * [`Udp | `Tcp]) list k
+    | Remote : ( [`Domain of [ `host ] Domain_name.t
+                             * [`Ipv4 | `Ipv6 | `Any]
+                 | `Ip of Ipaddr.t]
+                 * int * [`Udp | `Tcp]) list k
 
     | Remote_cert_tls : [`Server | `Client] k
     | Remote_random : flag k
@@ -145,7 +147,7 @@ module Conf_map = struct
          | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
         ensure_mem Auth_user_pass "does not have user/password"
-        (* ^-- TODO or has client certificate ? *)
+        (* ^-- TODO or has client certificate ? see options.c:--cert/--key,--pkcs12,or--auth-user-pass *)
         >>= fun () ->
         (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
            Error "currently only supported Cipher is 'AES-256-CBC'"
@@ -256,6 +258,7 @@ module Conf_map = struct
                          | `Tcp None | `Udp -> "")
     | Pull, () -> p() "pull"
     | Remote, lst ->
+      p() "%a"
       Fmt.(list ~sep @@
            (fun ppf (endp, port, proto) ->
               let pp_endpoint, ip_proto =
@@ -273,7 +276,7 @@ module Conf_map = struct
                 port
                 (match proto with `Udp -> "udp" | `Tcp -> "tcp")
                 ip_proto
-           )) ppf lst
+           )) lst
     | Remote_cert_tls, `Server -> p() "remote-cert-tls server"
     | Remote_cert_tls, `Client -> p() "remote-cert-tls client"
     | Remote_random, () -> p() "remote-random"
@@ -374,7 +377,9 @@ type line = [
   | `Inline of string * string
   | `Keepalive of int * int (* interval * timeout *)
   | `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
-               | `Ip of Ipaddr.t] * int * [`Udp | `Tcp] option
+               | `Ip of Ipaddr.t]
+               * [`Port of int | `Default_rport]
+               * [`Udp | `Tcp] option
   | `Rport of int (* remote port number used by --remote option *)
   | `Proto_force of [ `Tcp | `Udp ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
@@ -386,7 +391,16 @@ type line = [
 let pp_line ppf (x : line) =
   let v = Fmt.pf in
   (match x with
-   | `Remote _ -> v ppf "remote TODO"
+   | `Remote (host, port, proto) ->
+     let pphost ppf () = (match host with
+        | `Domain (dom , _proto) -> Domain_name.pp ppf dom
+        | `Ip ip -> Ipaddr.pp ppf ip) in
+     v ppf "(remote %a, %s, %s)"
+       pphost ()
+       (match port with `Default_rport -> "default"
+                      | `Port i -> string_of_int i)
+       (match proto with
+          None -> "any"| Some `Tcp -> "tcp" | Some `Udp -> "up")
    | `Entries bs -> v ppf "entries: @[<v>%a@]"
                      Fmt.(list ~sep:(unit"@,") pp_b) bs
    | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b
@@ -409,6 +423,10 @@ let a_comment =
   (* MUST have # or ; at the first column of a line. *)
   ((char '#' <|> char ';') *>
    skip_many (skip @@ function '\n' -> false | _ -> true))
+
+let a_newline =
+  choice [ string "\r\n" *> return () ;
+           char '\n' *> return () ; ]
 
 let a_whitespace_unit =
   skip (function | ' '| '\t' -> true
@@ -572,14 +590,15 @@ let a_tls_auth =
 let inline_payload element =
   let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line) *>
-  (string "-----BEGIN OpenVPN Static key V1-----\n"
+  (string "-----BEGIN OpenVPN Static key V1-----" *> a_newline
    <|> abort "Missing Static key V1 -----BEGIN mark") *>
   many_till ( take_while (function | 'a'..'f'|'A'..'F'|'0'..'9' -> true
                                    | _ -> false)
               <* (end_of_line <|> abort "Invalid hex character") >>= fun hex ->
       try return (Cstruct.of_hex hex) with
       | Invalid_argument msg -> abort msg)
-    (string "-----END OpenVPN Static key V1-----\n" <|>abort "Missing END mark")
+    (string "-----END OpenVPN Static key V1-----" *> a_newline
+     <|>abort "Missing END mark")
   <* (end_of_input <|> abort "Data after -----END mark")
   >>= (fun lst ->
       let sz = Cstruct.lenv lst in
@@ -611,10 +630,35 @@ let a_auth_user_pass_payload =
      printable characters except for CR or LF.  Any  illegal  charac‐
      ters in either the username or password string will be converted
      to underbar ('_').*)
-  ( a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
-                    | _ -> false) >>= fun user ->
-    a_line not_control_char >>= fun pass ->
-    end_of_input *> return (B (Auth_user_pass, (user,pass)))
+  ( pos >>= fun user_pos ->
+    a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
+                        | _ -> false) >>= (function
+        | "" -> ( *> ) commit @@ fail @@
+          Fmt.strf "auth-user-pass (byte %d): \
+                    username is empty, expected on first line!" user_pos
+        | user -> return user)  >>= fun user ->
+    pos >>= fun pass_pos ->
+    a_line not_control_char >>= (function
+        | "" -> ( *> ) commit @@ fail @@
+          Fmt.strf "auth-user-pass (byte %d): \
+                    password is empty, expected on second line!" pass_pos
+        | raw_pass ->
+          let bad = ref ~-1 in
+          let count = ref 0 in
+          String.map (function
+              | '\x00'..'\x1f'
+              | '\x7f'..'\xff' ->
+                bad := !count ; incr count ; '_'
+              | ch -> incr count ; ch) raw_pass
+          |> return <* return @@ if 0 <= !bad then
+            Logs.warn (fun m ->
+                m "config: user-auth-pass at (byte offset %d line offset %d) \
+                   contains special character that will be \
+                   turned into an underscore '_' , is this intentional?"
+                  (pass_pos + !bad) !bad);
+      ) >>= fun pass ->
+    a_ign_whitespace_no_comment *>
+    return (B (Auth_user_pass, (user,pass)))
   ) <|> fail "reading user/password file failed"
 
 let a_auth_retry =
@@ -682,7 +726,15 @@ let a_tls_version_min =
   `Entry (B(Tls_version_min,(v,or_h)))
 
 let a_entry_one_number name =
-  string name *> a_whitespace *> commit *> a_number
+  let fail off reason =
+    fail @@ Fmt.strf
+      "offset %d: Error parsing %s directive as integer: %s" off name reason in
+  string name *> a_whitespace *> pos >>= fun off -> commit *>
+  (a_single_param <|> fail off "parameter needed"
+  ) >>= fun num ->
+  parse_string a_number num |> function
+  | Ok v -> return v
+  | Error msg -> fail off msg
 
 let a_tls_timeout =
   a_entry_one_number "tls-timeout" >>| fun seconds ->
@@ -741,11 +793,7 @@ let a_local =
   `Entry (B(Bind,(Some (None, Some dom))))
 
 let a_rport =
-  fail "rport not implemented TODO"
-  (*
-  a_entry_one_number "rport" >>| fun n ->
-  Logs.warn (fun m -> m "rport directive seen. \
-                         This is not properly implemented."); `Rport n*)
+  a_entry_one_number "rport" >>| fun n -> `Rport n
 
 let a_ping =
   (a_entry_one_number "ping" >>| function
@@ -872,10 +920,13 @@ let a_ifconfig =
 (* TODO
    what are the semantics if proto and remote proto is provided? *)
 let a_remote
-  : [>  `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
-                   | `Ip of Ipaddr.t] * int * [`Udp | `Tcp] option] A.t =
+  : [> `Remote of [`Domain of [ `host ] Domain_name.t * [`Ipv6 | `Ipv4 | `Any]
+                   | `Ip of Ipaddr.t]
+                   * [`Port of int | `Default_rport]
+                   * [`Udp | `Tcp] option] A.t =
   (string "remote" *> a_whitespace *> a_domain_or_ip) >>= fun host_or_ip ->
-  (option 1194 (a_whitespace *> a_number) >>= fun port ->
+  (option `Default_rport
+     (a_whitespace *> a_number >>| fun p -> `Port p) >>= fun port ->
    ((option None (a_whitespace *> a_single_param >>| fun p -> Some p))
     >>= function
     | Some "udp" -> return (Some `Udp, `Any)
@@ -954,7 +1005,7 @@ let a_route_gateway =
 let a_inline =
   char '<' *> take_while1 (function 'a'..'z' |'-' -> true
                                              | _  -> false)
-  <* char '>' <* char '\n' >>= fun tag ->
+  <* char '>' <* a_newline >>= fun tag ->
   skip_many (a_whitespace_or_comment *> end_of_line) *>
   take_till (function '<' -> true | _ -> false) >>= fun x ->
   return (`Inline (tag, x))
@@ -1054,7 +1105,7 @@ let a_config_entry : line A.t =
 
 
 let parse_internal config_str : (line list, 'x) result =
-  let a_ign_ws = skip_many (skip @@ function '\n'| ' ' | '\t' -> true
+  let a_ign_ws = skip_many (skip @@ function '\r' | '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
   config_str |> parse_string
   @@ fix (fun recurse ->
@@ -1090,11 +1141,14 @@ let parse_inline str = let open Rresult in
        explicit-exit-notify, float, fragment, http-proxy,  http-proxy-option,
        link-mtu, local, lport, mssfix, mtu-disc, nobind, port,
        proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
+    (* TODO basically a Connection block is a subset of Conf_map.t,
+       we should use the same parser.*)
     parse_string a_remote str >>= fun (`Remote (host, port, proto)) ->
     let proto = match proto with None -> `Udp
                                (* TODO consult `Proto and `Proto_force *)
                                | Some x -> x in
-    Ok (B(Remote, [host, port, proto]))
+    let port = match port with `Default_rport -> 1194 | `Port i -> i in
+    Ok (B(Remote, ([host, port, proto])))
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
@@ -1102,10 +1156,11 @@ let parse_inline str = let open Rresult in
   | kind -> Error ("config-parser: not sure how to parse inline " ^
                    (string_of_inlineable kind))
 
-let eq : eq = { f = fun k v v2 ->
-    let eq = v = v2 in (*TODO non-polymorphic comparison*)
+let eq : eq = { f = fun (type x) (k: x k) (v:x) (v2:x) ->
+    let eq = v = v2 in
+    (*TODO non-polymorphic comparison*)
     begin if not eq then Logs.debug
-          (fun m -> m "eq self-test: %a <> %a"
+          (fun m -> m "eq self-test: @[<v>%a@,<>@,%a@]"
               pp (singleton k v)
               pp (singleton k v2))
         ; eq end }
@@ -1167,7 +1222,13 @@ let resolve_conflict (type a) t (k:a key) (v:a)
         end
       | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
-      | Remote -> Ok (Some (Remote, (get Remote t @ v)))
+      | Remote ->
+        begin match find Remote t, v with
+          | Some [], []
+          | None, [] -> Ok None (* prune empty *)
+          | Some peers1, peers2 -> Ok (Some (Remote, (peers1 @ peers2)))
+          | None, peers2 -> Ok (Some (Remote, peers2))
+        end
       | Ping_interval ->
         begin match find Ping_interval t with
           | Some old when old <> v ->
@@ -1218,7 +1279,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
     | (hd:line)::tl ->
       (* TODO should make sure not to override without conflict resolution,
          ie use addb_unless_bound and so on... *)
-      let multib kv =
+      let multib ?(tl=tl) kv =
         (List.fold_left (fun acc b ->
              acc >>= fun acc ->
           match resolve_add_conflict acc b with
@@ -1226,7 +1287,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           | Error err ->
             Logs.debug (fun m -> m "%S : %a" err pp acc);
             Error err) (Ok acc) kv) >>= fun acc -> loop acc tl in
-      let retb b = multib [b] in
+      let retb ?tl b = multib ?tl [b] in
       begin match hd with
         | `Path (wanted_name, kind) ->
           begin match effect with
@@ -1272,7 +1333,25 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               m "Inline block %S seems to be redundant" fname); [] end
         | `Ignored _ -> loop acc tl
         | `Comment _ -> loop acc tl
-        | `Rport _ -> Error "TODO rport"
+        | `Rport _ as this_directive ->
+          (* The parser for `Remote will look for `Rport when needed.
+             To avoid an endless loop here we ignore the present `Rport
+             directive when no more `Remote exist in [tl].
+             If there ARE more `Remote (that use `Default_port),
+             we sort [tl] in this order:
+             [`Remote ; `Rport ; ... the rest]:
+          *)
+          if not @@ List.exists (function
+              | `Remote (_, `Default_rport, _) -> true
+              | _ -> false) tl
+          then multib [] (* ignore this directive*)
+          else begin
+            let sorted_tl = List.sort (fun a b -> match a,b with
+                | `Remote _, `Rport _ -> -1 (* remote goes first *)
+                | `Rport _, `Remote _ ->  1 (* remote goes first *)
+                | _ -> compare a b) (this_directive::tl) in
+            loop acc sorted_tl
+          end
         | `Entry b -> retb b
         | `Entries lst -> multib lst
         | `Keepalive (interval, timeout) ->
@@ -1308,7 +1387,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           | `Socks_proxy _) as line ->
           Logs.warn (fun m -> m"ignoring unimplemented option: %a"
                         pp_line line) ;
-          loop acc tl
+          multib []
         | `Remote (host, port, proto) ->
           let proto = match proto with
             | Some x -> x
@@ -1317,7 +1396,22 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               | _ -> `Udp
           in
           (* TODO consult `Proto_force *)
-          retb (B(Remote, [host, port, proto]))
+          let rec consult_tl ?rport = function
+            | [] -> Ok rport
+            | `Rport conf::_ when rport <> None && Some conf <> rport  ->
+              Error (Fmt.strf "conflicting rport directives: %d <> %a"
+                       conf Fmt.(option int) rport)
+            | `Rport rport::tl -> consult_tl ~rport tl
+            | _hd::tl -> consult_tl ?rport tl in
+          begin match port with
+            | `Default_rport ->
+              (consult_tl tl >>| function
+                | None -> 1194 (* hardcoded default *)
+                | Some port -> port) >>= fun port ->
+              retb (B(Remote,([host, port, proto])))
+            | `Port port ->
+              retb (B(Remote,([host, port, proto])))
+          end
         | (`Dev _ | `Dev_type _) as current ->
           (* there must be a corresponding `Dev or `Dev_type in [tl]*)
           let rec find_them typs nams other = function
@@ -1329,7 +1423,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           begin match typs, names with
             | [typ], [name] ->
               (* custom named tun/tap device: *)
-              loop (acc |> add Dev (typ, Some name)) tl
+              retb ~tl (B(Dev,(typ, Some name)))
             | [typ], [] ->
               (* extraneous dev-type stanzas when dev-type has already been
                  inferred from the device name, e.g. "tun0" *)
