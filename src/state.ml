@@ -27,10 +27,10 @@ let init_transport = {
 }
 
 type keys = {
-  my_key : Nocrypto.Cipher_block.AES.CBC.key ;
+  my_key : Mirage_crypto.Cipher_block.AES.CBC.key ;
   my_hmac : Cstruct.t ;
   my_packet_id : int32 ;
-  their_key : Nocrypto.Cipher_block.AES.CBC.key ;
+  their_key : Mirage_crypto.Cipher_block.AES.CBC.key ;
   their_hmac : Cstruct.t ;
   their_packet_id : int32 ;
 }

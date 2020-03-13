@@ -166,10 +166,6 @@ module Conf_map = struct
     let p () = Fmt.pf ppf in
     let B (k,v) = b in
     let pp_x509 entry_typ cert =
-      let pp_host_set_element =
-        let pp_f ppf = function `Wildcard -> Fmt.string ppf "*." | `Strict -> () in
-        Fmt.(pair pp_f Domain_name.pp)
-      in
       p() "%s [inline]\n<%s>\n# CN: %S\n\
            # Expiry: %a\n# Hosts: %a\n\
            # Cert fingerprint (sha256): %a\n\
@@ -180,8 +176,7 @@ module Conf_map = struct
          | None -> "NO common name" | Some x -> x)
         (Fmt.(pair ~sep:(unit" -> ") Ptime.(pp_human()) Ptime.(pp_human())))
         (X509.Certificate.validity cert)
-        Fmt.(list ~sep:(unit " ") pp_host_set_element)
-        (X509.Certificate.Host_set.elements (X509.Certificate.hostnames cert))
+        X509.Host.Set.pp (X509.Certificate.hostnames cert)
         Hex.pp (Hex.of_cstruct (X509.Certificate.fingerprint `SHA256 cert))
         Hex.pp (Hex.of_cstruct (X509.Public_key.fingerprint ~hash:`SHA256
                                   (X509.Certificate.public_key cert)))

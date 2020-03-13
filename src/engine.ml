@@ -33,7 +33,7 @@ let ptime_to_ts_exn now =
 
 let compute_hmac key p hmac_key =
   let tbs = Packet.to_be_signed key p in
-  Nocrypto.Hash.SHA1.hmac ~key:hmac_key tbs
+  Mirage_crypto.Hash.SHA1.hmac ~key:hmac_key tbs
 
 let hmac_and_out protocol key hmac_key (p : Packet.pkt) =
   let hmac = compute_hmac key p hmac_key in
@@ -138,10 +138,10 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     Cstruct.split secret (size / 2)
   in
   let s1, s2 = halve secret in
-  let md5 = p_hash Nocrypto.Hash.MD5.(hmac, digest_size) s1
-  and sha = p_hash Nocrypto.Hash.SHA1.(hmac, digest_size) s2
+  let md5 = p_hash Mirage_crypto.Hash.MD5.(hmac, digest_size) s1
+  and sha = p_hash Mirage_crypto.Hash.SHA1.(hmac, digest_size) s2
   in
-  Nocrypto.Uncommon.Cs.xor md5 sha
+  Mirage_crypto.Uncommon.Cs.xor md5 sha
 
 let derive_keys session (key_source : State.key_source) (tls_data : Packet.tls_data) =
   let pre_master, client_random, server_random, client_random', server_random', sids =
@@ -215,9 +215,9 @@ let maybe_kdf ?with_premaster session key = function
         Cstruct.sub keys 128 32, Cstruct.sub keys 192 Packet.hmac_len
     in
     let keys_ctx = {
-      my_key = Nocrypto.Cipher_block.AES.CBC.of_secret my_key ;
+      my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key ;
       my_hmac ; my_packet_id = 1l ;
-      their_key = Nocrypto.Cipher_block.AES.CBC.of_secret their_key ;
+      their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key ;
       their_hmac ; their_packet_id = 1l ;
     } in
     (tls_data, keys_ctx)
@@ -276,11 +276,11 @@ let incoming_control_client config rng session channel now op data =
       let authenticator = match Config.find Ca config with
         | None ->
           Logs.warn (fun m -> m "not authenticating certificate (missing CA)");
-          X509.Authenticator.null
+          (fun ~host:_ _ -> Ok None)
         | Some ca ->
           Logs.info (fun m -> m "authenticating with CA %a"
                         X509.Certificate.pp ca);
-          X509.Authenticator.chain_of_trust ~time:now [ ca ]
+          X509.Authenticator.chain_of_trust ~time:(fun () -> Some now) [ ca ]
       in
       Tls.(Engine.client (Config.client ~authenticator ()))
     in
@@ -543,9 +543,9 @@ let data_out (ctx : keys) compress protocol rng key data =
   and data = pad block_size (Cstruct.append hdr data)
   in
   (* Logs.debug (fun m -> m "padded data is %d: %a" (Cstruct.len data) Cstruct.hexdump_pp data); *)
-  let enc = Nocrypto.Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
+  let enc = Mirage_crypto.Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
   let payload = Cstruct.append iv enc in
-  let hmac = Nocrypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
+  let hmac = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
   let payload' = Cstruct.append hmac payload in
   let out = Packet.encode protocol (key, `Data payload') in
   (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
@@ -643,10 +643,10 @@ let timer state now ts =
 let incoming_data err (ctx : keys) compress data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
   let hmac, data = Cstruct.split data Packet.hmac_len in
-  let hmac' = Nocrypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
+  let hmac' = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
   guard (Cstruct.equal hmac hmac') (err hmac') >>= fun () ->
   let iv, data = Cstruct.split data 16 in
-  let dec = Nocrypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
+  let dec = Mirage_crypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
   let hdr_len = 4 + if compress then 1 else 0 in
   guard (Cstruct.len dec >= hdr_len)
