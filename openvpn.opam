@@ -35,14 +35,16 @@ depends: [
   "logs"
   "cstruct-lwt"
   "lwt"
-  "nocrypto"
+  "mirage-crypto"
+  "mirage-crypto-rng"
   "ptime"
   "rresult"
-  "tls"
+  "tls" {>= "0.11.0"}
   "dns-client" {>= "4.0.0"}
-  "x509" {>= "0.9.0"}
+  "x509" {>= "0.10.0"}
   "duration"
 
+  "tuntap" {>= "1.8.1"}
   # mirage:
   "mirage-stack" {>= "2.0.0"}
   "mirage-protocols" {>= "4.0.0"}

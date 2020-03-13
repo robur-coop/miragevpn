@@ -224,7 +224,7 @@ let connect_udp ip port =
   let dom =
     Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
   and unix_ip = Ipaddr_unix.to_inet_addr ip
-  and src_port = Randomconv.int16 Nocrypto.Rng.generate
+  and src_port = Randomconv.int16 Mirage_crypto_rng.generate
   in
   let fd = Lwt_unix.(socket dom SOCK_DGRAM 0) in
   let any =
@@ -353,7 +353,7 @@ let send_recv conn config ip_config _mtu =
     Lwt.pick [ process_incoming () ; process_outgoing tun_fd ]
 
 let establish_tunnel config =
-  match Openvpn.client config (ts ()) Nocrypto.Rng.generate with
+  match Openvpn.client config (ts ()) Mirage_crypto_rng.generate with
   | Error `Msg msg ->
     Logs.err (fun m -> m "client construction failed %s" msg);
     Lwt.fail_with msg
@@ -400,8 +400,8 @@ let parse_config filename =
 
 let jump _ filename =
   Printexc.record_backtrace true;
+  Mirage_crypto_rng_unix.initialize ();
   Lwt_main.run (
-    Nocrypto_entropy_lwt.initialize () >>= fun () ->
     parse_config filename >>= function
     | Error `Msg s -> Lwt.fail_with ("config parser: " ^ s)
     | Ok config -> establish_tunnel config
