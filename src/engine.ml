@@ -236,7 +236,7 @@ let kex_server config session (keys : key_source) tls data =
       | None -> Push_request_sent (tls', keys_ctx), None
       | Some (Ipaddr.V4 ip, Ipaddr.V4 mask) ->
         let ip_config = { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway = fst (server_ip config) } in
-        Established (tls', keys_ctx), Some ip_config
+        Established keys_ctx, Some ip_config
       | _ -> assert false
     in
     Ok (state, payload)
@@ -313,7 +313,7 @@ let incoming_control_client config rng session channel now op data =
     begin match Config.(find Ifconfig config) with
       | Some _ ->
         let ip_config = ip_from_config config in
-        Ok (Some ip_config, config, { channel with channel_st = Established (tls', keys) }, tls_out)
+        Ok (Some ip_config, config, { channel with channel_st = Established keys }, tls_out)
       | None ->
        (* now we send a PUSH_REQUEST\0 and see what happens *)
        push_request tls' >>| fun (tls'', out) ->
@@ -324,12 +324,12 @@ let incoming_control_client config rng session channel now op data =
     end
   | Push_request_sent (tls, keys), Packet.Control ->
     Logs.debug (fun m -> m "in push request sent");
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
+    incoming_tls tls data >>= fun (_tls', tls_response, d) ->
     (match tls_response with
      | None -> ()
      | Some _ -> Logs.err (fun m -> m "unexpected TLS response (pr sent)"));
     maybe_push_reply config d >>| fun config' ->
-    let channel_st = Established (tls', keys) in
+    let channel_st = Established keys in
     Logs.info (fun m -> m "channel %d is established now!!!" channel.keyid);
     let ip_config = ip_from_config config' in
     Some ip_config, config', { channel with channel_st }, []
@@ -413,8 +413,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
             "ifconfig " ^ Ipaddr.V4.to_string ip ^ " " ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask prefix)
           ] in
           let reply = String.concat "," reply_things in
-          push_reply tls' reply >>= fun (tls'', out) ->
-          let channel_st = Established (tls'', keys) in
+          push_reply tls' reply >>= fun (_tls'', out) ->
+          let channel_st = Established keys in
           let ip_config = { ip ; prefix ; gateway = server_ip } in
           let config' = Config.add Ifconfig (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask prefix)) config in
           Ok (Some ip_config, config', session, { channel with channel_st }, [ `Control, out ])
