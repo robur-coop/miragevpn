@@ -54,24 +54,52 @@ let hmacs config =
     let s cs = Cstruct.sub cs 0 Packet.hmac_len in
     Ok (s a, s b)
 
+let secret config =
+  match Config.find Secret config with
+  | None -> Error (`Msg "no pre-shared secret found")
+  | Some (key1, hmac1, _key2, _hmac2) ->
+    let hm cs = Cstruct.sub cs 0 Packet.hmac_len
+    and cipher cs = Cstruct.sub cs 0 32
+    in
+    Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
+
 let client config ts now rng =
-  hmacs config >>= fun (my_hmac, their_hmac) ->
-  let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
   let current_ts = ts () in
-  let channel = new_channel 0 current_ts in
-    (match Config.get Remote config with
-     | (`Domain (name, ip_version), _port, _proto) :: _ ->
-       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
-     | (`Ip ip, port, dp) :: _ ->
-       Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
-     | [] ->
-       Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
-  let state = {
-    config ; state = Client state ; linger = Cstruct.empty ; rng ; ts ; now ;
-    session ; channel ; lame_duck = None ;
-    last_received = current_ts ; last_sent = current_ts ;
-  } in
-  state, action
+  (match Config.get Remote config with
+   | (`Domain (name, ip_version), _port, _proto) :: _ ->
+     Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
+   | (`Ip ip, port, dp) :: _ ->
+     Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
+   | [] ->
+     Error (`Msg "couldn't find remote in configuration")) >>= fun (action, state) ->
+  match hmacs config, secret config with
+  | Error e, Error _ -> Error e
+  | Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
+    let keys = {
+      my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key ;
+      my_hmac ; my_packet_id = 1l ;
+      their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key ;
+      their_hmac ; their_packet_id = 1l ;
+    } in
+    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
+    let channel = new_channel 0 current_ts in
+    let state = {
+      config ; state = Client_static (keys, state) ; linger = Cstruct.empty ;
+      rng ; ts ; now ;
+      session ; channel ; lame_duck = None ;
+      last_received = current_ts ; last_sent = current_ts ;
+    }
+    in
+    Ok (state, action)
+  | Ok (my_hmac, their_hmac), _ ->
+    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
+    let channel = new_channel 0 current_ts in
+    let state = {
+      config ; state = Client state ; linger = Cstruct.empty ; rng ; ts ; now ;
+      session ; channel ; lame_duck = None ;
+      last_received = current_ts ; last_sent = current_ts ;
+    } in
+    Ok (state, action)
 
 let server server_config server_ts server_now server_rng =
   let port = match Config.find Port server_config with
@@ -440,6 +468,7 @@ let incoming_control is_not_taken config rng state session channel now ts key op
     (est, config', session, ch'', outs)
   | Server _ ->
     incoming_control_server is_not_taken config rng session channel now ts key op data
+  | Client_static _ -> assert false
 
 let expected_packet session transport data =
   (* expects monotonic packet + message id, session ids matching *)
@@ -535,16 +564,18 @@ let unpad block_size cs =
   else
     Error (`Msg "bad padding")
 
-let data_out (ctx : keys) compress protocol rng key data =
-  (* output is: packed_id 0xfa data, then wrap openvpn partial header
+let out ?ts (ctx : keys) compress rng data =
+  (* output is: packed_id <ts_opt> 0xfa data, then wrap openvpn partial header
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
      --> hmac and prepend hash *)
-  let hdr = Cstruct.create (4 + if compress then 1 else 0) in
+  let hdr_len = 4 + (if compress then 1 else 0) + (match ts with None -> 0 | Some _ -> 4) in
+  let hdr = Cstruct.create hdr_len in
   Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
+  (match ts with None -> () | Some ts -> Cstruct.BE.set_uint32 hdr 4 ts);
   if compress then
-    (* byte 4 is compression -- 0xFA is "no compression" *)
-    Cstruct.set_uint8 hdr 4 0xfa;
+    (* byte (hdr_len - 1) is compression -- 0xFA is "no compression" *)
+    Cstruct.set_uint8 hdr (pred hdr_len) 0xfa;
   let block_size = 16 in
   let iv = rng block_size
   and data = pad block_size (Cstruct.append hdr data)
@@ -554,21 +585,32 @@ let data_out (ctx : keys) compress protocol rng key data =
   let payload = Cstruct.append iv enc in
   let hmac = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
   let payload' = Cstruct.append hmac payload in
+  let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  (ctx', payload')
+
+let data_out ?ts (ctx : keys) compress protocol rng key data =
+  let ctx', payload' = out ?ts ctx compress rng data in
   let out = Packet.encode protocol (key, `Data payload') in
   (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
-  let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
   Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
                  (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
   (ctx', out)
 
 let outgoing s data =
-  match keys_opt s.channel with
-  | None -> Error `Not_ready
-  | Some ctx ->
-    let ctx, data = data_out ctx s.session.compress s.session.protocol s.rng s.channel.keyid data in
-    let ch = set_keys s.channel ctx in
-    let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
-    Ok ({ s with channel ; last_sent = s.ts () }, data)
+  match s.state with
+  | Client_static (ctx, c) ->
+    let ts = ptime_to_ts_exn (s.now ()) in
+    let ctx, payload = out ~ts ctx true s.rng data in
+    Ok ({ s with state = Client_static (ctx, c) ; last_sent = s.ts () },
+        payload)
+  | _ ->
+    match keys_opt s.channel with
+    | None -> Error `Not_ready
+    | Some ctx ->
+      let ctx, data = data_out ctx s.session.compress s.session.protocol s.rng s.channel.keyid data in
+      let ch = set_keys s.channel ctx in
+      let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
+      Ok ({ s with channel ; last_sent = s.ts () }, data)
 
 let ping =
   (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
@@ -606,6 +648,7 @@ let maybe_init_rekey s =
   | Server Server_ready ->
     let state = Server (Server_rekeying channel) in
     { s with state ; session }, [ out ]
+  | Client_static _ -> s, [] (* there's no rekey *)
   | _ ->
     Logs.warn (fun m -> m "maybe init rekey, but not in client or server ready %a"
                   pp_state s.state);
@@ -648,7 +691,7 @@ let timer state =
   let s''' = maybe_drop_lame_duck s'' in
   s''', out @ out'
 
-let incoming_data err (ctx : keys) compress data =
+let incoming_data ?(ts = false) err (ctx : keys) compress data =
   (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
   let hmac, data = Cstruct.split data Packet.hmac_len in
   let hmac' = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
@@ -656,18 +699,19 @@ let incoming_data err (ctx : keys) compress data =
   let iv, data = Cstruct.split data 16 in
   let dec = Mirage_crypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-  let hdr_len = 4 + if compress then 1 else 0 in
+  let hdr_len = 4 + (if compress then 1 else 0) + (if ts then 4 else 0) in
   guard (Cstruct.len dec >= hdr_len)
-    (Rresult.R.msgf "payload %a too short (need 5 bytes)"
-       Cstruct.hexdump_pp dec) >>= fun () ->
+    (Rresult.R.msgf "payload too short (need %d bytes): %a"
+       hdr_len Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
   Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+  (* TODO validate ts if provided (avoid replay) *)
   let block_size = 16 in
   unpad block_size (Cstruct.shift dec hdr_len) >>= fun data ->
   begin
     if compress then
-      (* if dec[4] == 0xfa, then compression is off *)
-      match Cstruct.get_uint8 dec 4 with
+      (* if dec[hdr_len--] == 0xfa, then compression is off *)
+      match Cstruct.get_uint8 dec (pred hdr_len) with
       | 0xFA -> Ok data
       | 0x66 ->
         Lzo.decompress (Cstruct.to_string data) >>| Cstruct.of_string >>| fun lz ->
@@ -1030,7 +1074,102 @@ let handle_server ?is_not_taken t s ev =
     Rresult.R.error_msgf "handle_server: unexpected event %a in state %a"
       pp_event ev pp_server_state s
 
+let handle_static_client t s keys ev =
+  let ts = t.ts () in
+  let remote, next_remote =
+    let remotes = Config.get Remote t.config in
+    let r idx = List.nth remotes idx in
+    let next idx =
+      if succ idx = List.length remotes then None else Some (r (succ idx))
+    in
+    r, next
+  and retry_exceeded r =
+    match Config.get Connect_retry_max t.config with
+    | `Times m -> m > r
+    | `Unlimited -> false
+  in
+  let next_or_fail idx retry =
+    let idx', retry', v = match next_remote idx with
+      None -> 0, succ retry, remote 0 | Some x -> succ idx, retry, x
+    in
+    if retry_exceeded retry' then
+      Error (`Msg "maximum connection retries exceeded")
+    else
+      Ok (match v with
+          | `Domain (name, ip_version), _, _ ->
+            Resolving (idx', ts, retry'), `Resolve (name, ip_version)
+          | `Ip ip, port, dp ->
+            Connecting (idx', ts, retry'), `Connect (ip, port, dp))
+  in
+  let client cs = Client_static (keys, cs) in
+  match s, ev with
+  | Resolving (idx, _, retry), `Resolved ip ->
+    (* TODO enforce ipv4/ipv6 *)
+    let endp = match remote idx with _, port, dp -> (ip, port, dp) in
+    Ok ({ t with state = client (Connecting (idx, ts, retry)) }, [],
+        Some (`Connect endp))
+  | Resolving (idx, _, retry), `Resolve_failed ->
+    next_or_fail idx retry >>| fun (state, action) ->
+    { t with state = client state }, [], Some action
+  | Connecting _, `Connected ->
+    let state = client Ready in
+    begin match Config.get Ifconfig t.config with
+      | V4 my_ip, V4 their_ip ->
+        let mtu = Config.get Tun_mtu t.config in
+        let prefix = Ipaddr.V4.Prefix.make 24 my_ip in
+        (* TODO -- completely unclear which netmask, it is a p2p interface *)
+        let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
+        let t = { t with state } in
+        begin match outgoing t ping with
+          | Error _ -> assert false
+          | Ok (t, out) -> Ok (t, [ out ], Some est)
+        end
+      | _ -> Error (`Msg "expected IPv4 addresses")
+    end
+  | Connecting (idx, _, retry), `Connection_failed ->
+    next_or_fail idx retry >>| fun (state, action) ->
+    { t with state = client state }, [], Some action
+  | Connecting (idx, initial_ts, retry), `Tick ->
+    (* We are trying to establish a connection and a clock tick happens.
+       We need to determine if {!Config.Connect_timeout} seconds has passed
+       since [initial_ts] (when we started connecting), and if so,
+       try the next [Remote]. *)
+    let conn_timeout = Duration.of_sec Config.(get Connect_timeout t.config) in
+    if Int64.sub ts initial_ts >= conn_timeout then begin
+      Logs.err (fun m -> m "Connecting to remote #%d timed out" idx);
+      next_or_fail idx retry >>| fun (state, action) ->
+      { t with state = client state }, [], Some action
+    end else
+      Ok (t, [], None)
+  | _, `Connection_failed ->
+    (* re-start from scratch *)
+    next_or_fail (-1) 0 >>| fun (state, action) ->
+    { t with state = client state }, [], Some action
+  | _, `Tick ->
+    begin
+      match maybe_ping_timeout t with
+      | Some `Exit -> Ok (t, [], Some `Exit)
+      | Some `Restart ->
+        next_or_fail (-1) 0 >>| fun (state, action) ->
+        { t with state = client state }, [], Some action
+      | None ->
+        let t', outs = timer t in
+        Ok (t', outs, None)
+    end
+  | _, `Data cs ->
+    begin
+      let t = { t with last_received = ts } in
+      let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
+      incoming_data ~ts:true bad_mac keys true cs >>| function
+      | None -> (t, [], None)
+      | Some payload -> (t, [], Some (`Payload [ payload ]))
+    end
+  | s, ev ->
+    Rresult.R.error_msgf "handle_static_client: unexpected event %a in state %a"
+      pp_event ev pp_client_state s
+
 let handle t ?is_not_taken ev =
   match t.state with
   | Client c -> handle_client t c ev
+  | Client_static (k, c) -> handle_static_client t c k ev
   | Server s -> handle_server ?is_not_taken t s ev

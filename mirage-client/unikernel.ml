@@ -31,7 +31,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                     proto Ipaddr.V4.pp src Ipaddr.V4.pp dst (Cstruct.len buf));
       Lwt.return_unit
 
-  let start _ _ _ _ s data _ =
+  let start _ _ _ _ s data =
     (let open Lwt_result.Infix in
      read_config data >>= fun config ->
      O.connect config s >>= fun (t, reader) ->

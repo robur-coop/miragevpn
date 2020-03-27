@@ -225,10 +225,12 @@ let pp_server_state ppf = function
 
 type state =
   | Client of client_state
+  | Client_static of keys * client_state
   | Server of server_state
 
 let pp_state ppf = function
   | Client c -> pp_client_state ppf c
+  | Client_static (_, c) -> Fmt.pf ppf "client static %a" pp_client_state c
   | Server s -> pp_server_state ppf s
 
 type t = {
