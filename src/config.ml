@@ -1409,12 +1409,13 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           end
         | (`Dev _ | `Dev_type _) as current ->
           (* there must be a corresponding `Dev or `Dev_type in [tl]*)
-          let rec find_them typs nams other = function
-            | [] -> typs, nams, other
-            | `Dev_type typ :: tl -> find_them (typ::typs) nams other tl
-            | `Dev name :: tl -> find_them typs (name::nams) other tl
-            | o::tl -> find_them typs nams (o::other) tl
-          in let typs, names, tl = find_them [] [] [] (current::tl) in
+          let typs, names, tl =
+            List.fold_left (fun (typs, nams, other) -> function
+                | `Dev_type typ -> (typ::typs), nams, other
+                | `Dev name -> typs, (name::nams), other
+                | o -> typs, nams, (o::other))
+              ([], [], []) (current :: tl)
+          in
           begin match typs, names with
             | [typ], [name] ->
               (* custom named tun/tap device: *)
@@ -1428,7 +1429,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
                   Error (Fmt.strf "dev-type %S conflicts with \
                                    inferred type for [dev] stanza"
                            (match typ with `Tap -> "tap" | `Tun -> "tun"))
-                | None -> Error "[dev-type] stanza without [dev]"
+                | None -> retb ~tl (B(Dev,(typ, None)))
               end
             | [], [] -> Error "BUG in config parser: `Dev|`Dev_type empty list"
             | [], name::_extra_devs ->
