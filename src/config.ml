@@ -142,19 +142,23 @@ module Conf_map = struct
     let open Rresult in
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
       ( ensure_mem Remote "does not have a remote" >>= fun()->
-        (match find Tls_mode t with
-         | None | Some `Server -> Error "is not a TLS client"
-         | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
-        begin match find Auth_user_pass t, find Tls_cert t, find Tls_key t with
-          | _, Some _, None -> Error "tls-cert provided, but no tls-key"
-          | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
-          | Some _, None, None -> Ok ()
-          | _, Some _, Some _ -> Ok ()
-          | None, None, None ->
-            Error "config has neither user/password, nor TLS client certificate"
-          (* ^-- TODO or has -pkcs12 *)
-        end >>= fun () ->
+        (match find Tls_mode t, find Secret t with
+         | None, None | Some `Server, _ -> Error "is a TLS server, not a TLS client"
+         | None, Some _ ->
+           Logs.warn (fun m -> m "using non-forward secure static key mode");
+           Ok ()
+         | Some _, Some _ -> Error "both static secret and TLS mode specified"
+         | Some `Client, None ->
+           begin match find Auth_user_pass t, find Tls_cert t, find Tls_key t with
+             | _, Some _, None -> Error "tls-cert provided, but no tls-key"
+             | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
+             | Some _, None, None -> Ok ()
+             | _, Some _, Some _ -> Ok ()
+             | None, None, None ->
+               Error "config has neither user/password, nor TLS client certificate"
+               (* ^-- TODO or has -pkcs12 *)
+           end) >>= fun () ->
         ensure_mem Cipher "client must specify 'cipher AES-256-CBC'"
         >>= fun () ->
         (if mem Cipher t && get Cipher t <> "AES-256-CBC" then

@@ -13,7 +13,6 @@ let openvpn_handler =
     ]
   in
   foreign
-    ~deps:[abstract nocrypto]
     ~packages
     "Unikernel.Main" (random @-> mclock @-> pclock @-> time @-> stackv4 @-> kv_ro @-> job)
 

@@ -54,24 +54,55 @@ let hmacs config =
     let s cs = Cstruct.sub cs 0 Packet.hmac_len in
     Ok (s a, s b)
 
+let secret config =
+  match Config.find Secret config with
+  | None -> Error (`Msg "no pre-shared secret found")
+  | Some (key1, hmac1, _key2, _hmac2) ->
+    let hm cs = Cstruct.sub cs 0 Packet.hmac_len
+    and cipher cs = Cstruct.sub cs 0 32
+    in
+    Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
+
 let client config ts now rng =
-  hmacs config >>= fun (my_hmac, their_hmac) ->
-  let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
   let current_ts = ts () in
-  let channel = new_channel 0 current_ts in
-    (match Config.get Remote config with
-     | (`Domain (name, ip_version), _port, _proto) :: _ ->
-       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
-     | (`Ip ip, port, dp) :: _ ->
-       Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
-     | [] ->
-       Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
-  let state = {
-    config ; state = Client state ; linger = Cstruct.empty ; rng ; ts ; now ;
-    session ; channel ; lame_duck = None ;
-    last_received = current_ts ; last_sent = current_ts ;
-  } in
-  state, action
+  (match Config.get Remote config with
+   | (`Domain (name, ip_version), _port, _proto) :: _ ->
+     Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
+   | (`Ip ip, port, dp) :: _ ->
+     Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
+   | [] ->
+     Error (`Msg "couldn't find remote in configuration")) >>= fun (action, state) ->
+  match hmacs config, secret config with
+  | Error e, Error _ -> Error e
+  | Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
+    let keys = {
+      my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key ;
+      my_hmac ; my_packet_id = 1l ;
+      their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key ;
+      their_hmac ; their_packet_id = 1l ;
+    } in
+    let compress = match Config.find Comp_lzo config with
+        None -> false | Some () -> true
+    in
+    let session = init_session ~my_session_id:0L ~compress ~my_hmac ~their_hmac () in
+    let channel = new_channel 0 current_ts in
+    let state = {
+      config ; state = Client_static (keys, state) ; linger = Cstruct.empty ;
+      rng ; ts ; now ;
+      session ; channel ; lame_duck = None ;
+      last_received = current_ts ; last_sent = current_ts ;
+    }
+    in
+    Ok (state, action)
+  | Ok (my_hmac, their_hmac), _ ->
+    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
+    let channel = new_channel 0 current_ts in
+    let state = {
+      config ; state = Client state ; linger = Cstruct.empty ; rng ; ts ; now ;
+      session ; channel ; lame_duck = None ;
+      last_received = current_ts ; last_sent = current_ts ;
+    } in
+    Ok (state, action)
 
 let server server_config server_ts server_now server_rng =
   let port = match Config.find Port server_config with
@@ -135,9 +166,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     expand (hmac ~key seed) len
   in
   let halve secret =
-    let size = Cstruct.len secret in
-    if size mod 2 <> 0 then assert false;
-    Cstruct.split secret (size / 2)
+    Cstruct.split secret (Cstruct.len secret / 2)
   in
   let s1, s2 = halve secret in
   let md5 = p_hash Mirage_crypto.Hash.MD5.(hmac, digest_size) s1
@@ -176,6 +205,11 @@ let incoming_tls tls data =
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
       Error (`Tls e)
     | `Ok tls' -> Ok (tls', out, d)
+
+let incoming_tls_without_reply tls data =
+  incoming_tls tls data >>= function
+  | tls', None, d -> Ok (tls', d)
+  | _, Some _, _ -> Error (`Msg "expected no TLS reply")
 
 let maybe_kex_client rng config tls =
   if Tls.Engine.can_handle_appdata tls then
@@ -233,15 +267,18 @@ let kex_server config session (keys : key_source) tls data =
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
   | None -> Error (`Msg "not yet established")
   | Some (tls', payload) ->
-    let state =
-      match Config.find Ifconfig config with
-      | None -> Push_request_sent (tls', keys_ctx), None
+    begin match Config.find Ifconfig config with
+      | None -> Ok (Push_request_sent (tls', keys_ctx), None)
       | Some (Ipaddr.V4 ip, Ipaddr.V4 mask) ->
-        let ip_config = { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway = fst (server_ip config) } in
-        Established keys_ctx, Some ip_config
-      | _ -> assert false
-    in
-    Ok (state, payload)
+        let ip_config =
+          let prefix = Ipaddr.V4.Prefix.of_netmask mask ip in
+          { ip ; prefix ; gateway = fst (server_ip config) }
+        in
+        Ok (Established keys_ctx, Some ip_config)
+      | _ ->
+        Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
+    end >>| fun state ->
+    (state, payload)
 
 let push_request tls =
   match Tls.Engine.send_application_data tls [Packet.push_request] with
@@ -282,7 +319,9 @@ let incoming_control_client config rng session channel now op data =
         | Some ca ->
           Logs.info (fun m -> m "authenticating with CA %a"
                         X509.Certificate.pp ca);
-          X509.Authenticator.chain_of_trust ~time:(fun () -> Some now) [ ca ]
+          X509.Authenticator.chain_of_trust
+            ~hash_whitelist:Mirage_crypto.Hash.hashes
+            ~time:(fun () -> Some now) [ ca ]
       in
       let certificates =
         match Config.find Tls_cert config, Config.find Tls_key config with
@@ -308,10 +347,10 @@ let incoming_control_client config rng session channel now op data =
     in
     None, config, { channel with channel_st }, out
   | TLS_established (tls, key), Packet.Control ->
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
+    incoming_tls tls data >>= fun (tls', tls_resp, d) ->
     maybe_kdf session key d >>= fun (tls_data, keys) ->
     let config = merge_server_config_into_client config tls_data in
-    let tls_out = match tls_response with None -> [] | Some x -> [`Control, x] in (* warn here as well? *)
+    let tls_out = match tls_resp with None -> [] | Some c -> [ `Control, c ] in
     (* ok, two options:
        - initial handshake done, we need push request / reply
        - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
@@ -320,21 +359,20 @@ let incoming_control_client config rng session channel now op data =
     begin match Config.(find Ifconfig config) with
       | Some _ ->
         let ip_config = ip_from_config config in
-        Ok (Some ip_config, config, { channel with channel_st = Established keys }, tls_out)
+        let channel_st = Established keys in
+        Ok (Some ip_config, config, { channel with channel_st }, tls_out)
       | None ->
        (* now we send a PUSH_REQUEST\0 and see what happens *)
        push_request tls' >>| fun (tls'', out) ->
        let channel_st = Push_request_sent (tls'', keys) in
        (* first send an ack for the received key data packet (this needs to be
           a separate packet from the PUSH_REQUEST for unknown reasons) *)
-       (None, config, { channel with channel_st }, tls_out @ [ `Ack, Cstruct.empty ; `Control, out ])
+       (None, config, { channel with channel_st },
+        tls_out @ [ `Ack, Cstruct.empty ; `Control, out ])
     end
   | Push_request_sent (tls, keys), Packet.Control ->
     Logs.debug (fun m -> m "in push request sent");
-    incoming_tls tls data >>= fun (_tls', tls_response, d) ->
-    (match tls_response with
-     | None -> ()
-     | Some _ -> Logs.err (fun m -> m "unexpected TLS response (pr sent)"));
+    incoming_tls_without_reply tls data >>= fun (_tls', d) ->
     maybe_push_reply config d >>| fun config' ->
     let channel_st = Established keys in
     Logs.info (fun m -> m "channel %d is established now!!!" channel.keyid);
@@ -379,23 +417,23 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
     let channel_st =
       if Tls.Engine.can_handle_appdata tls' then
         (* this could be generated later, but is done here to accomodate the client state machine *)
-        let random1, random2 = rng 32, rng 32 in
-        TLS_established (tls', { State.pre_master = Cstruct.empty ; random1 ; random2 })
+        let random1, random2 = rng 32, rng 32
+        and pre_master = Cstruct.empty
+        in
+        TLS_established (tls', { State.pre_master ; random1 ; random2 })
       else
         TLS_handshake tls'
     in
-    let out = match tls_response with | None -> [] | Some data -> [ `Control, data ] in
+    let out = match tls_response with None -> [] | Some c -> [`Control, c] in
     None, config, session, { channel with channel_st }, out
   | TLS_established (tls, keys), Packet.Control ->
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
-    assert (tls_response = None);
+    incoming_tls_without_reply tls data >>= fun (tls', d) ->
     kex_server config session keys tls' d >>| fun ((channel_st, ip_config), out) ->
     (* keys established, move forward to "expect push request (reply with push reply)" *)
     ip_config, config, session, { channel with channel_st }, [ `Control, out ]
   | Push_request_sent (tls, keys), Packet.Control ->
     (* TODO naming: this is actually server_stuff sent, awaiting push request *)
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
-    assert (tls_response = None);
+    incoming_tls_without_reply tls data >>= fun (tls', d) ->
     begin match d with
       | None -> Error (`Msg "expected push request")
       | Some data ->
@@ -432,7 +470,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
     Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op data =
-  Logs.info (fun m -> m "incoming control!!! op %a (channel %a)"
+  Logs.info (fun m -> m "incoming control! op %a (channel %a)"
                 Packet.pp_operation op pp_channel channel);
   match state with
   | Client _ ->
@@ -440,6 +478,8 @@ let incoming_control is_not_taken config rng state session channel now ts key op
     (est, config', session, ch'', outs)
   | Server _ ->
     incoming_control_server is_not_taken config rng session channel now ts key op data
+  | Client_static _ ->
+    Error (`Msg "client with static keys, no control packets expected")
 
 let expected_packet session transport data =
   (* expects monotonic packet + message id, session ids matching *)
@@ -535,39 +575,71 @@ let unpad block_size cs =
   else
     Error (`Msg "bad padding")
 
-let data_out (ctx : keys) compress protocol rng key data =
-  (* output is: packed_id 0xfa data, then wrap openvpn partial header
-     ~~> well, actually take a random IV, pad and encrypt,
-     ~~> prepend IV to encrrypted data
-     --> hmac and prepend hash *)
-  let hdr = Cstruct.create (4 + if compress then 1 else 0) in
-  Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
-  if compress then
-    (* byte 4 is compression -- 0xFA is "no compression" *)
-    Cstruct.set_uint8 hdr 4 0xfa;
-  let block_size = 16 in
-  let iv = rng block_size
-  and data = pad block_size (Cstruct.append hdr data)
+let out ?add_timestamp (ctx : keys) compress rng data =
+  (* the wire format of data packets is:
+     hmac (IV enc(packet_id [timestamp] [compression] data pad))
+     where:
+     - hmac over the entire encrypted payload
+     - timestamp only used in static key mode (32bit, seconds since unix epoch)
+     - compression only if configured (0xfa for uncompressed)
+
+     the ~add_timestamp argument is only used in static key mode
+  *)
+  let hdr_len =
+    4 + (match add_timestamp with None -> 0 | Some _ -> 4) +
+    (if compress then 1 else 0)
   in
-  (* Logs.debug (fun m -> m "padded data is %d: %a" (Cstruct.len data) Cstruct.hexdump_pp data); *)
-  let enc = Mirage_crypto.Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
+  let hdr = Cstruct.create hdr_len in
+  Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
+  (match add_timestamp with
+   | None -> ()
+   | Some ts -> Cstruct.BE.set_uint32 hdr 4 ts);
+  if compress then
+    (* byte (hdr_len - 1) is compression -- 0xFA is "no compression" *)
+    Cstruct.set_uint8 hdr (pred hdr_len) 0xfa;
+  let iv = rng Packet.cipher_block_size
+  and data = pad Packet.cipher_block_size (Cstruct.append hdr data)
+  in
+  let open Mirage_crypto in
+  let enc = Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
   let payload = Cstruct.append iv enc in
-  let hmac = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
-  let payload' = Cstruct.append hmac payload in
-  let out = Packet.encode protocol (key, `Data payload') in
-  (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
-  let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  let hmac = Hash.SHA1.hmac ~key:ctx.my_hmac payload in
+  let packet = Cstruct.append hmac payload in
+  let ctx = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  (ctx, packet)
+
+let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
+  (* as described in [out], ~add_timestamp is only used in static key mode *)
+  let ctx, payload = out ?add_timestamp ctx compress rng data in
+  let out = Packet.encode protocol (key, `Data payload) in
   Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
                  (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
-  (ctx', out)
+  (ctx, out)
 
 let outgoing s data =
-  match keys_opt s.channel with
-  | None -> Error `Not_ready
-  | Some ctx ->
-    let ctx, data = data_out ctx s.session.compress s.session.protocol s.rng s.channel.keyid data in
-    let ch = set_keys s.channel ctx in
-    let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
+  let incr ch out =
+    { ch with packets = succ ch.packets ; bytes = Cstruct.len out + ch.bytes }
+  in
+  match s.state, keys_opt s.channel with
+  | Client_static (ctx, c), _ ->
+    let add_timestamp = ptime_to_ts_exn (s.now ()) in
+    let ctx, payload =
+      out ~add_timestamp ctx s.session.compress s.rng data
+    in
+    let prefix =
+      Packet.encode_protocol s.session.protocol (Cstruct.len payload)
+    in
+    let out = Cstruct.append prefix payload in
+    let channel = incr s.channel out in
+    let state = Client_static (ctx, c) in
+    Ok ({ s with state ; channel ; last_sent = s.ts () }, out)
+  | _, None -> Error `Not_ready
+  | _, Some ctx ->
+    let sess = s.session in
+    let ctx, out =
+      data_out ctx sess.compress sess.protocol s.rng s.channel.keyid data
+    in
+    let channel = incr (set_keys s.channel ctx) out in
     Ok ({ s with channel ; last_sent = s.ts () }, data)
 
 let ping =
@@ -606,6 +678,7 @@ let maybe_init_rekey s =
   | Server Server_ready ->
     let state = Server (Server_rekeying channel) in
     { s with state ; session }, [ out ]
+  | Client_static _ -> s, [] (* there's no rekey mechanism in static mode *)
   | _ ->
     Logs.warn (fun m -> m "maybe init rekey, but not in client or server ready %a"
                   pp_state s.state);
@@ -648,26 +721,37 @@ let timer state =
   let s''' = maybe_drop_lame_duck s'' in
   s''', out @ out'
 
-let incoming_data err (ctx : keys) compress data =
-  (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
+let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
+  (* spec described the layout as:
+     hmac <+> payload
+     where payload consists of IV <+> encrypted data
+     where plain data consists of packet_id [timestamp] [compress] data pad
+
+     note that the timestamp is only used in static key mode, when
+     ~add_timestamp is provided and true.
+  *)
+  let open Mirage_crypto in
   let hmac, data = Cstruct.split data Packet.hmac_len in
-  let hmac' = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
-  guard (Cstruct.equal hmac hmac') (err hmac') >>= fun () ->
-  let iv, data = Cstruct.split data 16 in
-  let dec = Mirage_crypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
+  let computed_hmac = Hash.SHA1.hmac ~key:ctx.their_hmac data in
+  guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
+  let iv, data = Cstruct.split data Packet.cipher_block_size in
+  let dec = Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-  let hdr_len = 4 + if compress then 1 else 0 in
+  let hdr_len =
+    4 + (if add_timestamp then 4 else 0) + (if compress then 1 else 0)
+  in
   guard (Cstruct.len dec >= hdr_len)
-    (Rresult.R.msgf "payload %a too short (need 5 bytes)"
-       Cstruct.hexdump_pp dec) >>= fun () ->
+    (Rresult.R.msgf "payload too short (need %d bytes): %a"
+       hdr_len Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
-  Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
-  let block_size = 16 in
-  unpad block_size (Cstruct.shift dec hdr_len) >>= fun data ->
+  Logs.debug (fun m -> m "received packet id is %lu"
+                 (Cstruct.BE.get_uint32 dec 0));
+  (* TODO validate ts if provided (avoid replay) *)
+  unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len) >>= fun data ->
   begin
     if compress then
-      (* if dec[4] == 0xfa, then compression is off *)
-      match Cstruct.get_uint8 dec 4 with
+      (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
+      match Cstruct.get_uint8 dec (pred hdr_len) with
       | 0xFA -> Ok data
       | 0x66 ->
         Lzo.decompress (Cstruct.to_string data) >>| Cstruct.of_string >>| fun lz ->
@@ -741,7 +825,10 @@ let merge_payload a b = match a, b with
   | Some a, None -> Some a
   | None, Some b -> Some (`Payload [b])
   | Some `Payload a, Some b -> Some (`Payload (b :: a))
-  | _ -> assert false
+  | Some a, Some b ->
+    Logs.warn (fun m -> m "merging %a with payload %a (ignoring payload)"
+                  pp_action a Cstruct.hexdump_pp b);
+    Some a
 
 let find_channel state key p =
   match channel_of_keyid key state with
@@ -891,7 +978,7 @@ let maybe_hand_timeout timeout ts transport =
 
 let retransmit timeout ts transport =
   let t = Duration.of_sec timeout in
-  (* TODO should I update the timestamp in the packet? *)
+  (* TODO should the timestamp in the packet be updated? *)
   let out, out_packets = IM.fold (fun k (ts', data) (acc, m) ->
       if Int64.sub ts ts' >= t then
         data :: acc, IM.add k (ts, data) m
@@ -901,17 +988,16 @@ let retransmit timeout ts transport =
   in
   { transport with out_packets }, out
 
-let handle_client t s ev =
-  let now = t.now () and ts = t.ts () in
+let resolve_connect_client config ts s ev =
   let remote, next_remote =
-    let remotes = Config.get Remote t.config in
+    let remotes = Config.get Remote config in
     let r idx = List.nth remotes idx in
     let next idx =
       if succ idx = List.length remotes then None else Some (r (succ idx))
     in
     r, next
   and retry_exceeded r =
-    match Config.get Connect_retry_max t.config with
+    match Config.get Connect_retry_max config with
     | `Times m -> m > r
     | `Unlimited -> false
   in
@@ -928,85 +1014,93 @@ let handle_client t s ev =
           | `Ip ip, port, dp ->
             Connecting (idx', ts, retry'), `Connect (ip, port, dp))
   in
-  let client cs = Client cs in
   match s, ev with
   | Resolving (idx, _, retry), `Resolved ip ->
     (* TODO enforce ipv4/ipv6 *)
     let endp = match remote idx with _, port, dp -> (ip, port, dp) in
-    Ok ({ t with state = client (Connecting (idx, ts, retry)) }, [],
-        Some (`Connect endp))
+    Ok (Connecting (idx, ts, retry), Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
     next_or_fail idx retry >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | Connecting (idx, _, _), `Connected ->
-    let my_session_id = Randomconv.int64 t.rng
-    and my_hmac = t.session.my_hmac
-    and their_hmac = t.session.their_hmac
-    in
-    let protocol = match remote idx with _, _, proto -> proto in
-    let session = init_session ~my_session_id ~protocol ~my_hmac ~their_hmac () in
-    let session, channel, out =
-      init_channel Packet.Hard_reset_client session 0 now ts
-    in
-    let state = client (Handshaking (idx, ts)) in
-    Ok ({ t with state ; channel ; session }, [ out ], None)
+    state, Some action
   | Connecting (idx, _, retry), `Connection_failed ->
     next_or_fail idx retry >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
+    state, Some action
   | Connecting (idx, initial_ts, retry), `Tick ->
     (* We are trying to establish a connection and a clock tick happens.
        We need to determine if {!Config.Connect_timeout} seconds has passed
        since [initial_ts] (when we started connecting), and if so,
        try the next [Remote]. *)
-    let conn_timeout = Duration.of_sec Config.(get Connect_timeout t.config) in
+    let conn_timeout = Duration.of_sec Config.(get Connect_timeout config) in
     if Int64.sub ts initial_ts >= conn_timeout then begin
       Logs.err (fun m -> m "Connecting to remote #%d timed out" idx);
       next_or_fail idx retry >>| fun (state, action) ->
-      { t with state = client state }, [], Some action
+      state, Some action
     end else
-      Ok (t, [], None)
+      Ok (s, None)
   | _, `Connection_failed ->
     (* re-start from scratch *)
     next_or_fail (-1) 0 >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | s, `Tick ->
-    begin
-      match
-        match t.session.protocol, s with
-        | `Udp, Handshaking _ ->
-          Some (t.channel, fun channel -> { t with channel })
-        | `Udp, Rekeying ch ->
-          Some (ch, fun channel -> { t with state = client (Rekeying channel) })
-        | _ -> None
-      with
-      | None -> Ok (t, [], None)
-      | Some (ch, set_ch) ->
-        (* TODO exponential back-off mentioned in openvpn man page *)
-        let tls_timeout = Config.get Tls_timeout t.config in
-        match maybe_hand_timeout (Config.get Handshake_window t.config) ts ch.transport with
-        | Ok () ->
-          let transport, out = retransmit tls_timeout ts ch.transport in
-          let channel = { ch with transport } in
-          Ok (set_ch channel, out, None)
-        | Error `Hand_timeout ->
-          next_or_fail (-1) 0 >>| fun (state, action) ->
-          { t with state = client state }, [], Some action
-    end >>= begin function
-    | (t, out, Some action) -> Ok (t, out, Some action)
-    | (t, out, None) ->
-      match maybe_ping_timeout t with
-      | Some `Exit -> Ok (t, out, Some `Exit)
-      | Some `Restart ->
-        next_or_fail (-1) 0 >>| fun (state, action) ->
-        { t with state = client state }, out, Some action
-      | None ->
-        let t', outs = timer t in
-        Ok (t', out @ outs, None)
-    end
-  | _, `Data cs -> incoming t cs
-  | s, ev ->
-    Rresult.R.error_msgf "handle_client: unexpected event %a in state %a"
-      pp_event ev pp_client_state s
+    state, Some action
+  | _ -> Error (`Not_handled (remote, next_or_fail))
+
+let handle_client t s ev =
+  let now = t.now () and ts = t.ts () in
+  let client cs = Client cs in
+  match resolve_connect_client t.config ts s ev with
+  | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
+  | Error `Msg _ as e -> e
+  | Error `Not_handled (remote, next_or_fail) ->
+    match s, ev with
+    | Connecting (idx, _, _), `Connected ->
+      let my_session_id = Randomconv.int64 t.rng
+      and my_hmac = t.session.my_hmac
+      and their_hmac = t.session.their_hmac
+      in
+      let protocol = match remote idx with _, _, proto -> proto in
+      let session = init_session ~my_session_id ~protocol ~my_hmac ~their_hmac () in
+      let session, channel, out =
+        init_channel Packet.Hard_reset_client session 0 now ts
+      in
+      let state = client (Handshaking (idx, ts)) in
+      Ok ({ t with state ; channel ; session }, [ out ], None)
+    | s, `Tick ->
+      begin
+        match
+          match t.session.protocol, s with
+          | `Udp, Handshaking _ ->
+            Some (t.channel, fun channel -> { t with channel })
+          | `Udp, Rekeying ch ->
+            Some (ch, fun channel -> { t with state = client (Rekeying channel) })
+          | _ -> None
+        with
+        | None -> Ok (t, [], None)
+        | Some (ch, set_ch) ->
+          (* TODO exponential back-off mentioned in openvpn man page *)
+          let tls_timeout = Config.get Tls_timeout t.config in
+          match maybe_hand_timeout (Config.get Handshake_window t.config) ts ch.transport with
+          | Ok () ->
+            let transport, out = retransmit tls_timeout ts ch.transport in
+            let channel = { ch with transport } in
+            Ok (set_ch channel, out, None)
+          | Error `Hand_timeout ->
+            next_or_fail (-1) 0 >>| fun (state, action) ->
+            { t with state = client state }, [], Some action
+      end >>= begin function
+        | (t, out, Some action) -> Ok (t, out, Some action)
+        | (t, out, None) ->
+          match maybe_ping_timeout t with
+          | Some `Exit -> Ok (t, out, Some `Exit)
+          | Some `Restart ->
+            next_or_fail (-1) 0 >>| fun (state, action) ->
+            { t with state = client state }, out, Some action
+          | None ->
+            let t', outs = timer t in
+            Ok (t', out @ outs, None)
+      end
+    | _, `Data cs -> incoming t cs
+    | s, ev ->
+      Rresult.R.error_msgf "handle_client: unexpected event %a in state %a"
+        pp_event ev pp_client_state s
 
 (* timeouts from a server perspective:
 still TODO (similar to client, maybe in udp branch)
@@ -1030,7 +1124,66 @@ let handle_server ?is_not_taken t s ev =
     Rresult.R.error_msgf "handle_server: unexpected event %a in state %a"
       pp_event ev pp_server_state s
 
+let handle_static_client t s keys ev =
+  let ts = t.ts () in
+  let client cs = Client_static (keys, cs) in
+  match resolve_connect_client t.config ts s ev with
+  | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
+  | Error `Msg _ as e -> e
+  | Error `Not_handled (remote, next_or_fail) ->
+    match s, ev with
+    | Connecting (idx, _, _), `Connected ->
+      begin match Config.get Ifconfig t.config with
+        | V4 my_ip, V4 their_ip ->
+          let mtu = Config.get Tun_mtu t.config in
+          let prefix = Ipaddr.V4.Prefix.make 24 my_ip in
+          (* TODO -- completely unclear which netmask, it is a point-to-point interface *)
+          let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
+          let protocol = match remote idx with _, _, proto -> proto in
+          let session = { t.session with protocol } in
+          let keys, payload =
+            let add_timestamp = ptime_to_ts_exn (t.now ()) in
+            out ~add_timestamp keys t.session.compress t.rng ping
+          in
+          let state = Client_static (keys, Ready) in
+          Ok ({ t with state ; session ; last_sent = ts }, [ payload ], Some est)
+        | _ -> Error (`Msg "expected IPv4 addresses")
+      end
+    | _, `Tick ->
+      begin
+        match maybe_ping_timeout t with
+        | Some `Exit -> Ok (t, [], Some `Exit)
+        | Some `Restart ->
+          next_or_fail (-1) 0 >>| fun (state, action) ->
+          { t with state = client state }, [], Some action
+        | None ->
+          let t', outs = timer t in
+          Ok (t', outs, None)
+      end
+    | _, `Data cs ->
+      begin
+        let t = { t with last_received = ts } in
+        let add_timestamp = true
+        and compress = t.session.compress
+        in
+        let rec process_one acc linger =
+          if Cstruct.len linger = 0 then
+            Ok ({ t with linger = Cstruct.empty }, [], acc)
+          else match Packet.decode_protocol t.session.protocol linger with
+            | Error `Partial -> Ok ({ t with linger }, [], acc)
+            | Ok (cs, linger) ->
+              let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
+              incoming_data ~add_timestamp bad_mac keys compress cs >>= fun d ->
+              process_one (merge_payload acc d) linger
+        in
+        process_one None (Cstruct.append t.linger cs)
+      end
+    | s, ev ->
+      Rresult.R.error_msgf "handle_static_client: unexpected event %a in state %a"
+        pp_event ev pp_client_state s
+
 let handle t ?is_not_taken ev =
   match t.state with
   | Client c -> handle_client t c ev
+  | Client_static (k, c) -> handle_static_client t c k ev
   | Server s -> handle_server ?is_not_taken t s ev

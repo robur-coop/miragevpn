@@ -188,10 +188,10 @@ type session = {
   protocol : [ `Tcp | `Udp ] ;
 }
 
-let init_session ~my_session_id ?(their_session_id = 0L) ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
+let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false) ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
   { my_session_id ; my_packet_id = 1l ; my_hmac ;
     their_session_id ; their_packet_id = 1l ; their_hmac ;
-    compress = false ; protocol }
+    compress ; protocol }
 
 let pp_session ppf t =
   Fmt.pf ppf "compression %B protocol %a my session %Lu packet %lu@.their session %Lu packet %lu"
@@ -225,10 +225,12 @@ let pp_server_state ppf = function
 
 type state =
   | Client of client_state
+  | Client_static of keys * client_state
   | Server of server_state
 
 let pp_state ppf = function
   | Client c -> pp_client_state ppf c
+  | Client_static (_, c) -> Fmt.pf ppf "client static %a" pp_client_state c
   | Server s -> pp_server_state ppf s
 
 type t = {
@@ -264,24 +266,26 @@ let mtu config compress =
     | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
     | Some x -> x
   in
-  let bs = match Config.find Cipher config with
-    | Some "AES-256-CBC" -> 16
-    | _ -> assert false
-  in
-  (* padding, done on packet_id + compress + data *)
+  (* padding, done on packet_id + [timestamp] + compress + data *)
+  let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
-    4 (* packet id *) + if compress then 1 else 0
+    4 + (* packet id *)
+    (if static_key_mode then 4 else 0) + (* time stamp in static key mode *)
+    if compress then 1 else 0
   in
   let hdrs =
-    3 (* hdr: 2 byte length, 1 byte op + key *) + bs (* IV *) + Packet.hmac_len
+    2 + (* hdr: 2 byte length *)
+    (if static_key_mode then 0 else 1) + (* 1 byte op + key *)
+    Packet.cipher_block_size + (* IV *)
+    Packet.hmac_len
   in
   (* now we know: tun_mtu - hdrs is space we have for data *)
   let data = tun_mtu - hdrs in
   (* data is pad ( not_yet_padded_payload + x ) - i.e. we're looking for the
      closest bs-1 number, and subtract not_yet_padded_payload *)
-  let left = data mod bs in
+  let left = data mod Packet.cipher_block_size in
   let r =
-    if left = pred bs then
+    if left = pred Packet.cipher_block_size then
       data - not_yet_padded_payload
     else
       data - succ left - not_yet_padded_payload
