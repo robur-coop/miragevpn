@@ -526,8 +526,8 @@ let a_proto =
     string "tcp6" *> return (Some `Ipv6, `Tcp None);
     string "tcp4-client" *> return (Some `Ipv4, `Tcp (Some `Client));
     string "tcp4-server" *> return (Some `Ipv4, `Tcp (Some `Server));
-    string "tcp-client" *> return (Some `Ipv4, `Tcp (Some `Client));
-    string "tcp-server" *> return (Some `Ipv4, `Tcp (Some `Server));
+    string "tcp-client" *> return (None, `Tcp (Some `Client));
+    string "tcp-server" *> return (None, `Tcp (Some `Server));
     string "tcp4" *> return (Some `Ipv4, `Tcp None);
     string "tcp" *> return (None, `Tcp None);
     string "udp6" *> return (Some `Ipv6, `Udp);
