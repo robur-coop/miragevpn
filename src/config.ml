@@ -1,4 +1,3 @@
-
 module Logs = (val Logs.(src_log @@ Src.create
                            ~doc:"Openvpn library's configuration module"
                            "ovpn.config") : Logs.LOG)
@@ -136,6 +135,20 @@ module Conf_map = struct
   end
 
   include Gmap.Make(K)
+
+  let is_valid_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
+    let open Rresult in
+    R.reword_error (fun err -> `Msg ("not a valid config: " ^  err))
+      ( ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
+        >>= fun () ->
+        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
+           Error "currently only supported Cipher is 'AES-256-CBC'"
+         else Ok ()) 
+      )
+
+
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
@@ -155,12 +168,7 @@ module Conf_map = struct
           | None, Some _ ->
             Error "no tls key"
           (* ^-- TODO or has -pkcs12 *)
-        end >>= fun () ->
-        ensure_mem Cipher "server must specify 'cipher AES-256-CBC'"
-        >>= fun () ->
-        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
-           Error "currently only supported Cipher is 'AES-256-CBC'"
-         else Ok ()) 
+        end  
       )
 
 
@@ -182,12 +190,7 @@ module Conf_map = struct
           | None, None, None ->
             Error "config has neither user/password, nor TLS client certificate"
           (* ^-- TODO or has -pkcs12 *)
-        end >>= fun () ->
-        ensure_mem Cipher "client must specify 'cipher AES-256-CBC'"
-        >>= fun () ->
-        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
-           Error "currently only supported Cipher is 'AES-256-CBC'"
-         else Ok ()) >>=fun()->
+        end >>=fun()->
         (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
            Error "remote-cert-tls is not SERVER?!" else Ok ())
       )
@@ -400,12 +403,10 @@ module Defaults = struct
   let server_config =
     let open Conf_map in
     empty
-    |> add Dev (`Tun ,(Some "tun0"))
     |> add Ping_interval `Not_configured
-    |> add Cipher "AES-256-CBC"
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
-    |> add Bind (Some (Some 1195, None))
+    |> add Bind (Some (Some 1194, None))
     |> add Handshake_window 60
     |> add Transition_window 3600
     |> add Tls_timeout 2
@@ -413,9 +414,8 @@ module Defaults = struct
     |> add Auth_retry `None
     |> add Connect_timeout 120
     |> add Connect_retry_max `Unlimited
-    |> add Proto (Some `Ipv4, `Tcp (Some `Server))
+    |> add Proto (None, `Udp)
     |> add Tls_mode `Server
-    |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
 end
 
 open Conf_map

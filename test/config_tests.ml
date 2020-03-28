@@ -74,6 +74,33 @@ let minimal_server_config =
         Rresult.R.get_ok b |> function B (k,v) -> add k v t
     in
   empty
+  |> add Dev (`Tun ,(Some "minserver"))
+  |> add Ping_interval `Not_configured
+  |> add Cipher "AES-256-CBC"
+  |> add Ping_timeout (`Restart 120)
+  |> add Renegotiate_seconds 3600
+  |> add Bind (Some (Some 1195, None))
+  |> add Handshake_window 60
+  |> add Transition_window 3600
+  |> add Tls_timeout 2
+  |> add Resolv_retry `Infinite
+  |> add Auth_retry `None
+  |> add Connect_timeout 120
+  |> add Connect_retry_max `Unlimited
+  |> add Proto (Some `Ipv4, `Tcp (Some `Server))
+  |> add Tls_mode `Server
+  |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
+  |> add_ok_b (a_cert_payload (string_of_file "server.public.certificate" ))
+  |> add_ok_b (a_key_payload (string_of_file "server.secret.key" ))
+  (*    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k *)
+  (*  |> add Tls_version_min ( [`V1_2]* true) *)
+
+let tcp_server_config =
+  let open Openvpn.Config in
+    let add_ok_b (b:(b,'a) result) t =
+        Rresult.R.get_ok b |> function B (k,v) -> add k v t
+    in
+  empty
   |> add Dev (`Tun ,(Some "tun0"))
   |> add Ping_interval `Not_configured
   |> add Cipher "AES-256-CBC"
