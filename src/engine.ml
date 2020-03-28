@@ -285,7 +285,8 @@ let incoming_control_client config rng session channel now op data =
       let certificates =
         match Config.find Tls_cert config, Config.find Tls_key config with
         | Some cert, Some (`RSA key) -> `Single ([cert], key)
-        | _ -> `None in
+        | _ -> `None
+      in
       Tls.(Engine.client (Config.client ~certificates ~authenticator ()))
     in
     Ok (None, config, { channel with channel_st = TLS_handshake tls }, [ `Control, ch ])
