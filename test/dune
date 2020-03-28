@@ -6,6 +6,8 @@
     sample-configuration-files/ca.public.certificate
     sample-configuration-files/server.secret.key
     sample-configuration-files/server.public.certificate
+    sample-configuration-files/client-tcp-certauth-passauth.cfg
+    sample-configuration-files/server-tcp-certauth-passauth.cfg
  )
   (libraries alcotest crowbar fmt logs.fmt rresult openvpn)
   (deps (source_tree sample-configuration-files))

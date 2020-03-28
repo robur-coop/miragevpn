@@ -1,6 +1,8 @@
 open Rresult
 open Openvpn.Config
 
+
+
 let read_config_file fn =
   let str fn =
     Logs.info (fun m -> m "Reading file %S" fn) ;
@@ -33,6 +35,7 @@ let () =
       Fmt.pr "@[<v>%a@]\n" pp rules ;
       Logs.info (fun m -> m "Read %d entries!"
                     (cardinal rules)) ;
+
       begin match
           parse_client ~string_of_file:(fun _fn -> assert false)
             (Fmt.strf "%a" pp rules) with

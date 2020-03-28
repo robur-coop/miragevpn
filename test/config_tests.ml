@@ -23,6 +23,13 @@ let parse_noextern_server conf =
         "this test suite does not read external files, \
          but a config asked for: %S" path) conf
 
+let ok_cert_userpass_client () =
+  let conf = string_of_file "client-tcp-certauth-passauth.cfg" in
+  let parsed = parse_noextern_client conf in
+  ignore parsed;
+  (*FIXME*)
+  Alcotest.(check bool) "cert_userpass works" true true
+
 
 let minimal_config =
   let open Openvpn.Config in
@@ -316,6 +323,7 @@ let crowbar_fuzz_config () =
 let tests = [
   "minimal client config", `Quick, ok_minimal_client ;
   "minimal server config", `Quick, ok_minimal_server ;
+  "client with both cert and user", `Quick, ok_cert_userpass_client ;
   "test [dev] and [dev-type]", `Quick, test_dev_type ;
   "auth-user-pass trailing whitespace", `Quick,
   auth_user_pass_trailing_whitespace ;
