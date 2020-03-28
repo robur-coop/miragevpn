@@ -414,7 +414,7 @@ module Defaults = struct
     |> add Ping_interval `Not_configured
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
-    |> add Bind (Some (Some 1194, None))
+    |> add Bind (Some (None, None))
     |> add Handshake_window 60
     |> add Transition_window 3600
     |> add Tls_timeout 2
