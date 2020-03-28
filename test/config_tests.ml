@@ -74,7 +74,7 @@ let minimal_server_config =
         Rresult.R.get_ok b |> function B (k,v) -> add k v t
     in
   empty
-  |> add Dev (`Tun ,(Some "minserver"))
+  |> add Dev (`Tun ,(Some "tunnel"))
   |> add Ping_interval `Not_configured
   |> add Cipher "AES-256-CBC"
   |> add Ping_timeout (`Restart 120)
