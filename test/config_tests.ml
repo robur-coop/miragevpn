@@ -193,6 +193,43 @@ testpass
   let _ip3 = Ipaddr.of_string_exn "10.0.42.5" in
   () (* TODO check that the ports and remotes also match the written *)
 
+let whitespace_after_tls_auth () =
+  let expected = Openvpn.Config.add Tls_auth
+      (None,
+       Cstruct.create 64, Cstruct.create 64,
+       Cstruct.create 64, Cstruct.create 64) minimal_config in
+  let with_newlines =
+    Fmt.strf {|%a
+tls-auth [inline]
+<tls-auth>
+-----BEGIN OpenVPN Static key V1-----
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+-----END OpenVPN Static key V1-----
+
+
+</tls-auth>
+|} Openvpn.Config.pp minimal_config
+  in
+  Alcotest.(check (result conf_map pmsg))
+    "Allow whitespace after ----END of tls-auth"
+    (Ok expected)
+    (parse_noextern with_newlines)
+
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
     [Crowbar.bytes] (fun s ->
@@ -206,5 +243,7 @@ let tests = [
   "auth-user-pass trailing whitespace", `Quick,
   auth_user_pass_trailing_whitespace ;
   "rport precedence", `Quick, rport_precedence ;
+  "trailing whitespace after <tls-auth>", `Quick,
+  whitespace_after_tls_auth;
   "crowbar fuzzing", `Slow, crowbar_fuzz_config ;
 ]

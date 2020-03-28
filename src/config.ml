@@ -594,7 +594,10 @@ let inline_payload element =
       | Invalid_argument msg -> abort msg)
     (string "-----END OpenVPN Static key V1-----" *> a_newline
      <|>abort "Missing END mark")
-  <* (end_of_input <|> abort "Data after -----END mark")
+  <* commit <* (
+    (skip_many (a_newline <|> a_whitespace) *> end_of_input)
+    <|> (pos >>= fun i ->
+         abort (Fmt.strf "Data after -----END mark at byte offset %d" i)))
   >>= (fun lst ->
       let sz = Cstruct.lenv lst in
       if 256 = sz then return lst else
@@ -1152,13 +1155,21 @@ let parse_inline str = let open Rresult in
                    (string_of_inlineable kind))
 
 let eq : eq = { f = fun (type x) (k: x k) (v:x) (v2:x) ->
-    let eq = v = v2 in
-    (*TODO non-polymorphic comparison*)
-    begin if not eq then Logs.debug
+    begin match k, v, v2 with
+      | Secret, (a,b,c,d), (a',b',c',d') ->
+        Cstruct.equal a a' && Cstruct.equal b b'
+        && Cstruct.equal c c' && Cstruct.equal d d'
+      | Tls_auth, (dir, a,b,c,d), (dir', a',b',c',d') ->
+        dir = dir' && Cstruct.equal a a' && Cstruct.equal b b'
+        && Cstruct.equal c c' && Cstruct.equal d d'
+      | _ ->     (*TODO non-polymorphic comparison*)
+        let eq = (v = v2) in
+        Logs.debug
           (fun m -> m "eq self-test: @[<v>%a@,<>@,%a@]"
               pp (singleton k v)
-              pp (singleton k v2))
-        ; eq end }
+              pp (singleton k v2)) ;
+        eq
+    end }
 
 
 let resolve_conflict (type a) t (k:a key) (v:a)
