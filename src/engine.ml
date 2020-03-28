@@ -54,25 +54,26 @@ let hmacs config =
     let s cs = Cstruct.sub cs 0 Packet.hmac_len in
     Ok (s a, s b)
 
-let client config ts rng =
+let client config ts now rng =
   hmacs config >>= fun (my_hmac, their_hmac) ->
   let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
-  let channel = new_channel 0 ts in
+  let current_ts = ts () in
+  let channel = new_channel 0 current_ts in
     (match Config.get Remote config with
      | (`Domain (name, ip_version), _port, _proto) :: _ ->
-       Ok (`Resolve (name, ip_version), Resolving (0, ts, 0))
+       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
      | (`Ip ip, port, dp) :: _ ->
-       Ok (`Connect (ip, port, dp), Connecting (0, ts, 0))
+       Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
      | [] ->
        Error (`Msg "couldn't find remote in configuration")) >>| fun (action, state) ->
   let state = {
-    config ; state = Client state ; linger = Cstruct.empty ; rng ;
+    config ; state = Client state ; linger = Cstruct.empty ; rng ; ts ; now ;
     session ; channel ; lame_duck = None ;
-    last_received = ts ; last_sent = ts ;
+    last_received = current_ts ; last_sent = current_ts ;
   } in
   state, action
 
-let server server_config server_rng =
+let server server_config server_ts server_now server_rng =
   let port = match Config.find Port server_config with
     | None -> 1194
     | Some p -> p
@@ -81,21 +82,22 @@ let server server_config server_rng =
   (* TODO validate server configuration to contain stuff we need later *)
   (* what must be present: server, topology subnet, ping_interval, ping_timeout,
       ca, tls_cert, tls_key, _no_ comp_lzo *)
-  { server_config ; server_rng ; server_hmac ; client_hmac },
+  { server_config ; server_rng ; server_ts ; server_now ; server_hmac ; client_hmac },
   server_ip server_config,
   port
 
-let new_connection server ts =
+let new_connection server =
   let session = init_session ~my_session_id:(Randomconv.int64 server.server_rng)
       ~my_hmac:server.server_hmac ~their_hmac:server.client_hmac ()
   in
-  let channel = new_channel 0 ts in
+  let current_ts = server.server_ts () in
+  let channel = new_channel 0 current_ts in
   {
     config = server.server_config ;
     state = Server Server_handshaking ; linger = Cstruct.empty ;
-    rng = server.server_rng ;
+    rng = server.server_rng ; ts = server.server_ts ; now = server.server_now ;
     session ; channel ; lame_duck = None ;
-    last_received = ts ; last_sent = ts ;
+    last_received = current_ts ; last_sent = current_ts ;
   }
 
 let pp_tls_error ppf = function
@@ -554,22 +556,23 @@ let data_out (ctx : keys) compress protocol rng key data =
                  (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
   (ctx', out)
 
-let outgoing s ts data =
+let outgoing s data =
   match keys_opt s.channel with
   | None -> Error `Not_ready
   | Some ctx ->
     let ctx, data = data_out ctx s.session.compress s.session.protocol s.rng s.channel.keyid data in
     let ch = set_keys s.channel ctx in
     let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
-    Ok ({ s with channel ; last_sent = ts }, data)
+    Ok ({ s with channel ; last_sent = s.ts () }, data)
 
 let ping =
   (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
   Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
-let maybe_ping state ts =
+let maybe_ping state =
   (* ping if we haven't send anything for the configured interval *)
-  let s_since_sent = Duration.to_sec (Int64.sub ts state.last_sent) in
+  let current_ts = state.ts () in
+  let s_since_sent = Duration.to_sec (Int64.sub current_ts state.last_sent) in
   let interval = Config.(get Ping_interval state.config) in
   match interval with
   | `Not_configured -> state, []
@@ -577,18 +580,18 @@ let maybe_ping state ts =
   | `Seconds _ ->
     Logs.debug (fun m -> m "sending a ping after %d seconds of inactivity"
                    s_since_sent);
-    match outgoing state ts ping with
+    match outgoing state ping with
     | Error _ -> state, []
     | Ok (s', d) -> s', [ d ]
 
-let maybe_init_rekey s now ts =
+let maybe_init_rekey s =
   (* if there's a rekey in process we don't do anything *)
   let keyid =
     let n = succ s.channel.keyid mod 8 in
     if n = 0 then 1 else n (* i have no clue why 0 is special... *)
   in
   let session, channel, out =
-    init_channel Packet.Soft_reset s.session keyid now ts
+    init_channel Packet.Soft_reset s.session keyid (s.now ()) (s.ts ())
   in
   match s.state with
   | Client Ready ->
@@ -603,7 +606,7 @@ let maybe_init_rekey s now ts =
                   pp_state s.state);
     s, []
 
-let maybe_rekey state now ts =
+let maybe_rekey state =
   (* rekeying may happen iff:
      - channel has been up for <reneg_seconds>
      - channel has transferred bytes >= reneg_bytes
@@ -617,27 +620,27 @@ let maybe_rekey state now ts =
               find Renegotiate_bytes state.config,
               find Renegotiate_packets state.config)
     with
-    | Some y, _, _ when y <= Duration.to_sec (Int64.sub ts state.channel.started) -> true
+    | Some y, _, _ when y <= Duration.to_sec (Int64.sub (state.ts ()) state.channel.started) -> true
     | _, Some b, _ when b <= state.channel.bytes -> true
     | _, _, Some p when p <= state.channel.packets -> true
     | _ -> false
   in
-  if should_rekey then maybe_init_rekey state now ts else state, []
+  if should_rekey then maybe_init_rekey state else state, []
 
-let maybe_drop_lame_duck state ts =
+let maybe_drop_lame_duck state =
   match state.lame_duck, Config.find Transition_window state.config with
   | None, _ -> state
   | _, None -> state (* TODO: warn? *)
   | Some (_, ts'), Some s -> (* TODO: log when dropped *)
-    if Duration.to_sec (Int64.sub ts ts') >= s then
+    if Duration.to_sec (Int64.sub (state.ts ()) ts') >= s then
       { state with lame_duck = None }
     else
       state
 
-let timer state now ts =
-  let s', out = maybe_ping state ts in
-  let s'', out' = maybe_rekey s' now ts in
-  let s''' = maybe_drop_lame_duck s'' ts in
+let timer state =
+  let s', out = maybe_ping state in
+  let s'', out' = maybe_rekey s' in
+  let s''' = maybe_drop_lame_duck s'' in
   s''', out @ out'
 
 let incoming_data err (ctx : keys) compress data =
@@ -735,32 +738,32 @@ let merge_payload a b = match a, b with
   | Some `Payload a, Some b -> Some (`Payload (b :: a))
   | _ -> assert false
 
-let find_channel state ts key p =
+let find_channel state key p =
   match channel_of_keyid key state with
   | Some (ch, set_ch) -> Some (ch, set_ch)
   | None ->
     Logs.warn (fun m -> m "no channel found! %d" key);
     match state.state, p with
     | Client Ready, `Control (Packet.Soft_reset, _)  ->
-      let channel = new_channel key ts in
+      let channel = new_channel key (state.ts ()) in
       Some (channel, fun s ch -> { s with state = Client (Rekeying ch) })
     | Server Server_ready, `Control (Packet.Soft_reset, _) ->
-      let channel = new_channel key ts in
+      let channel = new_channel key (state.ts ()) in
       Some (channel, fun s ch -> { s with state = Server (Server_rekeying ch) })
     | _ ->
       Logs.warn (fun m -> m "ignoring unexpected packet %a in %a"
                     Packet.pp (key, p) pp state);
       None
 
-let incoming ?(is_not_taken = fun _ip -> false) state now ts buf =
-  let state = { state with last_received = ts } in
+let incoming ?(is_not_taken = fun _ip -> false) state buf =
+  let state = { state with last_received = state.ts () } in
   let rec multi buf (state, out, act) =
     match Packet.decode state.session.protocol buf with
     | Error `Unknown_operation x -> Error (`Unknown_operation x)
     | Error `Partial -> Ok ({ state with linger = buf }, out, act)
     | Ok (key, p, linger) ->
       (* ok, at first find proper channel for key (or create a fresh channel) *)
-      match find_channel state ts key p with
+      match find_channel state key p with
       | None -> Ok (state, out, act)
       | Some (ch, set_ch) ->
         Logs.debug (fun m -> m "channel %a - received %a"
@@ -798,7 +801,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state now ts buf =
                Logs.debug (fun m -> m "ignoring acknowledgement");
                Ok (set_ch state ch, out, act)
              | `Control (typ, (_, _, data)) ->
-               incoming_control is_not_taken state.config state.rng state.state state.session ch now ts key typ data
+               incoming_control is_not_taken state.config state.rng state.state state.session ch (state.now ()) (state.ts ()) key typ data
                >>| fun (est, config, session, ch, outs) ->
                Logs.debug (fun m -> m "out channel %a, pkts %d"
                               pp_channel ch (List.length outs));
@@ -813,7 +816,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state now ts buf =
                  mtu config compress
                in
                let session, transport, encs =
-                 wrap_hmac_control now ts my_mtu state.session key ch.transport outs
+                 wrap_hmac_control (state.now ()) (state.ts ()) my_mtu state.session key ch.transport outs
                in
                let out = out @ encs
                and ch = { ch with transport }
@@ -834,7 +837,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state now ts buf =
                    { state with state = Client Ready ; session ; channel = ch }, out, act
                  | Client Rekeying _ ->
                    (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-                   let lame_duck = Some (state.channel, ts) in
+                   let lame_duck = Some (state.channel, state.ts ()) in
                    { state with state = Client Ready ; channel = ch ; lame_duck }, out, act
                  | Server Server_handshaking ->
                    let compress = false in (* TODO? *)
@@ -845,7 +848,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state now ts buf =
                    { state with state = Server Server_ready ; channel = ch }, out, Some act
                  | Server Server_rekeying _ ->
                    (* TODO: may cipher (i.e. mtu) or compress (or IP?) change between rekeys? *)
-                   let lame_duck = Some (state.channel, ts) in
+                   let lame_duck = Some (state.channel, state.ts ()) in
                    { state with state = Server Server_ready ; channel = ch ; lame_duck }, out, act
                  | _ -> assert false) >>= multi linger
   in
@@ -858,9 +861,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state now ts buf =
   Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(unit "no") pp_action) act);
   s', out, act'
 
-let maybe_ping_timeout state ts =
+let maybe_ping_timeout state =
   (* timeout fires if no data was received within the configured interval *)
-  let s_since_rcvd = Duration.to_sec (Int64.sub ts state.last_received) in
+  let s_since_rcvd = Duration.to_sec (Int64.sub (state.ts ()) state.last_received) in
   let timeout, action =
     match Config.(get Ping_timeout state.config) with
     | `Restart x -> x, `Restart
@@ -893,7 +896,8 @@ let retransmit timeout ts transport =
   in
   { transport with out_packets }, out
 
-let handle_client t s now ts ev =
+let handle_client t s ev =
+  let now = t.now () and ts = t.ts () in
   let remote, next_remote =
     let remotes = Config.get Remote t.config in
     let r idx = List.nth remotes idx in
@@ -985,16 +989,16 @@ let handle_client t s now ts ev =
     end >>= begin function
     | (t, out, Some action) -> Ok (t, out, Some action)
     | (t, out, None) ->
-      match maybe_ping_timeout t ts with
+      match maybe_ping_timeout t with
       | Some `Exit -> Ok (t, out, Some `Exit)
       | Some `Restart ->
         next_or_fail (-1) 0 >>| fun (state, action) ->
         { t with state = client state }, out, Some action
       | None ->
-        let t', outs = timer t now ts in
+        let t', outs = timer t in
         Ok (t', out @ outs, None)
     end
-  | _, `Data cs -> incoming t now ts cs
+  | _, `Data cs -> incoming t cs
   | s, ev ->
     Rresult.R.error_msgf "handle_client: unexpected event %a in state %a"
       pp_event ev pp_client_state s
@@ -1004,14 +1008,14 @@ still TODO (similar to client, maybe in udp branch)
 hs; - handshake-window -- until handshaking -> ready (discard connection attempt)
 hs; - tls-timeout -- same, discard connection attempt [in tcp not yet relevant]
  *)
-let handle_server ?is_not_taken t s now ts ev =
+let handle_server ?is_not_taken t s ev =
   match s, ev with
-  | _, `Data cs -> incoming ?is_not_taken t now ts cs
+  | _, `Data cs -> incoming ?is_not_taken t cs
   | (Server_ready | Server_rekeying _), `Tick ->
-    begin match maybe_ping_timeout t ts with
+    begin match maybe_ping_timeout t with
       | Some _ -> Ok (t, [], Some `Exit)
       | None ->
-        let t', outs = timer t now ts in
+        let t', outs = timer t in
         Ok (t', outs, None)
     end
   | Server_handshaking, `Tick ->
@@ -1021,7 +1025,7 @@ let handle_server ?is_not_taken t s now ts ev =
     Rresult.R.error_msgf "handle_server: unexpected event %a in state %a"
       pp_event ev pp_server_state s
 
-let handle t now ts ?is_not_taken ev =
+let handle t ?is_not_taken ev =
   match t.state with
-  | Client c -> handle_client t c now ts ev
-  | Server s -> handle_server ?is_not_taken t s now ts ev
+  | Client c -> handle_client t c ev
+  | Server s -> handle_server ?is_not_taken t s ev
