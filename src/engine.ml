@@ -282,7 +282,11 @@ let incoming_control_client config rng session channel now op data =
                         X509.Certificate.pp ca);
           X509.Authenticator.chain_of_trust ~time:(fun () -> Some now) [ ca ]
       in
-      Tls.(Engine.client (Config.client ~authenticator ()))
+      let certificates =
+        match Config.find Tls_cert config, Config.find Tls_key config with
+        | Some cert, Some (`RSA key) -> `Single ([cert], key)
+        | _ -> `None in
+      Tls.(Engine.client (Config.client ~certificates ~authenticator ()))
     in
     Ok (None, config, { channel with channel_st = TLS_handshake tls }, [ `Control, ch ])
   | TLS_handshake tls, Packet.Control ->
