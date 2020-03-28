@@ -28,6 +28,7 @@ let minimal_config =
   |> add Connect_retry_max `Unlimited
   |> add Proto (None, `Udp)
   (* Minimal contents of actual config file: *)
+  |> add Cipher "AES-256-CBC"
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser","testpass")
   |> add Remote ([`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp])
@@ -37,6 +38,7 @@ let ok_minimal_client () =
   (* verify that we can parse a minimal good config. *)
   let basic =
     {|tls-client
+    cipher AES-256-CBC
     auth-user-pass [inline]
     <auth-user-pass>
 testuser
@@ -149,6 +151,7 @@ let rport_precedence () =
   let sample =
     {|
     tls-client
+    cipher AES-256-CBC
     auth-user-pass [inline]
     <auth-user-pass>
 testuser
@@ -168,6 +171,7 @@ testpass
   let expected =
     {|
     tls-client
+    cipher AES-256-CBC
     auth-user-pass [inline]
     <auth-user-pass>
 testuser

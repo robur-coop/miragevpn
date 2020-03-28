@@ -146,8 +146,17 @@ module Conf_map = struct
          | None | Some `Server -> Error "is not a TLS client"
          | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
-        ensure_mem Auth_user_pass "does not have user/password"
-        (* ^-- TODO or has client certificate ? see options.c:--cert/--key,--pkcs12,or--auth-user-pass *)
+        begin match find Auth_user_pass t, find Tls_cert t, find Tls_key t with
+          | Some _, None, None | None, Some _, Some _ -> Ok ()
+          | None, None, None ->
+            Error "does not have user/password, neither TLS certificate"
+          | Some _, Some _, Some _  ->
+            Error "both user/pass and TLS certificate provided"
+          | _ ->
+            Error "invalid combination of user/password and TLS key and certificate"
+          (* ^-- TODO or has -pkcs12 *)
+        end >>= fun () ->
+        ensure_mem Cipher "client must specify 'cipher AES-256-CBC'"
         >>= fun () ->
         (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
            Error "currently only supported Cipher is 'AES-256-CBC'"
