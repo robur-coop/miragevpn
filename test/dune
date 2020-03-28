@@ -1,6 +1,7 @@
 (test
   (name test_engine)
   (modules test_engine config_tests)
+  (deps sample-configuration-files/minimal-server.cfg)
   (libraries alcotest crowbar fmt logs.fmt rresult openvpn)
   (deps (source_tree sample-configuration-files))
 )

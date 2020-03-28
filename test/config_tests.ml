@@ -1,3 +1,9 @@
+let read_file filename =
+    let ch = open_in ( ("sample-configuration-files/" ^ filename) ) in
+    let s = really_input_string ch (in_channel_length ch) in
+    close_in ch;
+    s
+
 let pmsg =
   Alcotest.testable (fun ppf (`Msg s) -> Fmt.pf ppf "Error @[<v>(%s)@]" s)
     (fun (`Msg a) (`Msg b) -> String.equal a b)
@@ -48,6 +54,35 @@ remote 10.0.0.1|} in
   Alcotest.(check (result conf_map pmsg)) "basic conf works"
     (Ok minimal_config)
     (parse_noextern basic)
+
+let minimal_server_config =
+  let open Openvpn.Config in
+  empty
+  (* from {!Openvpn.Config.Defaults.client_config} *)
+  |> add Dev (`Tun ,(Some "tun0"))
+  |> add Port 1195
+  |> add Ping_interval `Not_configured
+  |> add Ping_timeout (`Restart 120)
+  |> add Renegotiate_seconds 3600
+  |> add Bind (Some (Some 1194, None)) (* TODO default to 1194 for servers? *)
+  |> add Handshake_window 60
+  |> add Transition_window 3600
+  |> add Tls_timeout 2
+  |> add Resolv_retry `Infinite
+  |> add Auth_retry `None
+  |> add Connect_timeout 120
+  |> add Connect_retry_max `Unlimited
+  |> add Proto (Some `Ipv4, `Tcp (Some `Server))
+  (* Minimal contents of actual config file: *)
+  |> add Tls_mode `Server
+
+let ok_minimal_server () =
+  (* verify that we can parse a minimal good server config. *)
+  let basic = read_file "minimal-server.cfg" in
+  Alcotest.(check (result conf_map pmsg)) "basic server conf works"
+    (Ok minimal_server_config)
+    (parse_noextern basic)
+
 
 let test_dev_type () =
   let tun0 =
@@ -266,6 +301,7 @@ let crowbar_fuzz_config () =
 
 let tests = [
   "minimal client config", `Quick, ok_minimal_client ;
+  "minimal server config", `Quick, ok_minimal_server ;
   "test [dev] and [dev-type]", `Quick, test_dev_type ;
   "auth-user-pass trailing whitespace", `Quick,
   auth_user_pass_trailing_whitespace ;
