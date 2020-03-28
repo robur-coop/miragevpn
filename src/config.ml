@@ -147,13 +147,12 @@ module Conf_map = struct
          | Some `Client -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
         begin match find Auth_user_pass t, find Tls_cert t, find Tls_key t with
-          | Some _, None, None | None, Some _, Some _ -> Ok ()
+          | _, Some _, None -> Error "tls-cert provided, but no tls-key"
+          | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
+          | Some _, None, None -> Ok ()
+          | _, Some _, Some _ -> Ok ()
           | None, None, None ->
-            Error "does not have user/password, neither TLS certificate"
-          | Some _, Some _, Some _  ->
-            Error "both user/pass and TLS certificate provided"
-          | _ ->
-            Error "invalid combination of user/password and TLS key and certificate"
+            Error "config has neither user/password, nor TLS client certificate"
           (* ^-- TODO or has -pkcs12 *)
         end >>= fun () ->
         ensure_mem Cipher "client must specify 'cipher AES-256-CBC'"
