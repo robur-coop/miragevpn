@@ -246,6 +246,22 @@ module Config : sig
   (** Parses a configuration string, looking up references to external files
       as needed. Validates the client configuration. Default client options are
       applied. *)
+
+  val parse_server : string_of_file:(string -> (string, R.msg) result) ->
+    string -> (t, [> R.msg]) result
+  (** Parses a configuration string, looking up references to external files
+      as needed. Validates the client configuration. Default client options are
+      applied. *)
+
+  val a_ca_payload : string -> (b, string) result
+  (**  for test *)
+  
+  val a_cert_payload : string -> (b, string) result
+  (**  for test *)
+
+  val a_key_payload : string -> (b, string) result
+  (**  for test *)
+  
 end
 
 type t
@@ -316,3 +332,4 @@ val new_connection : server -> t
 (** [new_connection server] is to be called when the server accepted a new
     TCP connection, a state [t] is constructed - which can be used with
     {!handle}. *)
+

@@ -1,7 +1,12 @@
 (test
   (name test_engine)
   (modules test_engine config_tests)
-  (deps sample-configuration-files/minimal-server.cfg)
+  (deps 
+    sample-configuration-files/minimal-server.cfg 
+    sample-configuration-files/ca.public.certificate
+    sample-configuration-files/server.secret.key
+    sample-configuration-files/server.public.certificate
+ )
   (libraries alcotest crowbar fmt logs.fmt rresult openvpn)
   (deps (source_tree sample-configuration-files))
 )

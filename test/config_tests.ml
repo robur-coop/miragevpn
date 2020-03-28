@@ -1,4 +1,4 @@
-let read_file filename =
+let string_of_file filename =
     let ch = open_in ( ("sample-configuration-files/" ^ filename) ) in
     let s = really_input_string ch (in_channel_length ch) in
     close_in ch;
@@ -11,11 +11,18 @@ let pmsg =
 let conf_map = Alcotest.testable
     Openvpn.Config.pp Openvpn.Config.(equal eq)
 
-let parse_noextern conf =
+let parse_noextern_client conf =
   Openvpn.Config.parse_client ~string_of_file:(fun path ->
       Rresult.R.error_msgf
         "this test suite does not read external files, \
          but a config asked for: %S" path) conf
+
+let parse_noextern_server conf =
+  Openvpn.Config.parse_server ~string_of_file:(fun path ->
+      Rresult.R.error_msgf
+        "this test suite does not read external files, \
+         but a config asked for: %S" path) conf
+
 
 let minimal_config =
   let open Openvpn.Config in
@@ -39,7 +46,6 @@ let minimal_config =
   |> add Auth_user_pass ("testuser","testpass")
   |> add Remote ([`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp])
 
-
 let ok_minimal_client () =
   (* verify that we can parse a minimal good config. *)
   let basic =
@@ -53,18 +59,20 @@ testpass
 remote 10.0.0.1|} in
   Alcotest.(check (result conf_map pmsg)) "basic conf works"
     (Ok minimal_config)
-    (parse_noextern basic)
+    (parse_noextern_client basic)
 
 let minimal_server_config =
   let open Openvpn.Config in
+    let add_ok_b (b:(b,'a) result) t =
+        Rresult.R.get_ok b |> function B (k,v) -> add k v t
+    in
   empty
-  (* from {!Openvpn.Config.Defaults.client_config} *)
   |> add Dev (`Tun ,(Some "tun0"))
-  |> add Port 1195
   |> add Ping_interval `Not_configured
+  |> add Cipher "AES-256-CBC"
   |> add Ping_timeout (`Restart 120)
   |> add Renegotiate_seconds 3600
-  |> add Bind (Some (Some 1194, None)) (* TODO default to 1194 for servers? *)
+  |> add Bind (Some (Some 1195, None))
   |> add Handshake_window 60
   |> add Transition_window 3600
   |> add Tls_timeout 2
@@ -73,15 +81,21 @@ let minimal_server_config =
   |> add Connect_timeout 120
   |> add Connect_retry_max `Unlimited
   |> add Proto (Some `Ipv4, `Tcp (Some `Server))
-  (* Minimal contents of actual config file: *)
   |> add Tls_mode `Server
+  |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
+  |> add_ok_b (a_ca_payload (string_of_file "ca.public.certificate" ) : (b,'a) result)
+  |> add_ok_b (a_cert_payload (string_of_file "server.public.certificate" ))
+  |> add_ok_b (a_key_payload (string_of_file "server.secret.key" ))
+  (*    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k *)
+  (*  |> add Tls_version_min ( [`V1_2]* true) *)
+
 
 let ok_minimal_server () =
   (* verify that we can parse a minimal good server config. *)
-  let basic = read_file "minimal-server.cfg" in
+  let basic = string_of_file "minimal-server.cfg" in
   Alcotest.(check (result conf_map pmsg)) "basic server conf works"
     (Ok minimal_server_config)
-    (parse_noextern basic)
+    (parse_noextern_server basic)
 
 
 let test_dev_type () =
@@ -93,7 +107,7 @@ let test_dev_type () =
   let implicit_dev_type_tun =
     Fmt.strf {|%a
 dev tun0
-|} Openvpn.Config.pp minimal_config |> parse_noextern in
+|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev, implicit dev-type"
     (Ok tun0) implicit_dev_type_tun ;
@@ -103,7 +117,7 @@ dev tun0
        for the tun device: *)
     Fmt.strf {|%a
 dev tun
-|} Openvpn.Config.pp minimal_config |> parse_noextern in
+|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev tun specifying dynamic allocation"
     (Ok (minimal_config |> Openvpn.Config.add Dev (`Tun, None)))
@@ -115,7 +129,7 @@ dev tun
     Fmt.strf {|%a
 dev tun0
 dev-type tun
-|} Openvpn.Config.pp minimal_config |> parse_noextern in
+|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev and dev-type"
     (Ok tun0) explicit_tun ;
@@ -125,7 +139,7 @@ dev-type tun
     Fmt.strf {|%a
 dev-type tap
 dev myvlan
-|} Openvpn.Config.pp minimal_config |> parse_noextern in
+|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev, implicit dev-type"
     (Ok (minimal_config |> Openvpn.Config.add Dev (`Tap, Some "myvlan")))
@@ -143,7 +157,7 @@ let auth_user_pass_trailing_whitespace () =
     ^ "<auth-user-pass>\n"
     ^ payload
     ^ "\n</auth-user-pass>"
-    |> parse_noextern
+    |> parse_noextern_client
   in
   let valid = "testuser\ntestpass" in
   let expected = common valid in
@@ -217,7 +231,7 @@ testpass
     remote 10.0.42.3 1194
     rport 1234
     remote 10.0.42.4 1234
-|}  |> parse_noextern
+|}  |> parse_noextern_client
     |> function
     | Ok conf -> conf
     | Error `Msg msg ->
@@ -267,7 +281,7 @@ tls-auth [inline]
   Alcotest.(check (result conf_map pmsg))
     "Allow whitespace after ----END of tls-auth"
     (Ok expected)
-    (parse_noextern with_newlines)
+    (parse_noextern_client with_newlines)
 
 let string_of_file filename =
   try
@@ -295,7 +309,7 @@ let parse_client_configuration name () =
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
     [Crowbar.bytes] (fun s ->
-        try Crowbar.check (ignore @@ parse_noextern s ; true)
+        try Crowbar.check (ignore @@ parse_noextern_client s ; true)
         with _ -> Crowbar.bad_test ()
       )
 

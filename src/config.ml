@@ -1,3 +1,4 @@
+
 module Logs = (val Logs.(src_log @@ Src.create
                            ~doc:"Openvpn library's configuration module"
                            "ovpn.config") : Logs.LOG)
@@ -135,6 +136,33 @@ module Conf_map = struct
   end
 
   include Gmap.Make(K)
+  let is_valid_server_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let ensure_not k err = if not (mem k t) then Ok () else Error err in
+    let open Rresult in
+    R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
+      ( ensure_mem Bind "does not have a bind" >>= fun()->
+        (match find Tls_mode t with
+         | None | Some `Client -> Error "is not a TLS server"
+         | Some `Server -> Ok ()) >>= fun () ->
+        let _todo = ensure_not in
+        begin match find Tls_cert t, find Tls_key t with
+          |  Some _, Some _ -> Ok ()
+          |  None, None ->
+            Error "does not have  TLS certificate and key"
+          | Some _, None -> 
+            Error "no tls certificate"
+          | None, Some _ ->
+            Error "no tls key"
+          (* ^-- TODO or has -pkcs12 *)
+        end >>= fun () ->
+        ensure_mem Cipher "server must specify 'cipher AES-256-CBC'"
+        >>= fun () ->
+        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
+           Error "currently only supported Cipher is 'AES-256-CBC'"
+         else Ok ()) 
+      )
+
 
   let is_valid_client_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
@@ -368,6 +396,26 @@ module Defaults = struct
     |> add Connect_timeout 120
     |> add Connect_retry_max `Unlimited
     |> add Proto (None, `Udp)
+
+  let server_config =
+    let open Conf_map in
+    empty
+    |> add Dev (`Tun ,(Some "tun0"))
+    |> add Ping_interval `Not_configured
+    |> add Cipher "AES-256-CBC"
+    |> add Ping_timeout (`Restart 120)
+    |> add Renegotiate_seconds 3600
+    |> add Bind (Some (Some 1195, None))
+    |> add Handshake_window 60
+    |> add Transition_window 3600
+    |> add Tls_timeout 2
+    |> add Resolv_retry `Infinite
+    |> add Auth_retry `None
+    |> add Connect_timeout 120
+    |> add Connect_retry_max `Unlimited
+    |> add Proto (Some `Ipv4, `Tcp (Some `Server))
+    |> add Tls_mode `Server
+    |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
 end
 
 open Conf_map
@@ -1456,7 +1504,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
             | [], name::_extra_devs ->
               Error (Fmt.strf
                        "[dev %S] stanza without required [dev-type]" name)
-            | _ -> Error "multiple conflicting [dev-type] stanzas present"
+            | _ -> Error "multiple (maybe conflicting) [dev-type] stanzas present"
           end
       end
     | [] -> Ok (`Done acc : parser_state)
@@ -1492,6 +1540,15 @@ let parse_client ~string_of_file config_str =
   let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
       Defaults.client_config parsed_conf in
   is_valid_client_config merged >>| fun () -> merged
+
+let parse_server ~string_of_file config_str =
+  let open Rresult in
+  parse ~string_of_file config_str >>= fun parsed_conf ->
+  (* apply default configuration entries, overriding with the parsed config: *)
+  let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
+      Defaults.server_config parsed_conf in
+  is_valid_server_config merged >>| fun () -> merged
+
 
 let merge_push_reply client (push_config:string) =
   let open Rresult in
