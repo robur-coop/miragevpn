@@ -179,9 +179,6 @@ module Config : sig
         Indirectly also by [client]. *)
 
     | Tls_key      : X509.Private_key.t k
-    (** TODO Tls_key : X509.private_key * [`Incoming|`Outgoing] k
-        --key-direction governs this for inlined files
-        see comment in {!a_key} *)
 
     | Tls_timeout : int k
     (** Retransmit control channel packet after not receiving an ACK for
