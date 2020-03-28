@@ -378,25 +378,19 @@ let establish_tunnel config =
                   Openvpn.pp_ip_config ip_config mtu);
     send_recv conn config ip_config mtu
 
-let read_file filename =
-  Lwt_unix.stat filename >>= fun stats ->
-  let buf = Bytes.create stats.Lwt_unix.st_size in
-  Lwt_unix.openfile filename [O_RDONLY] 0 >>= fun fd ->
-  let rec read_full ?(off = 0) size =
-    if size - off = 0 then
-      Lwt.return_unit
-    else
-      Lwt_unix.read fd buf off (size - off) >>= fun read ->
-      read_full ~off:(off + read) size
-  in
-  read_full stats.Lwt_unix.st_size >>= fun () ->
-  Lwt_unix.close fd >|= fun () ->
-  Bytes.unsafe_to_string buf
+let string_of_file filename =
+  try
+    let fh = open_in filename in
+    let content = really_input_string fh (in_channel_length fh) in
+    close_in_noerr fh ;
+    Ok content
+  with _ -> Rresult.R.error_msgf "Error reading file %S" filename
 
 let parse_config filename =
-  read_file filename >|= fun str ->
-  let string_of_file fn = Ok (Lwt_main.run (read_file fn)) in
-  Openvpn.Config.parse_client ~string_of_file str
+  Lwt.return @@
+  match string_of_file filename with
+  | Ok str -> Openvpn.Config.parse_client ~string_of_file str
+  | Error _ as e -> e
 
 let jump _ filename =
   Printexc.record_backtrace true;
