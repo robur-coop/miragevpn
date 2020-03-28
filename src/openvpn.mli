@@ -286,14 +286,18 @@ type action = [
 
 val pp_action : action Fmt.t
 
-val client : Config.t -> int64 -> (int -> Cstruct.t) ->
-  (t * action, Rresult.R.msg) result
-(** [client config ts rng] constructs a [t], returns the remote to
+val client : Config.t -> (unit -> int64) -> (unit -> Ptime.t) ->
+  (int -> Cstruct.t) -> (t * action, Rresult.R.msg) result
+(** [client config ts now rng] constructs a [t], returns the remote to
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
 
-val server : Config.t -> (int -> Cstruct.t) ->
+val server : Config.t -> (unit -> int64) -> (unit -> Ptime.t) ->
+  (int -> Cstruct.t) ->
   (server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int, Rresult.R.msg) result
+(** [server config ts now rng] constructs a [server], its [ip, netmask] and
+    [port]. It returns an error if the configuration does not contain a tls-auth
+    element. *)
 
 type error
 (** The type of errors when processing incoming data. *)
@@ -301,11 +305,17 @@ type error
 val pp_error : error Fmt.t
 (** [pp_error ppf e] pretty prints the error [e]. *)
 
-val handle : t -> Ptime.t -> int64 -> ?is_not_taken:(Ipaddr.V4.t -> bool) ->
-  event -> (t * Cstruct.t list * action option, error) result
+val handle : t -> ?is_not_taken:(Ipaddr.V4.t -> bool) -> event ->
+  (t * Cstruct.t list * action option, error) result
+(** [handle t ~is_not_taken event] handles the [event] with the state [t]. If
+    [t] is a server session, [~is_not_taken] must be provided to avoid IP
+    address collisions. *)
 
-val outgoing : t -> int64 -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
-(** [outgoing t ts data] prepares [data] to be sent over the OpenVPN connection.
+val outgoing : t -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
+(** [outgoing t data] prepares [data] to be sent over the OpenVPN connection.
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
 
-val new_connection : server -> int64 -> t
+val new_connection : server -> t
+(** [new_connection server] is to be called when the server accepted a new
+    TCP connection, a state [t] is constructed - which can be used with
+    {!handle}. *)

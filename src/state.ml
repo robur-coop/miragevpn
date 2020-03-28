@@ -235,6 +235,8 @@ type t = {
   config : Config.t ;
   linger : Cstruct.t ;
   rng : int -> Cstruct.t ;
+  ts : unit -> int64 ;
+  now : unit -> Ptime.t ;
   state : state ;
   session : session ;
   channel : channel ;
@@ -311,6 +313,8 @@ let channel_of_keyid keyid s =
 type server = {
   server_config : Config.t ;
   server_rng : int -> Cstruct.t ;
+  server_ts : unit -> int64 ;
+  server_now : unit -> Ptime.t ;
   server_hmac : Cstruct.t ;
   client_hmac : Cstruct.t ;
 }

@@ -62,7 +62,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
     match IPM.find_opt dst t.connections with
     | None -> Log.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst); Lwt.return_unit
     | Some (flow, state) ->
-      match Openvpn.outgoing !state (M.elapsed_ns ()) cs with
+      match Openvpn.outgoing !state cs with
       | Error `Not_ready ->
         Log.err (fun m -> m "error not_ready while writing to %a" Ipaddr.V4.pp dst);
         Lwt.return_unit
@@ -78,7 +78,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
 
   let callback t flow =
     let is_not_taken ip = not (IPM.mem ip t.connections) in
-    let client_state = ref (Openvpn.new_connection t.server (M.elapsed_ns ())) in
+    let client_state = ref (Openvpn.new_connection t.server) in
     let dst = TCP.dst flow in
     Log.info (fun m -> m "%a new connection" pp_dst dst);
     let rec read ?ip f =
@@ -102,7 +102,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
         Lwt.return_unit
       | Ok `Data cs ->
         match
-          Openvpn.handle !client_state (now ()) (M.elapsed_ns ()) ~is_not_taken (`Data cs)
+          Openvpn.handle !client_state ~is_not_taken (`Data cs)
         with
         | Error msg ->
           Log.err (fun m -> m "%a internal openvpn error %a"
@@ -170,7 +170,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
     (* foreach connection, call handle `Tick and follow instructions! *)
     IPM.fold (fun k (flow, t) acc ->
         acc >>= fun acc ->
-        match Openvpn.handle !t (now ()) (M.elapsed_ns ()) `Tick with
+        match Openvpn.handle !t `Tick with
         | Error e ->
           Log.err (fun m -> m "error in timer %a" Openvpn.pp_error e);
           Lwt.return acc
@@ -196,7 +196,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
     timer server ()
 
   let connect config stack =
-    match Openvpn.server config R.generate with
+    match Openvpn.server config M.elapsed_ns now R.generate with
     | Error `Msg msg ->
       Log.err (fun m -> m "server construction failed %s" msg);
       assert false
@@ -264,7 +264,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | _, None -> Log.err (fun m -> m "transmit, but no peer") ; Lwt.return false
 
   let write t data =
-    match Openvpn.outgoing t.conn.o_client (M.elapsed_ns ()) data with
+    match Openvpn.outgoing t.conn.o_client data with
     | Error `Not_ready ->
       Log.warn (fun m -> m "tunnel not ready, dropping data!");
       Lwt.return false
@@ -398,7 +398,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     Log.info (fun m -> m "processing event");
     Lwt_mvar.take conn.event_mvar >>= fun ev ->
     Log.info (fun m -> m "now for real processing event %a" Openvpn.pp_event ev);
-    match Openvpn.handle conn.o_client (now ()) (M.elapsed_ns ()) ev with
+    match Openvpn.handle conn.o_client ev with
     | Error e ->
       Log.err (fun m -> m "openvpn handle failed %a" Openvpn.pp_error e);
       Lwt.return_unit
@@ -418,7 +418,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       event s conn
 
   let connect config s =
-    match Openvpn.client config (M.elapsed_ns ()) R.generate with
+    match Openvpn.client config M.elapsed_ns now R.generate with
     | Error `Msg msg ->
       Log.err (fun m -> m "client construction failed %s" msg);
       Lwt.return (Error (`Msg msg))

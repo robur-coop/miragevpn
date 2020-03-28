@@ -298,7 +298,7 @@ let rec event conn =
   Logs.info (fun m -> m "processing event");
   Lwt_mvar.take conn.event_mvar >>= fun ev ->
   Logs.info (fun m -> m "now for real processing event %a" Openvpn.pp_event ev);
-  match Openvpn.handle conn.o_client (now ()) (ts ()) ev with
+  match Openvpn.handle conn.o_client ev with
   | Error e ->
     Logs.err (fun m -> m "openvpn handle failed %a" Openvpn.pp_error e);
     Lwt.return_unit
@@ -339,7 +339,7 @@ let send_recv conn config ip_config _mtu =
       let buf = Cstruct.create 1500 in
       Lwt_cstruct.read tun_fd buf |> Lwt_result.ok
       >|= Cstruct.sub buf 0 >>= fun buf ->
-      match Openvpn.outgoing conn.o_client (ts ()) buf with
+      match Openvpn.outgoing conn.o_client buf with
       | Error `Not_ready -> Lwt.fail_with "tunnel not ready, dropping data"
       | Ok (s', out) ->
         conn.o_client <- s';
@@ -353,7 +353,7 @@ let send_recv conn config ip_config _mtu =
     Lwt.pick [ process_incoming () ; process_outgoing tun_fd ]
 
 let establish_tunnel config =
-  match Openvpn.client config (ts ()) Mirage_crypto_rng.generate with
+  match Openvpn.client config ts now Mirage_crypto_rng.generate with
   | Error `Msg msg ->
     Logs.err (fun m -> m "client construction failed %s" msg);
     Lwt.fail_with msg
