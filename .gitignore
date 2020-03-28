@@ -13,3 +13,15 @@ mirage-unikernel*opam
 myocamlbuild.ml
 solo5-hvt
 static*.ml*
+testscripts/ca.public.certificate
+testscripts/ca.secret.key
+testscripts/client1.csr
+testscripts/client1.public.certificate
+testscripts/client1.secret.key
+testscripts/minimal-server.cfg
+testscripts/server-as-client-inline.cfg
+testscripts/server-as-client.cfg
+testscripts/server.csr
+testscripts/server.public.certificate
+testscripts/server.secret.key
+
