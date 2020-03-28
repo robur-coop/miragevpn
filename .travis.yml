@@ -7,12 +7,12 @@ sudo: false
 env:
   global:
     - PACKAGE="openvpn"
-    - POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh"
     - TESTS=false
     - DISTRO=alpine
   matrix:
-    - OCAML_VERSION=4.07 EXTRA_ENV="MIRAGE_MODE=qubes"
-    - OCAML_VERSION=4.08 EXTRA_ENV="MIRAGE_MODE=unix"
-    - OCAML_VERSION=4.09 EXTRA_ENV="MIRAGE_MODE=hvt"
+    - OCAML_VERSION=4.07 POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh" EXTRA_ENV="MIRAGE_MODE=qubes"
+    - OCAML_VERSION=4.08 TESTS=true
+    - OCAML_VERSION=4.09 POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh" EXTRA_ENV="MIRAGE_MODE=hvt"
+    - OCAML_VERSION=4.10 TESTS=true
 notifications:
   email: false
