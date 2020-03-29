@@ -136,12 +136,32 @@ module Conf_map = struct
 
   include Gmap.Make(K)
 
+  (*
+  let server_or_client t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let ensure_not k err = if not (mem k t) then Ok () else Error err in
+    let open Rresult in
+    R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
+      ( 
+        match is_valid_config t with
+          | Error _ -> Error "Not a valid config"
+          | Ok _ -> Ok () >>= fun () ->
+        match is_valid_client_config t with
+          | Error _ -> Error "Not a valid config"
+          | Ok _ -> Ok () >>= fun () ->
+      )
+*)
+
+
+
   let is_valid_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
     let open Rresult in
-    R.reword_error (fun err -> `Msg ("not a valid config: " ^  err))
-      ( ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
+    R.reword_error (fun err -> ("not a valid config: " ^  err))
+      ( ensure_mem Tls_auth "config must specify 'tls-auth' "
+        >>= fun () ->
+        ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
         >>= fun () ->
         (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
            Error "currently only supported Cipher is 'AES-256-CBC'"
@@ -152,10 +172,9 @@ module Conf_map = struct
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
     let open Rresult in
-    R.return ( match is_valid_config t with
-      | Error _ -> Error "Not a valid config"
-      | Ok o -> (Ok o)
-    ) >>= fun _ ->
+    match is_valid_config t with
+    | Error e ->  Rresult.R.error_msg ("Invalid config" ^ e)
+      | Ok _ -> 
     R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
       ( ensure_mem Bind "does not have a bind" >>= fun()->
         (match find Tls_mode t with
@@ -179,10 +198,9 @@ module Conf_map = struct
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
     let open Rresult in
-    R.return ( match is_valid_config t with
-      | Error _ -> Error "Not a valid config"
-      | Ok o -> (Ok o)
-    ) >>= fun _ ->
+    match is_valid_config t with
+      | Error e -> Rresult.R.error_msg ("Invalid config, " ^ e)
+      | Ok _ -> 
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
       ( 
           ensure_mem Remote "does not have a remote" >>= fun()->
