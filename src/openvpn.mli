@@ -204,7 +204,7 @@ module Config : sig
        TODO: openvpn manpage says something about deriving Link_mtu from this *)
 
     | Verb : int k
-
+    | User : string k
     | Verify_client_cert : [ `None | `Optional | `Required ] k
 
   include Gmap.S with type 'a key = 'a k

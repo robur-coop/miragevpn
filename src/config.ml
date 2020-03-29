@@ -120,6 +120,7 @@ module Conf_map = struct
     | Transition_window : int k
     | Tun_mtu : int k
     | Verb : int k
+    | User : string k
     | Verify_client_cert : [ `None | `Optional | `Required ] k
 
   module K = struct
@@ -156,10 +157,13 @@ module Conf_map = struct
 
   let is_valid_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
+    let ensure_absent k err = if mem k t then Error err else Ok () in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
     let open Rresult in
     R.reword_error (fun err -> ("not a valid config: " ^  err))
-      ( ensure_mem Tls_auth "config must specify 'tls-auth' "
+      ( ensure_absent User "config must not specify 'user' cause it is not implemented "
+        >>= fun () ->
+        ensure_mem Tls_auth "config must specify 'tls-auth' "
         >>= fun () ->
         ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
         >>= fun () ->
@@ -392,6 +396,7 @@ module Conf_map = struct
     | Transition_window, seconds -> p() "tran-window %d" seconds
     | Tun_mtu, int -> p() "tun-mtu %d" int
     | Verb, int -> p() "verb %d" int
+    | User, user -> p() "user %s" user
     | Verify_client_cert, mode ->
       p() "verify-client-cert %s"
         (match mode with `None -> "none" | `Optional -> "optional" | `Required -> "require")
@@ -987,6 +992,11 @@ let a_cipher =
   string "cipher" *> a_whitespace *>
   a_single_param >>| fun v -> `Entry (B(Cipher, v))
 
+let a_user =
+  string "user" *> a_whitespace *>
+  a_single_param >>| fun v -> `Entry (B(User, v))
+
+
 let a_replay_window =
   let replay_window a b = `Entry (B (Replay_window, (a, b))) in
   lift2 replay_window
@@ -1182,6 +1192,7 @@ let a_config_entry : line A.t =
     a_route_gateway ;
     a_topology ;
     a_not_implemented ;
+    a_user ;
     a_whitespace *> return (`Ignored "") ;
   ]
 
