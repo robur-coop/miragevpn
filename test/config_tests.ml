@@ -234,6 +234,29 @@ tls-auth [inline]
     (Ok expected)
     (parse_noextern with_newlines)
 
+let string_of_file filename =
+  try
+    let fh = open_in filename in
+    let content = really_input_string fh (in_channel_length fh) in
+    close_in_noerr fh ;
+    content
+  with _ -> Alcotest.failf "Error reading file %S" filename
+
+let config_dir = "sample-configuration-files/"
+
+let parse_client_configuration name () =
+  Unix.chdir config_dir;
+  Fun.protect ~finally:(fun () -> Unix.chdir "..")
+    (fun () ->
+       let data = string_of_file name in
+       match
+         Openvpn.Config.parse_client
+           ~string_of_file:(fun n -> Ok (string_of_file n))
+           data
+       with
+       | Ok _ -> ()
+       | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" name err)
+
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
     [Crowbar.bytes] (fun s ->
@@ -248,6 +271,10 @@ let tests = [
   auth_user_pass_trailing_whitespace ;
   "rport precedence", `Quick, rport_precedence ;
   "trailing whitespace after <tls-auth>", `Quick,
-  whitespace_after_tls_auth;
+  whitespace_after_tls_auth ;
+  "parsing sample client.conf", `Quick,
+  parse_client_configuration "client.conf" ;
+  "parsing sample tls-home.conf", `Quick,
+  parse_client_configuration "tls-home.conf" ;
   "crowbar fuzzing", `Slow, crowbar_fuzz_config ;
 ]
