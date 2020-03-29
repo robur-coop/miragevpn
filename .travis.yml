@@ -10,8 +10,7 @@ env:
     - TESTS=false
     - DISTRO=alpine
   matrix:
-    - OCAML_VERSION=4.07 POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh" EXTRA_ENV="MIRAGE_MODE=qubes"
-    - OCAML_VERSION=4.08 TESTS=true
+    - OCAML_VERSION=4.08 POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh" EXTRA_ENV="MIRAGE_MODE=qubes"
     - OCAML_VERSION=4.09 POST_INSTALL_HOOK="sh ./.travis-test-mirage.sh" EXTRA_ENV="MIRAGE_MODE=hvt"
     - OCAML_VERSION=4.10 TESTS=true
 notifications:
