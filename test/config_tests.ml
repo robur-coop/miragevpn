@@ -48,13 +48,6 @@ let parse_noextern_server conf =
         "this test suite does not read external files, \
          but a config asked for: %S" path) conf
 
-let ok_cert_userpass_client () =
-  let conf = string_of_file "client-tcp-certauth-passauth.cfg" in
-  let parsed = parse_noextern_client conf in
-  ignore parsed;
-  (*FIXME*)
-  Alcotest.(check bool) "cert_userpass works" true true
-
 
 let minimal_config =
   let open Openvpn.Config in
@@ -115,34 +108,6 @@ let minimal_server_config =
   |> add Proto (Some `Ipv4, `Tcp (Some `Server))
   |> add Tls_mode `Server
   |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
-  |> add_ok_b (a_cert_payload (string_of_file "server.public.certificate" ))
-  |> add_ok_b (a_key_payload (string_of_file "server.secret.key" ))
-  (*    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k *)
-  (*  |> add Tls_version_min ( [`V1_2]* true) *)
-
-let tcp_server_config =
-  let open Openvpn.Config in
-    let add_ok_b (b:(b,'a) result) t =
-        Rresult.R.get_ok b |> function B (k,v) -> add k v t
-    in
-  empty
-  |> add Dev (`Tun ,(Some "tun0"))
-  |> add Ping_interval `Not_configured
-  |> add Cipher "AES-256-CBC"
-  |> add Ping_timeout (`Restart 120)
-  |> add Renegotiate_seconds 3600
-  |> add Bind (Some (Some 1195, None))
-  |> add Handshake_window 60
-  |> add Transition_window 3600
-  |> add Tls_timeout 2
-  |> add Resolv_retry `Infinite
-  |> add Auth_retry `None
-  |> add Connect_timeout 120
-  |> add Connect_retry_max `Unlimited
-  |> add Proto (Some `Ipv4, `Tcp (Some `Server))
-  |> add Tls_mode `Server
-  |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
-  |> add_ok_b (a_ca_payload (string_of_file "ca.public.certificate" ) : (b,'a) result)
   |> add_ok_b (a_cert_payload (string_of_file "server.public.certificate" ))
   |> add_ok_b (a_key_payload (string_of_file "server.secret.key" ))
   (*    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k *)
@@ -375,7 +340,6 @@ let crowbar_fuzz_config () =
 let tests = [
   "minimal client config", `Quick, ok_minimal_client ;
   "minimal server config", `Quick, ok_minimal_server ;
-  "client with both cert and user", `Quick, ok_cert_userpass_client ;
   "test [dev] and [dev-type]", `Quick, test_dev_type ;
   "auth-user-pass trailing whitespace", `Quick,
   auth_user_pass_trailing_whitespace ;
