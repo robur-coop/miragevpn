@@ -276,5 +276,7 @@ let tests = [
   parse_client_configuration "client.conf" ;
   "parsing sample tls-home.conf", `Quick,
   parse_client_configuration "tls-home.conf" ;
+  "parsing sample IPredator-CLI-Password.conf", `Quick,
+  parse_client_configuration "IPredator-CLI-Password.conf" ;
   "crowbar fuzzing", `Slow, crowbar_fuzz_config ;
 ]
