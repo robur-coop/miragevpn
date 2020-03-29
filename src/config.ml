@@ -1512,7 +1512,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
             | [], name::_extra_devs ->
               Error (Fmt.strf
                        "[dev %S] stanza without required [dev-type]" name)
-            | _ -> Error "multiple (maybe conflicting) [dev-type] stanzas present"
+            | _ -> Error "multiple conflicting [dev-type] stanzas present"
           end
       end
     | [] -> Ok (`Done acc : parser_state)
