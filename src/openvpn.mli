@@ -250,7 +250,7 @@ module Config : sig
   val parse_server : string_of_file:(string -> (string, R.msg) result) ->
     string -> (t, [> R.msg]) result
   (** Parses a configuration string, looking up references to external files
-      as needed. Validates the client configuration. Default client options are
+      as needed. Validates the server configuration. Default server options are
       applied. *)
 
   val a_ca_payload : string -> (b, string) result
