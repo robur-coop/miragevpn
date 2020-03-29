@@ -1,3 +1,28 @@
+
+let a_x509_cert_payload ctx constructor str =
+  Logs.debug (fun m -> m "x509 cert: %s" ctx);
+  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  | Ok cert -> Ok (constructor cert)
+  | Error (`Msg msg) -> Error (Fmt.strf "%s: invalid certificate: %s" ctx msg)
+
+
+
+let a_ca_payload str =
+  let open Openvpn.Config in
+  a_x509_cert_payload "CA" (fun c -> B(Ca,c)) str
+
+let a_cert_payload str =
+  let open Openvpn.Config in
+  a_x509_cert_payload "cert" (fun c -> B(Tls_cert,c)) str
+
+let a_key_payload str =
+  let open Openvpn.Config in
+  match X509.Private_key.decode_pem (Cstruct.of_string str) with
+  | Ok key -> Ok (B (Tls_key, key))
+  | Error (`Msg msg) -> Error ("no key found in x509 tls-key: " ^ msg)
+
+
+
 let string_of_file filename =
     let ch = open_in ( ("sample-configuration-files/" ^ filename) ) in
     let s = really_input_string ch (in_channel_length ch) in

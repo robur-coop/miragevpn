@@ -253,16 +253,6 @@ module Config : sig
       as needed. Validates the server configuration. Default server options are
       applied. *)
 
-  val a_ca_payload : string -> (b, string) result
-  (**  for test *)
-  
-  val a_cert_payload : string -> (b, string) result
-  (**  for test *)
-
-  val a_key_payload : string -> (b, string) result
-  (**  for test *)
-
-
 end
 
 type t
