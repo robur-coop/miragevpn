@@ -1,16 +1,6 @@
 (test
   (name test_engine)
   (modules test_engine config_tests)
-  (deps 
-    sample-configuration-files/minimal-server.cfg 
-    sample-configuration-files/ca.public.certificate
-    sample-configuration-files/server.secret.key
-    sample-configuration-files/server.public.certificate
-    sample-configuration-files/client-tcp-certauth-passauth.cfg
-    sample-configuration-files/server-tcp-certauth-passauth.cfg
-    sample-configuration-files/ta.key
-
- )
   (libraries alcotest crowbar fmt logs.fmt rresult openvpn)
   (deps (source_tree sample-configuration-files))
 )

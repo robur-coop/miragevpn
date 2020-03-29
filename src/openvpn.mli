@@ -259,6 +259,10 @@ module Config : sig
   val a_cert_payload : string -> (b, string) result
   (**  for test *)
 
+  val a_key_payload : string -> (b, string) result
+  (**  for test *)
+
+
 end
 
 type t
