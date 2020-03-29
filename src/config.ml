@@ -148,17 +148,16 @@ module Conf_map = struct
          else Ok ()) 
       )
 
-
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
     let open Rresult in
+    R.return ( match is_valid_config t with
+      | Error _ -> Error "Not a valid config"
+      | Ok o -> (Ok o)
+    ) >>= fun _ ->
     R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
-      ( 
-        match is_valid_config t with
-          | Error _ -> Error "Not a valid config"
-          | Ok _ -> Ok () >>= fun () ->
-        ensure_mem Bind "does not have a bind" >>= fun()->
+      ( ensure_mem Bind "does not have a bind" >>= fun()->
         (match find Tls_mode t with
          | None | Some `Client -> Error "is not a TLS server"
          | Some `Server -> Ok ()) >>= fun () ->
@@ -180,12 +179,13 @@ module Conf_map = struct
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
     let open Rresult in
+    R.return ( match is_valid_config t with
+      | Error _ -> Error "Not a valid config"
+      | Ok o -> (Ok o)
+    ) >>= fun _ ->
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
       ( 
-        match is_valid_config t with
-          | Error _ -> Error "Not a valid config"
-          | Ok _ -> Ok () >>= fun () ->
-        ensure_mem Remote "does not have a remote" >>= fun()->
+          ensure_mem Remote "does not have a remote" >>= fun()->
         (match find Tls_mode t with
          | None | Some `Server -> Error "is not a TLS client"
          | Some `Client -> Ok ()) >>= fun () ->
