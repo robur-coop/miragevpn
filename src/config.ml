@@ -170,7 +170,7 @@ module Conf_map = struct
           | Some _, None -> 
             Error "no tls certificate"
           | None, Some _ ->
-            Error "no tls key"
+            Error "missing tls-key"
           (* ^-- TODO or has -pkcs12 *)
         end  
       )
