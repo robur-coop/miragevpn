@@ -136,12 +136,77 @@ module Conf_map = struct
 
   include Gmap.Make(K)
 
+  (*
+  let server_or_client t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let ensure_not k err = if not (mem k t) then Ok () else Error err in
+    let open Rresult in
+    R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
+      ( 
+        match is_valid_config t with
+          | Error _ -> Error "Not a valid config"
+          | Ok _ -> Ok () >>= fun () ->
+        match is_valid_client_config t with
+          | Error _ -> Error "Not a valid config"
+          | Ok _ -> Ok () >>= fun () ->
+      )
+*)
+
+
+
+  let is_valid_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let ensure_absent k err = if mem k t then Error err else Ok () in
+    (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
+    let open Rresult in
+    R.reword_error (fun err -> ("not a valid config: " ^  err))
+      ( ensure_absent User "config must not specify 'user' cause it is not implemented "
+        >>= fun () ->
+        ensure_mem Tls_auth "config must specify 'tls-auth' "
+        >>= fun () ->
+        ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
+        >>= fun () ->
+        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
+           Error "currently only supported Cipher is 'AES-256-CBC'"
+         else Ok ()) 
+      )
+
+  let is_valid_server_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let ensure_not k err = if not (mem k t) then Ok () else Error err in
+    let open Rresult in
+    match is_valid_config t with
+    | Error e ->  Rresult.R.error_msg ("Invalid config" ^ e)
+      | Ok _ -> 
+    R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
+      ( ensure_mem Bind "does not have a bind" >>= fun()->
+        (match find Tls_mode t with
+         | None | Some `Client -> Error "config must specify  'tls-server' "
+         | Some `Server -> Ok ()) >>= fun () ->
+        let _todo = ensure_not in
+        begin match find Tls_cert t, find Tls_key t with
+          |  Some _, Some _ -> Ok ()
+          |  None, None ->
+            Error "missing tls-cert and tls-key"
+          | Some _, None -> 
+            Error "missing tls-cert"
+          | None, Some _ ->
+            Error "missing tls-key"
+          (* ^-- TODO or has -pkcs12 *)
+        end  
+      )
+
+
   let is_valid_client_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
     let open Rresult in
+    match is_valid_config t with
+      | Error e -> Rresult.R.error_msg ("Invalid config, " ^ e)
+      | Ok _ -> 
     R.reword_error (fun err -> `Msg ("not a valid client config: " ^  err))
-      ( ensure_mem Remote "does not have a remote" >>= fun()->
+      ( 
+          ensure_mem Remote "does not have a remote" >>= fun()->
         (match find Tls_mode t with
          | None | Some `Server -> Error "is not a TLS client"
          | Some `Client -> Ok ()) >>= fun () ->
@@ -154,12 +219,7 @@ module Conf_map = struct
           | None, None, None ->
             Error "config has neither user/password, nor TLS client certificate"
           (* ^-- TODO or has -pkcs12 *)
-        end >>= fun () ->
-        ensure_mem Cipher "client must specify 'cipher AES-256-CBC'"
-        >>= fun () ->
-        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
-           Error "currently only supported Cipher is 'AES-256-CBC'"
-         else Ok ()) >>=fun()->
+        end >>=fun()->
         (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
            Error "remote-cert-tls is not SERVER?!" else Ok ())
       )
@@ -368,6 +428,23 @@ module Defaults = struct
     |> add Connect_timeout 120
     |> add Connect_retry_max `Unlimited
     |> add Proto (None, `Udp)
+
+  let server_config =
+    let open Conf_map in
+    empty
+    |> add Ping_interval `Not_configured
+    |> add Ping_timeout (`Restart 120)
+    |> add Renegotiate_seconds 3600
+    |> add Bind (Some (None, None))
+    |> add Handshake_window 60
+    |> add Transition_window 3600
+    |> add Tls_timeout 2
+    |> add Resolv_retry `Infinite
+    |> add Auth_retry `None
+    |> add Connect_timeout 120
+    |> add Connect_retry_max `Unlimited
+    |> add Proto (None, `Udp)
+    |> add Tls_mode `Server
 end
 
 open Conf_map
@@ -1492,6 +1569,15 @@ let parse_client ~string_of_file config_str =
   let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
       Defaults.client_config parsed_conf in
   is_valid_client_config merged >>| fun () -> merged
+
+let parse_server ~string_of_file config_str =
+  let open Rresult in
+  parse ~string_of_file config_str >>= fun parsed_conf ->
+  (* apply default configuration entries, overriding with the parsed config: *)
+  let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
+      Defaults.server_config parsed_conf in
+  is_valid_server_config merged >>| fun () -> merged
+
 
 let merge_push_reply client (push_config:string) =
   let open Rresult in
