@@ -138,13 +138,10 @@ module Conf_map = struct
 
   let is_valid_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
-    let ensure_absent k err = if mem k t then Error err else Ok () in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
     let open Rresult in
     R.reword_error (fun err -> ("not a valid config: " ^  err))
-      ( ensure_absent User "config must not specify 'user' cause it is not implemented "
-        >>= fun () ->
-        ensure_mem Tls_auth "config must specify 'tls-auth' "
+      ( ensure_mem Tls_auth "config must specify 'tls-auth' "
         >>= fun () ->
         ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
         >>= fun () ->
