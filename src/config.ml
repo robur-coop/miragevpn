@@ -159,7 +159,7 @@ module Conf_map = struct
     R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
       ( ensure_mem Bind "does not have a bind" >>= fun()->
         (match find Tls_mode t with
-         | None | Some `Client -> Error "is not a TLS server"
+         | None | Some `Client -> Error "config must specify  'tls-server' "
          | Some `Server -> Ok ()) >>= fun () ->
         let _todo = ensure_not in
         begin match find Tls_cert t, find Tls_key t with
