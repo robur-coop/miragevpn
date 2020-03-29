@@ -136,24 +136,6 @@ module Conf_map = struct
 
   include Gmap.Make(K)
 
-  (*
-  let server_or_client t =
-    let ensure_mem k err = if mem k t then Ok () else Error err in
-    let ensure_not k err = if not (mem k t) then Ok () else Error err in
-    let open Rresult in
-    R.reword_error (fun err -> `Msg ("not a valid server config: " ^  err))
-      ( 
-        match is_valid_config t with
-          | Error _ -> Error "Not a valid config"
-          | Ok _ -> Ok () >>= fun () ->
-        match is_valid_client_config t with
-          | Error _ -> Error "Not a valid config"
-          | Ok _ -> Ok () >>= fun () ->
-      )
-*)
-
-
-
   let is_valid_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_absent k err = if mem k t then Error err else Ok () in
