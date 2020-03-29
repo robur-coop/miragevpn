@@ -13,3 +13,10 @@
   (package openvpn)
   (modules openvpn_config_parser)
   (libraries openvpn logs.fmt fmt.tty rresult))
+
+(executable
+  (name openvpn_server_config_parser)
+  (public_name openvpn-server-config-parser)
+  (package openvpn)
+  (modules openvpn_server_config_parser)
+  (libraries openvpn logs.fmt fmt.tty rresult))
