@@ -223,13 +223,23 @@ module Config : sig
     string_of_file:(string -> (string, [ `Msg of string ]) result) ->
     string ->
     (t, [> `Msg of string ]) result
+  (** Parses a configuration string, looking up references to external files
+      as needed. *)
+
+  val parse_server :
+    string_of_file:(string -> (string, [ `Msg of string ]) result) ->
+    string ->
+    (t, [> `Msg of string ]) result
+  (** Parses a configuration string, looking up references to external files
+      as needed. Validates the server configuration. Default options are
+      applied. *)
 
   val parse_client :
     string_of_file:(string -> (string, [ `Msg of string ]) result) ->
     string ->
     (t, [> `Msg of string ]) result
   (** Parses a configuration string, looking up references to external files
-      as needed. Validates the client configuration. Default client options are
+      as needed. Validates the client configuration. Default options are
       applied. *)
 end
 

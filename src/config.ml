@@ -107,7 +107,7 @@ module Conf_map = struct
 
   (* Checklist when adding a new entry here:
      - This file:
-        - Defaults.client_config
+        - Defaults.common
             Declare default value as per `man openvpn`, if any.
         - Conf_map.pp_b:
            Enable config-serialization of the values
@@ -232,10 +232,41 @@ module Conf_map = struct
 
   include Gmap.Make (K)
 
+  let is_valid_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
+    let open Result.Infix in
+    Result.map_error
+      (fun err -> `Msg ("not a valid config: " ^ err))
+      ( ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
+      >>= fun () ->
+        if mem Cipher t && get Cipher t <> "AES-256-CBC" then
+          Error "currently only supported Cipher is 'AES-256-CBC'"
+        else Ok () )
+
+  let is_valid_server_config t =
+    let ensure_mem k err = if mem k t then Ok () else Error err in
+    let open Result.Infix in
+    is_valid_config t >>= fun () ->
+    Result.map_error
+      (fun err -> `Msg ("not a valid server config: " ^ err))
+      ( ensure_mem Bind "does not have a bind" >>= fun () ->
+        (match find Tls_mode t with
+        | None | Some `Client -> Error "config must specify 'tls-server'"
+        | Some `Server -> Ok ())
+        >>= fun () ->
+        match (find Tls_cert t, find Tls_key t) with
+        | Some _, Some _ -> Ok ()
+        | None, None -> Error "missing tls-cert and tls-key"
+        | Some _, None -> Error "missing tls-cert"
+        | None, Some _ -> Error "missing tls-key" (* ^-- TODO or has -pkcs12 *)
+      )
+
   let is_valid_client_config t =
     let open Result.Infix in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
+    is_valid_config t >>= fun () ->
     Result.map_error
       (fun err -> `Msg ("not a valid client config: " ^ err))
       ( ensure_mem Remote "does not have a remote" >>= fun () ->
@@ -265,12 +296,6 @@ module Conf_map = struct
                 Error
                   "config has neither user/password, nor TLS client certificate"
                 (* ^-- TODO or has -pkcs12 *)))
-        >>= fun () ->
-        ensure_mem Cipher "client must specify 'cipher AES-256-CBC'"
-        >>= fun () ->
-        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
-           Error "currently only supported Cipher is 'AES-256-CBC'"
-         else Ok ())
         >>= fun () ->
         (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
            Error "remote-cert-tls is not SERVER?!"
@@ -542,18 +567,26 @@ module Conf_map = struct
 end
 
 module Defaults = struct
-  let client_config =
+  let common =
     let open Conf_map in
     empty
     |> add Ping_interval `Not_configured
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
-    |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
     |> add Handshake_window 60 |> add Transition_window 3600
-    |> add Tls_timeout 2 |> add Resolv_retry `Infinite |> add Auth_retry `None
+    |> add Proto (None, `Udp)
+
+  let client =
+    let open Conf_map in
+    common |> add Tls_timeout 2
+    |> add Bind (Some (None, None))
+    |> add Resolv_retry `Infinite |> add Auth_retry `None
     |> add Connect_timeout 120
     |> add Connect_retry_max `Unlimited
-    |> add Proto (None, `Udp)
+
+  let server =
+    let open Conf_map in
+    common |> add Bind (Some (Some 1194, None))
 end
 
 open Conf_map
@@ -1843,7 +1876,7 @@ let parse_next (effect : parser_effect) initial_state :
                         tl
                     with
                     | Some (`Entry (B (Ping_timeout, x))) -> (false, x)
-                    | _ -> (false, get Ping_timeout Defaults.client_config))
+                    | _ -> (false, get Ping_timeout Defaults.common))
               in
               keepalive_action was_old timeout action
             in
@@ -1950,9 +1983,20 @@ let parse_client ~string_of_file config_str =
   let merged =
     Conf_map.union
       { f = (fun _key _default parsed -> Some parsed) }
-      Defaults.client_config parsed_conf
+      Defaults.client parsed_conf
   in
   is_valid_client_config merged >>| fun () -> merged
+
+let parse_server ~string_of_file config_str =
+  let open Result.Infix in
+  parse ~string_of_file config_str >>= fun parsed_conf ->
+  (* apply default configuration entries, overriding with the parsed config: *)
+  let merged =
+    Conf_map.union
+      { f = (fun _key _default parsed -> Some parsed) }
+      Defaults.server parsed_conf
+  in
+  is_valid_server_config merged >>| fun () -> merged
 
 let merge_push_reply client (push_config : string) =
   let open Result.Infix in
