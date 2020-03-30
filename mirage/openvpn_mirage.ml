@@ -60,11 +60,14 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
 
   let write t dst cs =
     match IPM.find_opt dst t.connections with
-    | None -> Log.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst); Lwt.return_unit
+    | None ->
+      Log.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst);
+      Lwt.return_unit
     | Some (flow, state) ->
       match Openvpn.outgoing !state cs with
       | Error `Not_ready ->
-        Log.err (fun m -> m "error not_ready while writing to %a" Ipaddr.V4.pp dst);
+        Log.err (fun m -> m "error not_ready while writing to %a"
+                    Ipaddr.V4.pp dst);
         Lwt.return_unit
       | Ok (state', enc) ->
         (* TODO fragmentation!? *)
@@ -237,7 +240,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let transmit_tcp flow data =
     let ip, port = TCP.dst flow in
-    Log.warn (fun m -> m "sending %d bytes to %a:%d"
+    Log.debug (fun m -> m "sending %d bytes to %a:%d"
                  (Cstruct.lenv data) Ipaddr.V4.pp ip port);
     TCP.writev flow data >|= function
     | Ok () -> true
@@ -292,7 +295,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let rec reader c flow =
     let ip, port = TCP.dst flow in
-    Log.info (fun m -> m "reading flow %a:%d" Ipaddr.V4.pp ip port);
+    Log.debug (fun m -> m "reading flow %a:%d" Ipaddr.V4.pp ip port);
     read_flow flow >>= fun r ->
     let n =
       match r with
@@ -300,7 +303,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       | `Data r -> Cstruct.len r
       | _ -> assert false
     in
-    Log.info (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.V4.pp ip port n);
+    Log.debug (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.V4.pp ip port n);
     Lwt_mvar.put c r >>= fun () ->
     match r with
     | `Data _ -> reader c flow
@@ -310,10 +313,11 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let udp_read_cb port c (our_port, peer_ip, their_port) ~src ~dst:_ ~src_port data =
     if port = our_port && src_port = their_port && Ipaddr.V4.compare peer_ip src = 0 then begin
-      Log.info (fun m -> m "read %a:%d (%d bytes)" Ipaddr.V4.pp src src_port (Cstruct.len data));
+      Log.debug (fun m -> m "read %a:%d (%d bytes)" Ipaddr.V4.pp src src_port
+                    (Cstruct.len data));
       Lwt_mvar.put c (`Data data)
     end else begin
-      Log.warn (fun m -> m "ignoring unsolicited data from %a:%d (expected %a:%d, our %d dst %d)"
+      Log.info (fun m -> m "ignoring unsolicited data from %a:%d (expected %a:%d, our %d dst %d)"
                    Ipaddr.V4.pp src src_port Ipaddr.V4.pp peer_ip their_port
                    our_port port);
       Lwt.return_unit
@@ -323,7 +327,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let connect_tcp sw s (ip, port) =
     TCP.create_connection (S.tcpv4 s) (ip, port) >|= function
     | Ok flow ->
-      Log.warn (fun m -> m "connection to %a:%d established"
+      Log.info (fun m -> m "connection to %a:%d established"
                    Ipaddr.V4.pp ip port);
       (sw, Some flow)
     | Error tcp_err ->
@@ -367,8 +371,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           | Some flow ->
             conn.peer <- Some (`Tcp flow);
             Lwt.async (fun () -> reader conn.event_mvar flow);
-            (* TODO log on app level *)
-            Log.warn (fun m -> m "successfully established connection to %a:%d"
+            Log.info (fun m -> m "successfully established connection to %a:%d"
                          Ipaddr.V4.pp ip port);
             `Connected
         in
@@ -391,20 +394,21 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | `Exit -> Lwt.fail_with "exit called"
     | `Payload data -> Lwt_mvar.put conn.data_mvar data
     | `Established (ip, mtu) ->
-      Log.warn (fun m -> m "action = established");
+      Log.debug (fun m -> m "action = established");
       Lwt_mvar.put conn.est_mvar (ip, mtu)
 
   let rec event s conn =
-    Log.info (fun m -> m "processing event");
+    Log.debug (fun m -> m "processing event");
     Lwt_mvar.take conn.event_mvar >>= fun ev ->
-    Log.info (fun m -> m "now for real processing event %a" Openvpn.pp_event ev);
+    Log.debug (fun m -> m "now for real processing event %a" Openvpn.pp_event ev);
     match Openvpn.handle conn.o_client ev with
     | Error e ->
       Log.err (fun m -> m "openvpn handle failed %a" Openvpn.pp_error e);
       Lwt.return_unit
     | Ok (t', outs, action) ->
       conn.o_client <- t';
-      Log.info (fun m -> m "handling action %a" Fmt.(option ~none:(unit "none") Openvpn.pp_action) action);
+      Log.debug (fun m -> m "handling action %a"
+                    Fmt.(option ~none:(unit "none") Openvpn.pp_action) action);
       (match outs with
        | [] -> ()
        | _ ->
@@ -437,17 +441,17 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       in
       Lwt.async tick;
       Lwt.async (fun () -> handle_action s conn action);
-      Log.info (fun m -> m "waiting for established");
+      Log.debug (fun m -> m "waiting for established");
       Lwt_mvar.take est_mvar >|= fun (ip_config, mtu) ->
-      Log.info (fun m -> m "now established %a (mtu %d)"
-                   Openvpn.pp_ip_config ip_config mtu);
+      Log.debug (fun m -> m "now established %a (mtu %d)"
+                    Openvpn.pp_ip_config ip_config mtu);
       let t = { conn ; ip_config ; mtu } in
       let rec established () =
         (* TODO: signal to upper layer!? *)
         Lwt_mvar.take est_mvar >>= fun (ip_config', mtu') ->
         let ip_changed = Ipaddr.V4.compare ip_config.ip ip_config'.ip <> 0 in
-        Log.info (fun m -> m "tunnel re-established (ip changed? %B) %a (mtu %d)"
-                     ip_changed Openvpn.pp_ip_config ip_config' mtu');
+        Log.debug (fun m -> m "tunnel re-established (ip changed? %B) %a (mtu %d)"
+                      ip_changed Openvpn.pp_ip_config ip_config' mtu');
         if ip_changed then
           t.ip_config <- ip_config';
         (* not sure about mtu changes, but better to update this in any case *)
@@ -455,7 +459,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         established ()
       in
       Lwt.async established;
-      Log.warn (fun m -> m "returning from connect");
+      Log.info (fun m -> m "returning from connect");
       Ok t
 end
 
@@ -559,8 +563,8 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
       Log.err (fun m -> m "error %s while parsing IPv4 frame %a" s Cstruct.hexdump_pp buf);
       Lwt.return_unit
     | Ok (packet, payload) ->
-      Log.info (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
-                   Ipv4_packet.pp packet (Cstruct.len payload));
+      Log.debug (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
+                    Ipv4_packet.pp packet (Cstruct.len payload));
       let f', r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
       t.frags <- f';
       match r with
@@ -573,10 +577,10 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
         | Some `ICMP | None -> default ~proto:pkt.proto ~src ~dst payload
 
   let rec process_data ~tcp ~udp ~default t =
-    Log.info (fun m -> m "processing data");
+    Log.debug (fun m -> m "processing data");
     O.read t.ovpn >>= fun datas ->
-    Log.info (fun m -> m "now for real processing data (%d, lenv %d)"
-                 (List.length datas) (Cstruct.lenv datas));
+    Log.debug (fun m -> m "now for real processing data (%d, lenv %d)"
+                  (List.length datas) (Cstruct.lenv datas));
     Lwt_list.iter_s (input t ~tcp ~udp ~default) datas >>= fun () ->
     process_data ~tcp ~udp ~default t
 
