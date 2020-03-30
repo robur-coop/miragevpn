@@ -33,7 +33,7 @@ module Conf_map = struct
 
   (* Checklist when adding a new entry here:
      - This file:
-        - Defaults.client_config
+        - Defaults.common
             Declare default value as per `man openvpn`, if any.
         - Conf_map.pp_b:
            Enable config-serialization of the values
@@ -392,7 +392,8 @@ end
 
 
 module Defaults = struct
-  let client_config =
+
+  let common =
     let open Conf_map in
     empty
     |> add Ping_interval `Not_configured
@@ -408,22 +409,6 @@ module Defaults = struct
     |> add Connect_retry_max `Unlimited
     |> add Proto (None, `Udp)
 
-  let server_config =
-    let open Conf_map in
-    empty
-    |> add Ping_interval `Not_configured
-    |> add Ping_timeout (`Restart 120)
-    |> add Renegotiate_seconds 3600
-    |> add Bind (Some (None, None))
-    |> add Handshake_window 60
-    |> add Transition_window 3600
-    |> add Tls_timeout 2
-    |> add Resolv_retry `Infinite
-    |> add Auth_retry `None
-    |> add Connect_timeout 120
-    |> add Connect_retry_max `Unlimited
-    |> add Proto (None, `Udp)
-    |> add Tls_mode `Server
 end
 
 open Conf_map
@@ -1452,7 +1437,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
                     `Entry (B(Ping_timeout, _)) -> true
                   | _ -> false) tl with
               | Some `Entry (B(Ping_timeout, x)) -> false, x
-              | _ -> false, get Ping_timeout Defaults.client_config end ;
+              | _ -> false, get Ping_timeout Defaults.common end ;
               in keepalive_action was_old timeout action in
           loop (add Ping_timeout timeout acc) tl
         | ( `Proto_force _
@@ -1546,7 +1531,7 @@ let parse_client ~string_of_file config_str =
   parse ~string_of_file config_str >>= fun parsed_conf ->
   (* apply default configuration entries, overriding with the parsed config: *)
   let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
-      Defaults.client_config parsed_conf in
+      Defaults.common parsed_conf in
   is_valid_client_config merged >>| fun () -> merged
 
 let parse_server ~string_of_file config_str =
@@ -1554,7 +1539,7 @@ let parse_server ~string_of_file config_str =
   parse ~string_of_file config_str >>= fun parsed_conf ->
   (* apply default configuration entries, overriding with the parsed config: *)
   let merged = Conf_map.union {f = fun _key _default parsed -> Some parsed }
-      Defaults.server_config parsed_conf in
+      Defaults.common parsed_conf in
   is_valid_server_config merged >>| fun () -> merged
 
 
