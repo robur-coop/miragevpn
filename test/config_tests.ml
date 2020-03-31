@@ -2,8 +2,8 @@
 let a_x509_cert_payload ctx constructor str =
   Logs.debug (fun m -> m "x509 cert: %s" ctx);
   match X509.Certificate.decode_pem (Cstruct.of_string str) with
-  | Ok cert -> Ok (constructor cert)
-  | Error (`Msg msg) -> Error (Fmt.strf "%s: invalid certificate: %s" ctx msg)
+  | Ok cert -> constructor cert
+  | Error (`Msg msg) -> Alcotest.failf "%s: invalid certificate: %s" ctx msg
 
 let a_ca_payload str =
   let open Openvpn.Config in
@@ -16,12 +16,32 @@ let a_cert_payload str =
 let a_key_payload str =
   let open Openvpn.Config in
   match X509.Private_key.decode_pem (Cstruct.of_string str) with
-  | Ok key -> Ok (B (Tls_key, key))
-  | Error (`Msg msg) -> Error ("no key found in x509 tls-key: " ^ msg)
+  | Ok key -> B (Tls_key, key)
+  | Error (`Msg msg) -> Alcotest.failf "no key found in x509 tls-key %s" msg
 
-let config_dir = "sample-configuration-files"
+let a_inline_payload str =
+  let rec content acc collect = function
+    | [] -> List.rev acc
+    | hd::tl when collect ->
+      if Astring.String.is_prefix ~affix:"-----END" hd then
+        content acc false tl
+      else
+        content (hd :: acc) true tl
+    | hd::tl ->
+      if Astring.String.is_prefix ~affix:"-----BEGIN" hd then
+        content acc true tl
+      else
+        content acc false tl
+  in
+  let data = content [] false (Astring.String.cuts ~sep:"\n" str) in
+  let cs = Cstruct.of_hex (Astring.String.concat ~sep:"" data) in
+  if Cstruct.len cs = 256 then
+    Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128+64) 64)
+  else
+    Alcotest.failf "wrong size %d, need exactly 256 bytes" (Cstruct.len cs)
 
 let string_of_file filename =
+  let config_dir = "sample-configuration-files" in
   let file = Filename.concat config_dir filename in
   try
     let fh = open_in file in
@@ -50,6 +70,9 @@ let parse_noextern_server conf =
         "this test suite does not read external files, \
          but a config asked for: %S" path) conf
 *)
+
+let add_b (Openvpn.Config.B (k, v)) t =
+  Openvpn.Config.add k v t
 
 let minimal_config =
   let open Openvpn.Config in
@@ -90,9 +113,6 @@ remote 10.0.0.1|} in
 
 let minimal_server_config =
   let open Openvpn.Config in
-    let add_ok_b (b:(b,'a) result) t =
-        Rresult.R.get_ok b |> function B (k,v) -> add k v t
-    in
   empty
   |> add Dev (`Tun ,(Some "tunnel"))
   |> add Ping_interval `Not_configured
@@ -110,8 +130,8 @@ let minimal_server_config =
   |> add Proto (Some `Ipv4, `Tcp (Some `Server))
   |> add Tls_mode `Server
   |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
-  |> add_ok_b (a_cert_payload (string_of_file "server.crt" ))
-  |> add_ok_b (a_key_payload (string_of_file "server.key" ))
+  |> add_b (a_cert_payload (string_of_file "server.crt"))
+  |> add_b (a_key_payload (string_of_file "server.key"))
   (*    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k *)
   (*  |> add Tls_version_min ( [`V1_2]* true) *)
 
@@ -363,12 +383,148 @@ remote 10.0.0.4 1234|} in
   Alcotest.(check (result conf_map pmsg)) "basic configuration with multiple remote works"
     (Ok config) (parse_noextern_client basic)
 
-let parse_client_configuration file () =
+let parse_client_configuration ?config file () =
   let data = string_of_file file in
   let string_of_file n = Ok (string_of_file n) in
   match Openvpn.Config.parse_client ~string_of_file data with
-  | Ok _ -> ()
   | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" file err
+  | Ok conf -> match config with
+    | None -> ()
+    | Some cfg ->
+      Alcotest.check conf_map
+        ("parsed configuration " ^ file ^ " matches provided one")
+        cfg conf
+
+let client_conf =
+  let open Openvpn.Config in
+  let tls_auth =
+    let a, b, c, d = a_inline_payload (string_of_file "ta.key") in
+    Some `Incoming, a, b, c, d
+  in
+  minimal_config
+  |> remove Auth_user_pass
+  |> add Pull ()
+  |> add Tls_mode `Client
+  |> add Dev (`Tun, None)
+  |> add Proto (None, `Udp)
+  |> add Remote [ (`Domain (Domain_name.(host_exn (of_string_exn "my-server-1")), `Any),
+                   1194, `Udp) ]
+  |> add Resolv_retry `Infinite
+  |> add Bind None
+  |> add Persist_key ()
+  |> add Persist_tun ()
+  |> add_b (a_ca_payload (string_of_file "ca.crt"))
+  |> add_b (a_cert_payload (string_of_file "client.crt"))
+  |> add_b (a_key_payload (string_of_file "client.key"))
+  |> add Remote_cert_tls `Server
+  |> add Tls_auth tls_auth
+  |> add Cipher "AES-256-CBC"
+  |> add Verb 3
+
+let tls_home_conf =
+  let open Openvpn.Config in
+  let tls_auth =
+    let a, b, c, d = a_inline_payload (string_of_file "ta.key") in
+    None, a, b, c, d
+  in
+  minimal_config
+  |> remove Auth_user_pass
+  |> add Dev (`Tun, None)
+  |> add Remote [ `Ip (Ipaddr.of_string_exn "1.2.3.4"), 1194, `Udp ]
+  |> add Ifconfig ((Ipaddr.of_string_exn "10.1.0.2"), (Ipaddr.of_string_exn "10.1.0.1"))
+  |> add_b (a_ca_payload (string_of_file "ca.crt"))
+  |> add_b (a_cert_payload (string_of_file "client.crt"))
+  |> add_b (a_key_payload (string_of_file "client.key"))
+  |> add Tls_auth tls_auth
+  |> add Cipher "AES-256-CBC"
+  |> add Verb 3
+
+let ipredator_conf =
+  let ca = match X509.Certificate.decode_pem @@ Cstruct.of_string {|
+-----BEGIN CERTIFICATE-----
+MIIFJzCCBA+gAwIBAgIJAKee4ZMMpvhzMA0GCSqGSIb3DQEBBQUAMIG9MQswCQYD
+VQQGEwJTRTESMBAGA1UECBMJQnJ5Z2dsYW5kMQ8wDQYDVQQHEwZPZWxkYWwxJDAi
+BgNVBAoTG1JveWFsIFN3ZWRpc2ggQmVlciBTcXVhZHJvbjESMBAGA1UECxMJSW50
+ZXJuZXR6MScwJQYDVQQDEx5Sb3lhbCBTd2VkaXNoIEJlZXIgU3F1YWRyb24gQ0Ex
+JjAkBgkqhkiG9w0BCQEWF2hvc3RtYXN0ZXJAaXByZWRhdG9yLnNlMB4XDTEyMDgw
+NDIxMTAyNVoXDTIyMDgwMjIxMTAyNVowgb0xCzAJBgNVBAYTAlNFMRIwEAYDVQQI
+EwlCcnlnZ2xhbmQxDzANBgNVBAcTBk9lbGRhbDEkMCIGA1UEChMbUm95YWwgU3dl
+ZGlzaCBCZWVyIFNxdWFkcm9uMRIwEAYDVQQLEwlJbnRlcm5ldHoxJzAlBgNVBAMT
+HlJveWFsIFN3ZWRpc2ggQmVlciBTcXVhZHJvbiBDQTEmMCQGCSqGSIb3DQEJARYX
+aG9zdG1hc3RlckBpcHJlZGF0b3Iuc2UwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
+ggEKAoIBAQCp5M22fZtwtIh6Mu9IwC3N2tEFqyNTEP1YyXasjf+7VNISqSpFy+tf
+DsHAkiE9Wbv8KFM9bOoVK1JjdDsetxArm/RNsUWm/SNyVbmY+5ezX/n95S7gQdMi
+bA74/ID2+KsCXUY+HNNUQqFpyK67S09A6r0ZwPNUDbLgGnmCZRMDBPCHCbiK6e68
+d75v6f/0nY4AyAAAyqwAELIAn6sy4rzoPbalxcO33eW0fUG/ir41qqo8BQrWKyEd
+Q9gy8tGEqbLQ+B30bhIvBh10YtWq6fgFZJzWP6K8bBJGRvioFOyQHCaVH98UjwOm
+/AqMTg7LwNrpRJGcKLHzUf3gNSHQGHfzAgMBAAGjggEmMIIBIjAdBgNVHQ4EFgQU
+pRqJxaYdvv3XGEECUqj7DJJ8ptswgfIGA1UdIwSB6jCB54AUpRqJxaYdvv3XGEEC
+Uqj7DJJ8ptuhgcOkgcAwgb0xCzAJBgNVBAYTAlNFMRIwEAYDVQQIEwlCcnlnZ2xh
+bmQxDzANBgNVBAcTBk9lbGRhbDEkMCIGA1UEChMbUm95YWwgU3dlZGlzaCBCZWVy
+IFNxdWFkcm9uMRIwEAYDVQQLEwlJbnRlcm5ldHoxJzAlBgNVBAMTHlJveWFsIFN3
+ZWRpc2ggQmVlciBTcXVhZHJvbiBDQTEmMCQGCSqGSIb3DQEJARYXaG9zdG1hc3Rl
+ckBpcHJlZGF0b3Iuc2WCCQCnnuGTDKb4czAMBgNVHRMEBTADAQH/MA0GCSqGSIb3
+DQEBBQUAA4IBAQB8nxZJaTvMMoSG47jD2w31zt9o6nSx8XJKop/0rMMHKBe1QBUw
+/n3clGwYxBW8mTnrXHhmJkwJzA0Vh525+dkF28E0I+DSigKUXEewIZtKjADYSxaG
+M+4272enbJ86JeXUhN8oF9TT+LKgMBgtt9yX5o63Ek6QOKwovH5kemDOVJmwae9p
+tXQEWfCPDFMc7VfSxS4BDBVinRWeMWZs+2AWeWu2CMsjcx7+B+kPbBCzfANanFDD
+CZEQON4pEpfK2XErhOudKEJGCl7psH+9Ex//pqsUS43nVN/4sqydiwbi+wQuUI3P
+BYtvqPnWdjIdf2ayAQQCWliAx9+P03vbef6y
+-----END CERTIFICATE-----
+|} with
+  | Ok cert -> cert
+  | Error `Msg msg -> Alcotest.failf "failed to parse IPredator CA %s" msg
+  in
+  let tls_auth =
+    let a, b, c, d = a_inline_payload {|
+-----BEGIN OpenVPN Static key V1-----
+03f7b2056b9dc67aa79c59852cb6b35a
+a3a15c0ca685ca76890bbb169e298837
+2bdc904116f5b66d8f7b3ea6a5ff05cb
+fc4f4889d702d394710e48164b28094f
+a0e1c7888d471da39918d747ca4bbc2f
+285f676763b5b8bee9bc08e4b5a69315
+d2ff6b9f4b38e6e2e8bcd05c8ac33c5c
+56c4c44dbca35041b67e2374788f8977
+7ad4ab8e06cd59e7164200dfbadb942a
+351a4171ab212c23bee1920120f81205
+efabaa5e34619f13adbe58b6c83536d3
+0d34e6466feabdd0e63b39ad9bb1116b
+37fafb95759ab9a15572842f70e7cba9
+69700972a01b21229eba487745c091dd
+5cd6d77bdc7a54a756ffe440789fd39e
+97aa9abe2749732b7262f82e4097bee3
+-----END OpenVPN Static key V1-----|}
+    in
+    None, a, b, c, d
+  in
+  let host s = Domain_name.(host_exn (of_string_exn s)) in
+  let open Openvpn.Config in
+  minimal_config
+  |> add Pull ()
+  |> add Dev (`Tun, Some "tun0")
+  |> add Remote [ `Domain ((host "pw.openvpn.ipredator.se"), `Any), 1194, `Udp ;
+                  `Domain ((host "pw.openvpn.ipredator.me"), `Any), 1194, `Udp ;
+                  `Domain ((host "pw.openvpn.ipredator.es"), `Any), 1194, `Udp ]
+  |> add Bind None
+  |> add Auth_retry `Nointeract
+  |> add Auth_user_pass ("foo", "bar")
+  |> add Ca ca
+  |> add Tls_auth tls_auth
+  |> add Remote_cert_tls `Server
+  |> add Ping_interval (`Seconds 10)
+  |> add Ping_timeout (`Restart 30)
+  |> add Cipher "AES-256-CBC"
+  |> add Persist_key ()
+  |> add Comp_lzo ()
+  |> add Tun_mtu 1500
+  |> add Mssfix 1200
+  |> add Passtos ()
+  |> add Verb 3
+  |> add Replay_window (512, 60)
+  |> add Mute_replay_warnings ()
+  |> add Ifconfig_nowarn ()
+  |> add Tls_version_min (`V1_2, false)
 
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
@@ -389,10 +545,10 @@ let tests = [
   "remote entries are in order", `Quick, remotes_in_order ;
   "remote entries with port are in order", `Quick, remotes_in_order_with_port ;
   "parsing sample client.conf", `Quick,
-  parse_client_configuration "client.conf" ;
+  parse_client_configuration ~config:client_conf "client.conf" ;
   "parsing sample tls-home.conf", `Quick,
-  parse_client_configuration "tls-home.conf" ;
+  parse_client_configuration ~config:tls_home_conf "tls-home.conf" ;
   "parsing sample IPredator-CLI-Password.conf", `Quick,
-  parse_client_configuration "IPredator-CLI-Password.conf" ;
+  parse_client_configuration ~config:ipredator_conf "IPredator-CLI-Password.conf" ;
   "crowbar fuzzing", `Slow, crowbar_fuzz_config ;
 ]
