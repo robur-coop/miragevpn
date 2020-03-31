@@ -7,7 +7,7 @@ let a_x509_cert_payload ctx constructor str =
 
 let a_ca_payload str =
   let open Openvpn.Config in
-  a_x509_cert_payload "CA" (fun c -> B(Ca,c)) str
+  a_x509_cert_payload "ca" (fun c -> B(Ca,c)) str
 
 let a_cert_payload str =
   let open Openvpn.Config in
