@@ -395,6 +395,15 @@ let parse_client_configuration ?config file () =
         ("parsed configuration " ^ file ^ " matches provided one")
         cfg conf
 
+let minimal_ta_conf =
+  let open Openvpn.Config in
+  let tls_auth =
+    let a, b, c, d = a_inline_payload (string_of_file "ta.key") in
+    None, a, b, c, d
+  in
+  minimal_config
+  |> add Tls_auth tls_auth
+
 let client_conf =
   let open Openvpn.Config in
   let tls_auth =
@@ -545,7 +554,7 @@ let tests = [
   "remote entries are in order", `Quick, remotes_in_order ;
   "remote entries with port are in order", `Quick, remotes_in_order_with_port ;
   "parsing configuration 'minimal-client'", `Quick,
-  parse_client_configuration "minimal-client.conf" ;
+  parse_client_configuration ~config:minimal_ta_conf "minimal-client.conf" ;
   "parsing configuration 'client'", `Quick,
   parse_client_configuration ~config:client_conf "client.conf" ;
 (*  "parsing configuration 'static-home'", `Quick,
