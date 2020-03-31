@@ -544,11 +544,21 @@ let tests = [
   whitespace_after_tls_auth ;
   "remote entries are in order", `Quick, remotes_in_order ;
   "remote entries with port are in order", `Quick, remotes_in_order_with_port ;
-  "parsing sample client.conf", `Quick,
+  "parsing configuration 'minimal-client'", `Quick,
+  parse_client_configuration "minimal-client.conf" ;
+  "parsing configuration 'client'", `Quick,
   parse_client_configuration ~config:client_conf "client.conf" ;
-  "parsing sample tls-home.conf", `Quick,
+(*  "parsing configuration 'static-home'", `Quick,
+    parse_client_configuration "static-home.conf" ; -- secret static.key *)
+  "parsing configuration 'tls-home'", `Quick,
   parse_client_configuration ~config:tls_home_conf "tls-home.conf" ;
-  "parsing sample IPredator-CLI-Password.conf", `Quick,
+  "parsing configuration 'client-tcp-certauth-passauth'", `Quick,
+  parse_client_configuration "client-tcp-certauth-passauth.conf" ;
+  "parsing configuration 'IPredator-CLI-Password'", `Quick,
   parse_client_configuration ~config:ipredator_conf "IPredator-CLI-Password.conf" ;
+(*  "parsing configuration 'wild-client'", `Quick,
+    parse_client_configuration "wild-client.conf" ; -- verify-x509-name *)
+(*  "parsing configuration 'windows-riseup-client'", `Quick,
+    parse_client_configuration "windows-riseup-client.conf" ; -- tls-cipher *)
   "crowbar fuzzing", `Slow, crowbar_fuzz_config ;
 ]
