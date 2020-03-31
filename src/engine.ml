@@ -1090,9 +1090,9 @@ let handle_static_client t s keys ev =
   match resolve_connect_client t.config ts s ev with
   | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
   | Error `Msg _ as e -> e
-  | Error `Not_handled (_remote, next_or_fail) ->
+  | Error `Not_handled (remote, next_or_fail) ->
     match s, ev with
-    | Connecting _, `Connected ->
+    | Connecting (idx, _, _), `Connected ->
       let state = client Ready in
       begin match Config.get Ifconfig t.config with
         | V4 my_ip, V4 their_ip ->
@@ -1100,7 +1100,9 @@ let handle_static_client t s keys ev =
           let prefix = Ipaddr.V4.Prefix.make 24 my_ip in
           (* TODO -- completely unclear which netmask, it is a point-to-point interface *)
           let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
-          let t = { t with state } in
+          let protocol = match remote idx with _, _, proto -> proto in
+          let session = { t.session with protocol } in
+          let t = { t with state ; session } in
           begin match outgoing t ping with
             | Error _ -> assert false
             | Ok (t, out) -> Ok (t, [ out ], Some est)
