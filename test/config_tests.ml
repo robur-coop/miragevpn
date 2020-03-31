@@ -432,10 +432,6 @@ let client_conf =
 
 let tls_home_conf =
   let open Openvpn.Config in
-  let tls_auth =
-    let a, b, c, d = a_inline_payload (string_of_file "ta.key") in
-    None, a, b, c, d
-  in
   minimal_config
   |> remove Auth_user_pass
   |> add Dev (`Tun, None)
@@ -444,7 +440,6 @@ let tls_home_conf =
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
   |> add_b (a_cert_payload (string_of_file "client.crt"))
   |> add_b (a_key_payload (string_of_file "client.key"))
-  |> add Tls_auth tls_auth
   |> add Cipher "AES-256-CBC"
   |> add Verb 3
 
