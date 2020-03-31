@@ -403,7 +403,7 @@ let pp_line ppf (x : line) =
        (match port with `Default_rport -> "default"
                       | `Port i -> string_of_int i)
        (match proto with
-          None -> "any"| Some `Tcp -> "tcp" | Some `Udp -> "up")
+          None -> "any"| Some `Tcp -> "tcp" | Some `Udp -> "udp")
    | `Entries bs -> v ppf "entries: @[<v>%a@]"
                      Fmt.(list ~sep:(unit"@,") pp_b) bs
    | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b

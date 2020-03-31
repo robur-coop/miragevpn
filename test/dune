@@ -2,6 +2,7 @@
   (name test_engine)
   (modules test_engine config_tests)
   (libraries alcotest crowbar fmt logs.fmt rresult openvpn)
+  (deps (source_tree sample-configuration-files))
 )
 
 ;(executable
