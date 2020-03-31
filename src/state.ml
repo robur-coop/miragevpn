@@ -188,10 +188,10 @@ type session = {
   protocol : [ `Tcp | `Udp ] ;
 }
 
-let init_session ~my_session_id ?(their_session_id = 0L) ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
+let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false) ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
   { my_session_id ; my_packet_id = 1l ; my_hmac ;
     their_session_id ; their_packet_id = 1l ; their_hmac ;
-    compress = false ; protocol }
+    compress ; protocol }
 
 let pp_session ppf t =
   Fmt.pf ppf "compression %B protocol %a my session %Lu packet %lu@.their session %Lu packet %lu"

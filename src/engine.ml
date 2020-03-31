@@ -81,7 +81,10 @@ let client config ts now rng =
       their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key ;
       their_hmac ; their_packet_id = 1l ;
     } in
-    let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
+    let compress = match Config.find Comp_lzo config with
+        None -> false | Some () -> true
+    in
+    let session = init_session ~my_session_id:0L ~compress ~my_hmac ~their_hmac () in
     let channel = new_channel 0 current_ts in
     let state = {
       config ; state = Client_static (keys, state) ; linger = Cstruct.empty ;
@@ -600,7 +603,7 @@ let outgoing s data =
   match s.state with
   | Client_static (ctx, c) ->
     let ts = ptime_to_ts_exn (s.now ()) in
-    let ctx, payload = out ~ts ctx true s.rng data in
+    let ctx, payload = out ~ts ctx s.session.compress s.rng data in
     Ok ({ s with state = Client_static (ctx, c) ; last_sent = s.ts () },
         payload)
   | _ ->
@@ -1119,7 +1122,7 @@ let handle_static_client t s keys ev =
       begin
         let t = { t with last_received = ts } in
         let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
-        incoming_data ~ts:true bad_mac keys true cs >>| function
+        incoming_data ~ts:true bad_mac keys t.session.compress cs >>| function
         | None -> (t, [], None)
         | Some payload -> (t, [], Some (`Payload [ payload ]))
       end
