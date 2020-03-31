@@ -148,6 +148,13 @@ let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
      the rport directive correctly. TODO *)
   (* see https://github.com/roburio/openvpn/pull/12#issuecomment-581449319 *)
+  let config =
+    Openvpn.Config.add Remote
+      [ `Ip (Ipaddr.of_string_exn "10.0.42.5"), 1234, `Udp ;
+        `Ip (Ipaddr.of_string_exn "10.0.42.3"), 1194, `Udp ;
+        `Ip (Ipaddr.of_string_exn "10.0.42.4"), 1234, `Udp ]
+      minimal_config
+  in
   let sample =
     {|
     tls-client
@@ -190,12 +197,13 @@ testpass
   in
   Alcotest.(check (result conf_map pmsg))
     "rport doesn't override explicits that coincide with the default"
-    (Ok expected)
-    (sample) ;
-  let _ip1 = Ipaddr.of_string_exn "10.0.42.3" in
-  let _ip2 = Ipaddr.of_string_exn "10.0.42.4" in
-  let _ip3 = Ipaddr.of_string_exn "10.0.42.5" in
-  () (* TODO check that the ports and remotes also match the written *)
+    (Ok expected) sample ;
+  Alcotest.(check (result conf_map pmsg))
+    "rport doesn't override explicits that coincide with the default (config)"
+    (Ok config) sample ;
+  Alcotest.(check (result conf_map pmsg))
+    "rport doesn't override explicits that coincide with the default (expected)"
+    (Ok config) (Ok expected)
 
 let whitespace_after_tls_auth () =
   let expected = Openvpn.Config.add Tls_auth
@@ -234,6 +242,52 @@ tls-auth [inline]
     (Ok expected)
     (parse_noextern with_newlines)
 
+let remotes_in_order () =
+  let basic =
+    {|tls-client
+    cipher AES-256-CBC
+    auth-user-pass [inline]
+    <auth-user-pass>
+testuser
+testpass
+</auth-user-pass>
+remote 10.0.0.1
+remote 10.0.0.2
+remote 10.0.0.3
+remote 10.0.0.4|} in
+  let config = Openvpn.Config.add
+      Remote [ `Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp ;
+               `Ip (Ipaddr.of_string_exn "10.0.0.2"), 1194, `Udp ;
+               `Ip (Ipaddr.of_string_exn "10.0.0.3"), 1194, `Udp ;
+               `Ip (Ipaddr.of_string_exn "10.0.0.4"), 1194, `Udp ; ]
+      minimal_config
+  in
+  Alcotest.(check (result conf_map pmsg)) "basic configuration with multiple remote works"
+    (Ok config) (parse_noextern basic)
+
+let remotes_in_order_with_port () =
+  let basic =
+    {|tls-client
+    cipher AES-256-CBC
+    auth-user-pass [inline]
+    <auth-user-pass>
+testuser
+testpass
+</auth-user-pass>
+remote 10.0.0.1 1234
+remote 10.0.0.2 1234
+remote 10.0.0.3 1234
+remote 10.0.0.4 1234|} in
+  let config = Openvpn.Config.add
+      Remote [ `Ip (Ipaddr.of_string_exn "10.0.0.1"), 1234, `Udp ;
+               `Ip (Ipaddr.of_string_exn "10.0.0.2"), 1234, `Udp ;
+               `Ip (Ipaddr.of_string_exn "10.0.0.3"), 1234, `Udp ;
+               `Ip (Ipaddr.of_string_exn "10.0.0.4"), 1234, `Udp ; ]
+      minimal_config
+  in
+  Alcotest.(check (result conf_map pmsg)) "basic configuration with multiple remote works"
+    (Ok config) (parse_noextern basic)
+
 let string_of_file ~dir filename =
   let file = Filename.concat dir filename in
   try
@@ -267,6 +321,8 @@ let tests = [
   "rport precedence", `Quick, rport_precedence ;
   "trailing whitespace after <tls-auth>", `Quick,
   whitespace_after_tls_auth ;
+  "remote entries are in order", `Quick, remotes_in_order ;
+  "remote entries with port are in order", `Quick, remotes_in_order_with_port ;
   "parsing sample client.conf", `Quick,
   parse_client_configuration "client.conf" ;
   "parsing sample tls-home.conf", `Quick,
