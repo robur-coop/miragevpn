@@ -1093,7 +1093,6 @@ let handle_static_client t s keys ev =
   | Error `Not_handled (remote, next_or_fail) ->
     match s, ev with
     | Connecting (idx, _, _), `Connected ->
-      let state = client Ready in
       begin match Config.get Ifconfig t.config with
         | V4 my_ip, V4 their_ip ->
           let mtu = Config.get Tun_mtu t.config in
@@ -1102,11 +1101,10 @@ let handle_static_client t s keys ev =
           let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
           let protocol = match remote idx with _, _, proto -> proto in
           let session = { t.session with protocol } in
-          let t = { t with state ; session } in
-          begin match outgoing t ping with
-            | Error _ -> assert false
-            | Ok (t, out) -> Ok (t, [ out ], Some est)
-          end
+          let now = ptime_to_ts_exn (t.now ()) in
+          let keys, payload = out ~ts:now keys t.session.compress t.rng ping in
+          let state = Client_static (keys, Ready) in
+          Ok ({ t with state ; session ; last_sent = ts }, [ payload ], Some est)
         | _ -> Error (`Msg "expected IPv4 addresses")
       end
     | _, `Tick ->
