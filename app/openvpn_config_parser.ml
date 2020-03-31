@@ -2,25 +2,25 @@ open Rresult
 open Openvpn.Config
 
 let read_config_file fn =
-  let str fn =
-    Logs.info (fun m -> m "Reading file %S" fn) ;
-    let fd = try Unix.openfile fn [O_RDONLY] 0 with
-      | Unix.Unix_error (Unix.ENOENT, "open", required_fn) ->
-        Logs.err (fun m -> m "%S: Unable to open %S required"
-                     fn required_fn);
-        exit 1
+  let string_of_file ~dir filename =
+    let file =
+      if Filename.is_relative filename then
+        Filename.concat dir filename
+      else
+        filename
     in
-    let {Unix.st_size; _} = Unix.fstat fd in
-    let buf = Bytes.create st_size in
-    let rec loop remaining =
-      let remaining =
-        let read = Unix.read fd buf (st_size - remaining) remaining in
-        remaining - read in
-      if remaining = 0 then Unix.close fd else loop remaining
-    in loop st_size ;
-    Bytes.to_string buf
+    try
+      let fh = open_in file in
+      let content = really_input_string fh (in_channel_length fh) in
+      close_in_noerr fh ;
+      Ok content
+    with _ -> Rresult.R.error_msgf "Error reading file %S" file
   in
-  parse_client ~string_of_file:(fun fn -> Ok (str fn)) (str fn)
+  let dir, filename = Filename.(dirname fn, basename fn) in
+  let string_of_file = string_of_file ~dir in
+  match string_of_file filename with
+  | Ok str -> parse_client ~string_of_file str
+  | Error _ as e -> e
 
 let () =
   if not !Sys.interactive then begin

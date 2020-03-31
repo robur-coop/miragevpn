@@ -378,16 +378,24 @@ let establish_tunnel config =
                   Openvpn.pp_ip_config ip_config mtu);
     send_recv conn config ip_config mtu
 
-let string_of_file filename =
+let string_of_file ~dir filename =
+  let file =
+    if Filename.is_relative filename then
+      Filename.concat dir filename
+    else
+      filename
+  in
   try
-    let fh = open_in filename in
+    let fh = open_in file in
     let content = really_input_string fh (in_channel_length fh) in
     close_in_noerr fh ;
     Ok content
-  with _ -> Rresult.R.error_msgf "Error reading file %S" filename
+  with _ -> Rresult.R.error_msgf "Error reading file %S" file
 
 let parse_config filename =
   Lwt.return @@
+  let dir, filename = Filename.(dirname filename, basename filename) in
+  let string_of_file = string_of_file ~dir in
   match string_of_file filename with
   | Ok str -> Openvpn.Config.parse_client ~string_of_file str
   | Error _ as e -> e

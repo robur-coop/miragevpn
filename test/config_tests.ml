@@ -234,28 +234,23 @@ tls-auth [inline]
     (Ok expected)
     (parse_noextern with_newlines)
 
-let string_of_file filename =
+let string_of_file ~dir filename =
+  let file = Filename.concat dir filename in
   try
-    let fh = open_in filename in
+    let fh = open_in file in
     let content = really_input_string fh (in_channel_length fh) in
     close_in_noerr fh ;
     content
-  with _ -> Alcotest.failf "Error reading file %S" filename
+  with _ -> Alcotest.failf "Error reading file %S" file
 
 let config_dir = "sample-configuration-files/"
 
-let parse_client_configuration name () =
-  Unix.chdir config_dir;
-  Fun.protect ~finally:(fun () -> Unix.chdir "..")
-    (fun () ->
-       let data = string_of_file name in
-       match
-         Openvpn.Config.parse_client
-           ~string_of_file:(fun n -> Ok (string_of_file n))
-           data
-       with
-       | Ok _ -> ()
-       | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" name err)
+let parse_client_configuration file () =
+  let data = string_of_file ~dir:config_dir file in
+  let string_of_file n = Ok (string_of_file ~dir:config_dir n) in
+  match Openvpn.Config.parse_client ~string_of_file data with
+  | Ok _ -> ()
+  | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" file err
 
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"

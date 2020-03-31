@@ -66,6 +66,11 @@ This does not mean that conflicting options cannot be accepted from an on-disk
  configuration file, but rather that such conflicts are explicitly handled in
  the parser code (specifically in the `resolve_conflict` function).
 
+A notable difference from OpenVPN configuration parser is that we treat relative
+ paths in a configuration file to be relative to the configuration file
+ location, and not relative to the current working directory. OpenVPN supports
+ a `--cd` argument, which we do not.
+
 ## Supported config directives
 
 Here is a list of configuration directives supported by this parser.
@@ -138,6 +143,8 @@ remote-random
 auth-retry nointeract
 
 proto tcp
+proto tcp-server
+proto tcp-client
 proto tcp4
 proto tcp4-server
 proto tcp4-client
