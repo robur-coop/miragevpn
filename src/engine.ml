@@ -945,17 +945,16 @@ let retransmit timeout ts transport =
   in
   { transport with out_packets }, out
 
-let handle_client t s ev =
-  let now = t.now () and ts = t.ts () in
+let resolve_connect_client config ts s ev =
   let remote, next_remote =
-    let remotes = Config.get Remote t.config in
+    let remotes = Config.get Remote config in
     let r idx = List.nth remotes idx in
     let next idx =
       if succ idx = List.length remotes then None else Some (r (succ idx))
     in
     r, next
   and retry_exceeded r =
-    match Config.get Connect_retry_max t.config with
+    match Config.get Connect_retry_max config with
     | `Times m -> m > r
     | `Unlimited -> false
   in
@@ -972,85 +971,93 @@ let handle_client t s ev =
           | `Ip ip, port, dp ->
             Connecting (idx', ts, retry'), `Connect (ip, port, dp))
   in
-  let client cs = Client cs in
   match s, ev with
   | Resolving (idx, _, retry), `Resolved ip ->
     (* TODO enforce ipv4/ipv6 *)
     let endp = match remote idx with _, port, dp -> (ip, port, dp) in
-    Ok ({ t with state = client (Connecting (idx, ts, retry)) }, [],
-        Some (`Connect endp))
+    Ok (Connecting (idx, ts, retry), Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
     next_or_fail idx retry >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | Connecting (idx, _, _), `Connected ->
-    let my_session_id = Randomconv.int64 t.rng
-    and my_hmac = t.session.my_hmac
-    and their_hmac = t.session.their_hmac
-    in
-    let protocol = match remote idx with _, _, proto -> proto in
-    let session = init_session ~my_session_id ~protocol ~my_hmac ~their_hmac () in
-    let session, channel, out =
-      init_channel Packet.Hard_reset_client session 0 now ts
-    in
-    let state = client (Handshaking (idx, ts)) in
-    Ok ({ t with state ; channel ; session }, [ out ], None)
+    state, Some action
   | Connecting (idx, _, retry), `Connection_failed ->
     next_or_fail idx retry >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
+    state, Some action
   | Connecting (idx, initial_ts, retry), `Tick ->
     (* We are trying to establish a connection and a clock tick happens.
        We need to determine if {!Config.Connect_timeout} seconds has passed
        since [initial_ts] (when we started connecting), and if so,
        try the next [Remote]. *)
-    let conn_timeout = Duration.of_sec Config.(get Connect_timeout t.config) in
+    let conn_timeout = Duration.of_sec Config.(get Connect_timeout config) in
     if Int64.sub ts initial_ts >= conn_timeout then begin
       Logs.err (fun m -> m "Connecting to remote #%d timed out" idx);
       next_or_fail idx retry >>| fun (state, action) ->
-      { t with state = client state }, [], Some action
+      state, Some action
     end else
-      Ok (t, [], None)
+      Ok (s, None)
   | _, `Connection_failed ->
     (* re-start from scratch *)
     next_or_fail (-1) 0 >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | s, `Tick ->
-    begin
-      match
-        match t.session.protocol, s with
-        | `Udp, Handshaking _ ->
-          Some (t.channel, fun channel -> { t with channel })
-        | `Udp, Rekeying ch ->
-          Some (ch, fun channel -> { t with state = client (Rekeying channel) })
-        | _ -> None
-      with
-      | None -> Ok (t, [], None)
-      | Some (ch, set_ch) ->
-        (* TODO exponential back-off mentioned in openvpn man page *)
-        let tls_timeout = Config.get Tls_timeout t.config in
-        match maybe_hand_timeout (Config.get Handshake_window t.config) ts ch.transport with
-        | Ok () ->
-          let transport, out = retransmit tls_timeout ts ch.transport in
-          let channel = { ch with transport } in
-          Ok (set_ch channel, out, None)
-        | Error `Hand_timeout ->
-          next_or_fail (-1) 0 >>| fun (state, action) ->
-          { t with state = client state }, [], Some action
-    end >>= begin function
-    | (t, out, Some action) -> Ok (t, out, Some action)
-    | (t, out, None) ->
-      match maybe_ping_timeout t with
-      | Some `Exit -> Ok (t, out, Some `Exit)
-      | Some `Restart ->
-        next_or_fail (-1) 0 >>| fun (state, action) ->
-        { t with state = client state }, out, Some action
-      | None ->
-        let t', outs = timer t in
-        Ok (t', out @ outs, None)
-    end
-  | _, `Data cs -> incoming t cs
-  | s, ev ->
-    Rresult.R.error_msgf "handle_client: unexpected event %a in state %a"
-      pp_event ev pp_client_state s
+    state, Some action
+  | _ -> Error (`Not_handled (remote, next_or_fail))
+
+let handle_client t s ev =
+  let now = t.now () and ts = t.ts () in
+  let client cs = Client cs in
+  match resolve_connect_client t.config ts s ev with
+  | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
+  | Error `Msg _ as e -> e
+  | Error `Not_handled (remote, next_or_fail) ->
+    match s, ev with
+    | Connecting (idx, _, _), `Connected ->
+      let my_session_id = Randomconv.int64 t.rng
+      and my_hmac = t.session.my_hmac
+      and their_hmac = t.session.their_hmac
+      in
+      let protocol = match remote idx with _, _, proto -> proto in
+      let session = init_session ~my_session_id ~protocol ~my_hmac ~their_hmac () in
+      let session, channel, out =
+        init_channel Packet.Hard_reset_client session 0 now ts
+      in
+      let state = client (Handshaking (idx, ts)) in
+      Ok ({ t with state ; channel ; session }, [ out ], None)
+    | s, `Tick ->
+      begin
+        match
+          match t.session.protocol, s with
+          | `Udp, Handshaking _ ->
+            Some (t.channel, fun channel -> { t with channel })
+          | `Udp, Rekeying ch ->
+            Some (ch, fun channel -> { t with state = client (Rekeying channel) })
+          | _ -> None
+        with
+        | None -> Ok (t, [], None)
+        | Some (ch, set_ch) ->
+          (* TODO exponential back-off mentioned in openvpn man page *)
+          let tls_timeout = Config.get Tls_timeout t.config in
+          match maybe_hand_timeout (Config.get Handshake_window t.config) ts ch.transport with
+          | Ok () ->
+            let transport, out = retransmit tls_timeout ts ch.transport in
+            let channel = { ch with transport } in
+            Ok (set_ch channel, out, None)
+          | Error `Hand_timeout ->
+            next_or_fail (-1) 0 >>| fun (state, action) ->
+            { t with state = client state }, [], Some action
+      end >>= begin function
+        | (t, out, Some action) -> Ok (t, out, Some action)
+        | (t, out, None) ->
+          match maybe_ping_timeout t with
+          | Some `Exit -> Ok (t, out, Some `Exit)
+          | Some `Restart ->
+            next_or_fail (-1) 0 >>| fun (state, action) ->
+            { t with state = client state }, out, Some action
+          | None ->
+            let t', outs = timer t in
+            Ok (t', out @ outs, None)
+      end
+    | _, `Data cs -> incoming t cs
+    | s, ev ->
+      Rresult.R.error_msgf "handle_client: unexpected event %a in state %a"
+        pp_event ev pp_client_state s
 
 (* timeouts from a server perspective:
 still TODO (similar to client, maybe in udp branch)
@@ -1076,97 +1083,49 @@ let handle_server ?is_not_taken t s ev =
 
 let handle_static_client t s keys ev =
   let ts = t.ts () in
-  let remote, next_remote =
-    let remotes = Config.get Remote t.config in
-    let r idx = List.nth remotes idx in
-    let next idx =
-      if succ idx = List.length remotes then None else Some (r (succ idx))
-    in
-    r, next
-  and retry_exceeded r =
-    match Config.get Connect_retry_max t.config with
-    | `Times m -> m > r
-    | `Unlimited -> false
-  in
-  let next_or_fail idx retry =
-    let idx', retry', v = match next_remote idx with
-      None -> 0, succ retry, remote 0 | Some x -> succ idx, retry, x
-    in
-    if retry_exceeded retry' then
-      Error (`Msg "maximum connection retries exceeded")
-    else
-      Ok (match v with
-          | `Domain (name, ip_version), _, _ ->
-            Resolving (idx', ts, retry'), `Resolve (name, ip_version)
-          | `Ip ip, port, dp ->
-            Connecting (idx', ts, retry'), `Connect (ip, port, dp))
-  in
   let client cs = Client_static (keys, cs) in
-  match s, ev with
-  | Resolving (idx, _, retry), `Resolved ip ->
-    (* TODO enforce ipv4/ipv6 *)
-    let endp = match remote idx with _, port, dp -> (ip, port, dp) in
-    Ok ({ t with state = client (Connecting (idx, ts, retry)) }, [],
-        Some (`Connect endp))
-  | Resolving (idx, _, retry), `Resolve_failed ->
-    next_or_fail idx retry >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | Connecting _, `Connected ->
-    let state = client Ready in
-    begin match Config.get Ifconfig t.config with
-      | V4 my_ip, V4 their_ip ->
-        let mtu = Config.get Tun_mtu t.config in
-        let prefix = Ipaddr.V4.Prefix.make 24 my_ip in
-        (* TODO -- completely unclear which netmask, it is a p2p interface *)
-        let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
-        let t = { t with state } in
-        begin match outgoing t ping with
-          | Error _ -> assert false
-          | Ok (t, out) -> Ok (t, [ out ], Some est)
-        end
-      | _ -> Error (`Msg "expected IPv4 addresses")
-    end
-  | Connecting (idx, _, retry), `Connection_failed ->
-    next_or_fail idx retry >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | Connecting (idx, initial_ts, retry), `Tick ->
-    (* We are trying to establish a connection and a clock tick happens.
-       We need to determine if {!Config.Connect_timeout} seconds has passed
-       since [initial_ts] (when we started connecting), and if so,
-       try the next [Remote]. *)
-    let conn_timeout = Duration.of_sec Config.(get Connect_timeout t.config) in
-    if Int64.sub ts initial_ts >= conn_timeout then begin
-      Logs.err (fun m -> m "Connecting to remote #%d timed out" idx);
-      next_or_fail idx retry >>| fun (state, action) ->
-      { t with state = client state }, [], Some action
-    end else
-      Ok (t, [], None)
-  | _, `Connection_failed ->
-    (* re-start from scratch *)
-    next_or_fail (-1) 0 >>| fun (state, action) ->
-    { t with state = client state }, [], Some action
-  | _, `Tick ->
-    begin
-      match maybe_ping_timeout t with
-      | Some `Exit -> Ok (t, [], Some `Exit)
-      | Some `Restart ->
-        next_or_fail (-1) 0 >>| fun (state, action) ->
-        { t with state = client state }, [], Some action
-      | None ->
-        let t', outs = timer t in
-        Ok (t', outs, None)
-    end
-  | _, `Data cs ->
-    begin
-      let t = { t with last_received = ts } in
-      let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
-      incoming_data ~ts:true bad_mac keys true cs >>| function
-      | None -> (t, [], None)
-      | Some payload -> (t, [], Some (`Payload [ payload ]))
-    end
-  | s, ev ->
-    Rresult.R.error_msgf "handle_static_client: unexpected event %a in state %a"
-      pp_event ev pp_client_state s
+  match resolve_connect_client t.config ts s ev with
+  | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
+  | Error `Msg _ as e -> e
+  | Error `Not_handled (_remote, next_or_fail) ->
+    match s, ev with
+    | Connecting _, `Connected ->
+      let state = client Ready in
+      begin match Config.get Ifconfig t.config with
+        | V4 my_ip, V4 their_ip ->
+          let mtu = Config.get Tun_mtu t.config in
+          let prefix = Ipaddr.V4.Prefix.make 24 my_ip in
+          (* TODO -- completely unclear which netmask, it is a point-to-point interface *)
+          let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
+          let t = { t with state } in
+          begin match outgoing t ping with
+            | Error _ -> assert false
+            | Ok (t, out) -> Ok (t, [ out ], Some est)
+          end
+        | _ -> Error (`Msg "expected IPv4 addresses")
+      end
+    | _, `Tick ->
+      begin
+        match maybe_ping_timeout t with
+        | Some `Exit -> Ok (t, [], Some `Exit)
+        | Some `Restart ->
+          next_or_fail (-1) 0 >>| fun (state, action) ->
+          { t with state = client state }, [], Some action
+        | None ->
+          let t', outs = timer t in
+          Ok (t', outs, None)
+      end
+    | _, `Data cs ->
+      begin
+        let t = { t with last_received = ts } in
+        let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
+        incoming_data ~ts:true bad_mac keys true cs >>| function
+        | None -> (t, [], None)
+        | Some payload -> (t, [], Some (`Payload [ payload ]))
+      end
+    | s, ev ->
+      Rresult.R.error_msgf "handle_static_client: unexpected event %a in state %a"
+        pp_event ev pp_client_state s
 
 let handle t ?is_not_taken ev =
   match t.state with
