@@ -63,14 +63,6 @@ let parse_noextern_client conf =
         "this test suite does not read external files, \
          but a config asked for: %S" path) conf
 
-(*
-let parse_noextern_server conf =
-  Openvpn.Config.parse_server ~string_of_file:(fun path ->
-      Rresult.R.error_msgf
-        "this test suite does not read external files, \
-         but a config asked for: %S" path) conf
-*)
-
 let add_b (Openvpn.Config.B (k, v)) t =
   Openvpn.Config.add k v t
 
@@ -110,39 +102,6 @@ remote 10.0.0.1|} in
   Alcotest.(check (result conf_map pmsg)) "basic conf works"
     (Ok minimal_config)
     (parse_noextern_client basic)
-
-let minimal_server_config =
-  let open Openvpn.Config in
-  empty
-  |> add Dev (`Tun ,(Some "tunnel"))
-  |> add Ping_interval `Not_configured
-  |> add Cipher "AES-256-CBC"
-  |> add Ping_timeout (`Restart 120)
-  |> add Renegotiate_seconds 3600
-  |> add Bind (Some (Some 1195, None))
-  |> add Handshake_window 60
-  |> add Transition_window 3600
-  |> add Tls_timeout 2
-  |> add Resolv_retry `Infinite
-  |> add Auth_retry `None
-  |> add Connect_timeout 120
-  |> add Connect_retry_max `Unlimited
-  |> add Proto (Some `Ipv4, `Tcp (Some `Server))
-  |> add Tls_mode `Server
-  |> add Server ((Ipaddr.V4.of_string_exn "10.89.0.0"), Ipaddr.V4.Prefix.of_string_exn "10.89.0.0/24")
-  |> add_b (a_cert_payload (string_of_file "server.crt"))
-  |> add_b (a_key_payload (string_of_file "server.key"))
-  (*    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k *)
-  (*  |> add Tls_version_min ( [`V1_2]* true) *)
-
-(*
-let ok_minimal_server () =
-  (* verify that we can parse a minimal good server config. *)
-  let basic = string_of_file "minimal-server.cfg" in
-  Alcotest.(check (result conf_map pmsg)) "basic server conf works"
-    (Ok minimal_server_config)
-    (parse_noextern_server basic)
-*)
 
 let test_dev_type () =
   let tun0 =
@@ -539,7 +498,6 @@ let crowbar_fuzz_config () =
 
 let tests = [
   "minimal client config", `Quick, ok_minimal_client ;
-  (*  "minimal server config", `Quick, ok_minimal_server ;*)
   "test [dev] and [dev-type]", `Quick, test_dev_type ;
   "auth-user-pass trailing whitespace", `Quick,
   auth_user_pass_trailing_whitespace ;
