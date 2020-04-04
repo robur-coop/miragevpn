@@ -10,6 +10,25 @@
    --> another task needs to listen on the private network needs to send IPv4 packets from the private network over the tunnel
     -> we need a custom "listen" on ipv4 (arp as usual) which does not discard packets which are not addressed to us
 *)
+
+(* according to RFC 1812 (requirements for routers), an incoming ipv4 fragment
+   should be forwarded, potentially fragmented into multiple pieces if the mtu
+   is smaller. i.e. instead of reassembling the full packet, send out each
+   incoming fragment individually. this makes a lot of sense in setups where
+   the >router< may be only one route from the source to destination, and not
+   every ip fragment takes the same route.
+
+   in our specific setup, this is not the case, and it feels more appropriate
+   (better for the network) to reassemble and only forward full ipv4 packets.
+
+   a difference would be either if there's a fault-tolerant setup, or if
+   fragmented packets are used for real-time communication. my intuition is
+   that path mtu discovery or 512 byte sized udp payload have won.
+
+   we strip all ipv4 options (i.e. source route / record route / etc.), but
+   i think ipv4 options are barely used in the wild, so this is fine.
+*)
+
 open Lwt.Infix
 
 module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4)
@@ -32,6 +51,69 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     end else
       Ipaddr.V4.Prefix.mem ip net
 
+  let forward_or_reject hdr payload mtu =
+    (* there are actually four potential outcomes here:
+       - packet is good to be forwarded
+       - packet gets an ICMP error report
+       - packet is a fragment and should be dropped (not handling, as noted
+         above we're reassembling)
+       - packet is an ICMP error and getting dropped (do not reply)
+    *)
+    let open Icmpv4_packet in
+    let open Icmpv4_wire in
+    let icmp_err ?(subheader = Unused) ?(code = 0) ty =
+      (* ICMP packet is 8 byte header, plus original IP header, plus original
+         payload (8 bytes) *)
+      let plen = min 8 (Cstruct.len payload) in
+      let orig_payload = Cstruct.sub payload 0 plen in
+      let ip_hdr =
+        Ipv4_packet.Marshal.make_cstruct ~payload_len:plen hdr
+      in
+      let payload = Cstruct.append ip_hdr orig_payload in
+      let icmp = { code ; ty ; subheader } in
+      let icmp_buf = Marshal.make_cstruct icmp ~payload in
+      Cstruct.append icmp_buf payload
+    in
+    let is_icmp =
+      match Ipv4_packet.Unmarshal.int_to_protocol hdr.Ipv4_packet.proto with
+      | Some `ICMP -> true
+      | _ -> false
+    and is_first_fragment = hdr.Ipv4_packet.off land 0x1FFF = 0
+    in
+    if hdr.Ipv4_packet.ttl = 1 then (* time to live exceeded *)
+      if is_first_fragment then
+        if is_icmp then begin
+          Logs.warn (fun m -> m "received ICMP %a which TTL exceeded"
+                        Ipv4_packet.pp hdr);
+          Error `Drop
+        end else
+          Error (`Icmp (icmp_err Time_exceeded))
+      else begin
+        Logs.warn (fun m -> m "packet not first fragment %a, TTL exceeded"
+                        Ipv4_packet.pp hdr);
+        Error `Drop
+      end
+    else if hdr.Ipv4_packet.off land 0x4000 = 0x4000 &&
+            Cstruct.len payload > mtu then (* don't fragment set and would fragment *)
+      if is_first_fragment then
+        if is_icmp then begin
+          Logs.warn (fun m -> m "received ICMP %a with don't fragment, but would fragmentation"
+                        Ipv4_packet.pp hdr);
+          Error `Drop
+        end else
+          let code = unreachable_reason_to_int Would_fragment
+          and subheader = Next_hop_mtu mtu
+          in
+          Error (`Icmp (icmp_err ~subheader ~code Destination_unreachable))
+      else begin
+        Logs.warn (fun m -> m "packet not first fragment %a, would fragment"
+                      Ipv4_packet.pp hdr);
+        Error `Drop
+      end
+    else
+      let hdr = { hdr with Ipv4_packet.ttl = pred hdr.Ipv4_packet.ttl } in
+      Ok hdr
+
   type t = {
     ovpn : O.t ;
     mutable ovpn_fragments : Fragments.Cache.t ;
@@ -47,7 +129,9 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         ~ipv6:(fun _ -> Logs.warn (fun m -> m "ignoring IPv6"); Lwt.return_unit)
         eth
     and forward_packet ip_hdr payload =
-      let c, pkt = Fragments.process t.private_fragments (M.elapsed_ns ()) ip_hdr payload in
+      let c, pkt =
+        Fragments.process t.private_fragments (M.elapsed_ns ()) ip_hdr payload
+      in
       t.private_fragments <- c;
       Logs.info (fun m -> m "%B forwarding packet %a"
                     (match pkt with None -> false | Some _ -> true)
@@ -55,12 +139,31 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       match pkt with
       | None -> Lwt.return_unit
       | Some (hdr, pay) ->
-        (* we need to check mtu and potentially fragment *)
-        let hdr_cs =
-          Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.len pay) hdr
-        in
-        O.write t.ovpn (Cstruct.append hdr_cs pay) >|= fun _ ->
-        ()
+        let pay_mtu = O.mtu t.ovpn - 20 in
+        match forward_or_reject hdr pay pay_mtu with
+        | Ok hdr ->
+          let hdr, fst, rest =
+            if Cstruct.len pay > pay_mtu then
+              let fst, rest = Cstruct.split pay pay_mtu in
+              let hdr = { hdr with Ipv4_packet.off = 0x2000 } in
+              hdr, fst, Fragments.fragment ~mtu:pay_mtu hdr rest
+            else
+              hdr, pay, []
+          in
+          let hdr_cs =
+            Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.len fst) hdr
+          in
+          let write_one data = O.write t.ovpn data >|= fun _ -> () in
+          write_one (Cstruct.append hdr_cs pay) >>= fun () ->
+          Lwt_list.iter_s write_one rest
+        | Error (`Icmp payload) ->
+          (* TODO really ignore the error? *)
+          Lwt.async (fun () ->
+              I.write t.private_ip ~ttl:64 hdr.Ipv4_packet.src `ICMP
+                (fun _ -> 0) [ payload ] >|= fun _ ->
+              ());
+          Lwt.return_unit
+        | Error `Drop -> Lwt.return_unit
     in
     let listen buf =
       (* addressed on ethernet layer to us _and_ on ip layer src = local_network *)
@@ -112,13 +215,31 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                   Logs.warn (fun m -> m "ignoring %a (cannot decode IP protocol number)"
                                 Ipv4_packet.pp hdr)
                 | Some proto ->
-                  Lwt.async (fun () ->
-                      I.write t.private_ip ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst
-                        proto (fun _ -> 0) [ payload ] >|= function
-                      | Ok () -> ()
-                      | Error e ->
-                        Logs.err (fun m -> m "error %a while forwarding %a"
-                                     I.pp_error e Ipv4_packet.pp hdr))
+                  match forward_or_reject hdr payload (I.mtu t.private_ip) with
+                  | Ok hdr ->
+                    Lwt.async (fun () ->
+                        (* The IPv4.write here takes care of fragmenting the packet*)
+                        I.write t.private_ip ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst
+                          proto (fun _ -> 0) [ payload ] >|= function
+                        | Ok () -> ()
+                        | Error e ->
+                          (* could send back host unreachable if this was an arp timeout *)
+                          Logs.err (fun m -> m "error %a while forwarding %a"
+                                       I.pp_error e Ipv4_packet.pp hdr))
+                  | Error (`Icmp pay) ->
+                    (* send icmp error back via ovpn *)
+                    let hdr = {
+                      hdr with Ipv4_packet.ttl = 255 ;
+                               src = List.hd (I.get_ip t.private_ip) ; (* or which ip should be used? *)
+                               dst = hdr.Ipv4_packet.src ;
+                               proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
+                    } in
+                    let payload_len = Cstruct.len pay in
+                    let hdr_cs = Ipv4_packet.Marshal.make_cstruct ~payload_len hdr in
+                    Lwt.async (fun () ->
+                      O.write t.ovpn (Cstruct.append hdr_cs pay) >|= fun _ ->
+                      ())
+                  | Error `Drop -> ()
               else
                 Logs.warn (fun m -> m "ignoring %a (not for our network)"
                               Ipv4_packet.pp hdr)
