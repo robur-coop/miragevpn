@@ -166,9 +166,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     expand (hmac ~key seed) len
   in
   let halve secret =
-    let size = Cstruct.len secret in
-    if size mod 2 <> 0 then assert false;
-    Cstruct.split secret (size / 2)
+    Cstruct.split secret (Cstruct.len secret / 2)
   in
   let s1, s2 = halve secret in
   let md5 = p_hash Mirage_crypto.Hash.MD5.(hmac, digest_size) s1
@@ -197,7 +195,7 @@ let derive_keys session (key_source : State.key_source) (tls_data : Packet.tls_d
   in
   keys
 
-let incoming_tls tls data =
+let incoming_tls ?(expect_no_reply = false) tls data =
   match Tls.Engine.handle_tls tls data with
   | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
   | `Ok (r, `Response out, `Data d) -> match r with
@@ -206,7 +204,13 @@ let incoming_tls tls data =
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
       Error (`Tls e)
-    | `Ok tls' -> Ok (tls', out, d)
+    | `Ok tls' ->
+      if expect_no_reply then
+        match out with
+        | None -> Ok (tls', out, d)
+        | Some _ -> Error (`Msg "expected no TLS reply")
+      else
+        Ok (tls', out, d)
 
 let maybe_kex_client rng config tls =
   if Tls.Engine.can_handle_appdata tls then
@@ -264,15 +268,18 @@ let kex_server config session (keys : key_source) tls data =
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
   | None -> Error (`Msg "not yet established")
   | Some (tls', payload) ->
-    let state =
-      match Config.find Ifconfig config with
-      | None -> Push_request_sent (tls', keys_ctx), None
+    begin match Config.find Ifconfig config with
+      | None -> Ok (Push_request_sent (tls', keys_ctx), None)
       | Some (Ipaddr.V4 ip, Ipaddr.V4 mask) ->
-        let ip_config = { ip ; prefix = Ipaddr.V4.Prefix.of_netmask mask ip ; gateway = fst (server_ip config) } in
-        Established keys_ctx, Some ip_config
-      | _ -> assert false
-    in
-    Ok (state, payload)
+        let ip_config =
+          let prefix = Ipaddr.V4.Prefix.of_netmask mask ip in
+          { ip ; prefix ; gateway = fst (server_ip config) }
+        in
+        Ok (Established keys_ctx, Some ip_config)
+      | _ ->
+        Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
+    end >>| fun state ->
+    (state, payload)
 
 let push_request tls =
   match Tls.Engine.send_application_data tls [Packet.push_request] with
@@ -339,10 +346,10 @@ let incoming_control_client config rng session channel now op data =
     in
     None, config, { channel with channel_st }, out
   | TLS_established (tls, key), Packet.Control ->
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
+    incoming_tls tls data >>= fun (tls', tls_resp, d) ->
     maybe_kdf session key d >>= fun (tls_data, keys) ->
     let config = merge_server_config_into_client config tls_data in
-    let tls_out = match tls_response with None -> [] | Some x -> [`Control, x] in (* warn here as well? *)
+    let tls_out = match tls_resp with None -> [] | Some c -> [ `Control, c ] in
     (* ok, two options:
        - initial handshake done, we need push request / reply
        - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
@@ -351,21 +358,20 @@ let incoming_control_client config rng session channel now op data =
     begin match Config.(find Ifconfig config) with
       | Some _ ->
         let ip_config = ip_from_config config in
-        Ok (Some ip_config, config, { channel with channel_st = Established keys }, tls_out)
+        let channel_st = Established keys in
+        Ok (Some ip_config, config, { channel with channel_st }, tls_out)
       | None ->
        (* now we send a PUSH_REQUEST\0 and see what happens *)
        push_request tls' >>| fun (tls'', out) ->
        let channel_st = Push_request_sent (tls'', keys) in
        (* first send an ack for the received key data packet (this needs to be
           a separate packet from the PUSH_REQUEST for unknown reasons) *)
-       (None, config, { channel with channel_st }, tls_out @ [ `Ack, Cstruct.empty ; `Control, out ])
+       (None, config, { channel with channel_st },
+        tls_out @ [ `Ack, Cstruct.empty ; `Control, out ])
     end
   | Push_request_sent (tls, keys), Packet.Control ->
     Logs.debug (fun m -> m "in push request sent");
-    incoming_tls tls data >>= fun (_tls', tls_response, d) ->
-    (match tls_response with
-     | None -> ()
-     | Some _ -> Logs.err (fun m -> m "unexpected TLS response (pr sent)"));
+    incoming_tls ~expect_no_reply:true tls data >>= fun (_tls', _, d) ->
     maybe_push_reply config d >>| fun config' ->
     let channel_st = Established keys in
     Logs.info (fun m -> m "channel %d is established now!!!" channel.keyid);
@@ -410,23 +416,23 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
     let channel_st =
       if Tls.Engine.can_handle_appdata tls' then
         (* this could be generated later, but is done here to accomodate the client state machine *)
-        let random1, random2 = rng 32, rng 32 in
-        TLS_established (tls', { State.pre_master = Cstruct.empty ; random1 ; random2 })
+        let random1, random2 = rng 32, rng 32
+        and pre_master = Cstruct.empty
+        in
+        TLS_established (tls', { State.pre_master ; random1 ; random2 })
       else
         TLS_handshake tls'
     in
-    let out = match tls_response with | None -> [] | Some data -> [ `Control, data ] in
+    let out = match tls_response with None -> [] | Some c -> [`Control, c] in
     None, config, session, { channel with channel_st }, out
   | TLS_established (tls, keys), Packet.Control ->
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
-    assert (tls_response = None);
+    incoming_tls ~expect_no_reply:true tls data >>= fun (tls', _, d) ->
     kex_server config session keys tls' d >>| fun ((channel_st, ip_config), out) ->
     (* keys established, move forward to "expect push request (reply with push reply)" *)
     ip_config, config, session, { channel with channel_st }, [ `Control, out ]
   | Push_request_sent (tls, keys), Packet.Control ->
     (* TODO naming: this is actually server_stuff sent, awaiting push request *)
-    incoming_tls tls data >>= fun (tls', tls_response, d) ->
-    assert (tls_response = None);
+    incoming_tls ~expect_no_reply:true tls data >>= fun (tls', _, d) ->
     begin match d with
       | None -> Error (`Msg "expected push request")
       | Some data ->
@@ -463,7 +469,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
     Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op data =
-  Logs.info (fun m -> m "incoming control!!! op %a (channel %a)"
+  Logs.info (fun m -> m "incoming control! op %a (channel %a)"
                 Packet.pp_operation op pp_channel channel);
   match state with
   | Client _ ->
@@ -471,7 +477,8 @@ let incoming_control is_not_taken config rng state session channel now ts key op
     (est, config', session, ch'', outs)
   | Server _ ->
     incoming_control_server is_not_taken config rng session channel now ts key op data
-  | Client_static _ -> assert false
+  | Client_static _ ->
+    Error (`Msg "client with static keys, no control packets expected")
 
 let expected_packet session transport data =
   (* expects monotonic packet + message id, session ids matching *)
@@ -788,7 +795,10 @@ let merge_payload a b = match a, b with
   | Some a, None -> Some a
   | None, Some b -> Some (`Payload [b])
   | Some `Payload a, Some b -> Some (`Payload (b :: a))
-  | _ -> assert false
+  | Some a, Some b ->
+    Logs.warn (fun m -> m "merging %a with payload %a (ignoring payload)"
+                  pp_action a Cstruct.hexdump_pp b);
+    Some a
 
 let find_channel state key p =
   match channel_of_keyid key state with
