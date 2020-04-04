@@ -702,7 +702,7 @@ let incoming_data ?(ts = false) err (ctx : keys) compress data =
   let iv, data = Cstruct.split data 16 in
   let dec = Mirage_crypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-  let hdr_len = 4 + (if compress then 1 else 0) + (if ts then 4 else 0) in
+  let hdr_len = 4 + (if ts then 4 else 0) + (if compress then 1 else 0) in
   guard (Cstruct.len dec >= hdr_len)
     (Rresult.R.msgf "payload too short (need %d bytes): %a"
        hdr_len Cstruct.hexdump_pp dec) >>= fun () ->
