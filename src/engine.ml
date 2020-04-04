@@ -651,7 +651,7 @@ let maybe_init_rekey s =
   | Server Server_ready ->
     let state = Server (Server_rekeying channel) in
     { s with state ; session }, [ out ]
-  | Client_static _ -> s, [] (* there's no rekey *)
+  | Client_static _ -> s, [] (* there's no rekey mechanism in static mode *)
   | _ ->
     Logs.warn (fun m -> m "maybe init rekey, but not in client or server ready %a"
                   pp_state s.state);
