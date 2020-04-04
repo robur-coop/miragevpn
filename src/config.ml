@@ -144,7 +144,7 @@ module Conf_map = struct
       ( ensure_mem Remote "does not have a remote" >>= fun()->
         let _todo = ensure_not in
         (match find Tls_mode t, find Secret t with
-         | None, None | Some `Server, _ -> Error "is not a TLS client"
+         | None, None | Some `Server, _ -> Error "is a TLS server, not a TLS client"
          | None, Some _ ->
            Logs.warn (fun m -> m "using non-forward secure static key mode");
            Ok ()
