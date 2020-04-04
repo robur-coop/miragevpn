@@ -572,7 +572,7 @@ let out ?ts (ctx : keys) compress rng data =
      ~~> well, actually take a random IV, pad and encrypt,
      ~~> prepend IV to encrrypted data
      --> hmac and prepend hash *)
-  let hdr_len = 4 + (if compress then 1 else 0) + (match ts with None -> 0 | Some _ -> 4) in
+  let hdr_len = 4 + (match ts with None -> 0 | Some _ -> 4) + (if compress then 1 else 0) in
   let hdr = Cstruct.create hdr_len in
   Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
   (match ts with None -> () | Some ts -> Cstruct.BE.set_uint32 hdr 4 ts);
