@@ -320,7 +320,9 @@ let incoming_control_client config rng session channel now op data =
         | Some ca ->
           Logs.info (fun m -> m "authenticating with CA %a"
                         X509.Certificate.pp ca);
-          X509.Authenticator.chain_of_trust ~time:(fun () -> Some now) [ ca ]
+          X509.Authenticator.chain_of_trust
+            ~hash_whitelist:Mirage_crypto.Hash.hashes
+            ~time:(fun () -> Some now) [ ca ]
       in
       let certificates =
         match Config.find Tls_cert config, Config.find Tls_key config with
@@ -574,43 +576,52 @@ let unpad block_size cs =
   else
     Error (`Msg "bad padding")
 
-let out ?ts (ctx : keys) compress rng data =
-  (* output is: packed_id <ts_opt> 0xfa data, then wrap openvpn partial header
-     ~~> well, actually take a random IV, pad and encrypt,
-     ~~> prepend IV to encrrypted data
-     --> hmac and prepend hash *)
-  let hdr_len = 4 + (match ts with None -> 0 | Some _ -> 4) + (if compress then 1 else 0) in
+let out ?add_timestamp (ctx : keys) compress rng data =
+  (* the wire format of data packets is:
+     hmac (IV enc(packet_id [timestamp] [compression] data pad))
+     where:
+     - hmac over the entire encrypted payload
+     - timestamp only used in static key mode (32bit, seconds since unix epoch)
+     - compression only if configured (0xfa for uncompressed)
+
+     the ~add_timestamp argument is only used in static key mode
+  *)
+  let hdr_len =
+    4 + (match add_timestamp with None -> 0 | Some _ -> 4) +
+    (if compress then 1 else 0)
+  in
   let hdr = Cstruct.create hdr_len in
   Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
-  (match ts with None -> () | Some ts -> Cstruct.BE.set_uint32 hdr 4 ts);
+  (match add_timestamp with
+   | None -> ()
+   | Some ts -> Cstruct.BE.set_uint32 hdr 4 ts);
   if compress then
     (* byte (hdr_len - 1) is compression -- 0xFA is "no compression" *)
     Cstruct.set_uint8 hdr (pred hdr_len) 0xfa;
-  let block_size = 16 in
-  let iv = rng block_size
-  and data = pad block_size (Cstruct.append hdr data)
+  let iv = rng Packet.block_size
+  and data = pad Packet.block_size (Cstruct.append hdr data)
   in
-  (* Logs.debug (fun m -> m "padded data is %d: %a" (Cstruct.len data) Cstruct.hexdump_pp data); *)
-  let enc = Mirage_crypto.Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
+  let open Mirage_crypto in
+  let enc = Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
   let payload = Cstruct.append iv enc in
-  let hmac = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.my_hmac payload in
-  let payload' = Cstruct.append hmac payload in
-  let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
-  (ctx', payload')
+  let hmac = Hash.SHA1.hmac ~key:ctx.my_hmac payload in
+  let packet = Cstruct.append hmac payload in
+  let ctx = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  (ctx, packet)
 
-let data_out ?ts (ctx : keys) compress protocol rng key data =
-  let ctx', payload' = out ?ts ctx compress rng data in
-  let out = Packet.encode protocol (key, `Data payload') in
-  (* Logs.debug (fun m -> m "final out is %a" Cstruct.hexdump_pp out); *)
+let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
+  (* as described in [out], ~add_timestamp is only used in static key mode *)
+  let ctx, payload = out ?add_timestamp ctx compress rng data in
+  let out = Packet.encode protocol (key, `Data payload) in
   Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
                  (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
-  (ctx', out)
+  (ctx, out)
 
 let outgoing s data =
   match s.state with
   | Client_static (ctx, c) ->
-    let ts = ptime_to_ts_exn (s.now ()) in
-    let ctx, payload = out ~ts ctx s.session.compress s.rng data in
+    let add_timestamp = ptime_to_ts_exn (s.now ()) in
+    let ctx, payload = out ~add_timestamp ctx s.session.compress s.rng data in
     Ok ({ s with state = Client_static (ctx, c) ; last_sent = s.ts () },
         payload)
   | _ ->
@@ -701,23 +712,33 @@ let timer state =
   let s''' = maybe_drop_lame_duck s'' in
   s''', out @ out'
 
-let incoming_data ?(ts = false) err (ctx : keys) compress data =
-  (* ok, from the spec: hmac(explicit iv, encrypted envelope) ++ explicit iv ++ encrypted envelope *)
+let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
+  (* spec described the layout as:
+     hmac <+> payload
+     where payload consists of IV <+> encrypted data
+     where plain data consists of packet_id [timestamp] [compress] data pad
+
+     note that the timestamp is only used in static key mode, when
+     ~add_timestamp is provided and true.
+  *)
+  let open Mirage_crypto in
   let hmac, data = Cstruct.split data Packet.hmac_len in
-  let hmac' = Mirage_crypto.Hash.SHA1.hmac ~key:ctx.their_hmac data in
-  guard (Cstruct.equal hmac hmac') (err hmac') >>= fun () ->
-  let iv, data = Cstruct.split data 16 in
-  let dec = Mirage_crypto.Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
+  let computed_hmac = Hash.SHA1.hmac ~key:ctx.their_hmac data in
+  guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
+  let iv, data = Cstruct.split data Packet.block_size in
+  let dec = Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-  let hdr_len = 4 + (if ts then 4 else 0) + (if compress then 1 else 0) in
+  let hdr_len =
+    4 + (if add_timestamp then 4 else 0) + (if compress then 1 else 0)
+  in
   guard (Cstruct.len dec >= hdr_len)
     (Rresult.R.msgf "payload too short (need %d bytes): %a"
        hdr_len Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
-  Logs.debug (fun m -> m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+  Logs.debug (fun m -> m "received packet id is %lu"
+                 (Cstruct.BE.get_uint32 dec 0));
   (* TODO validate ts if provided (avoid replay) *)
-  let block_size = 16 in
-  unpad block_size (Cstruct.shift dec hdr_len) >>= fun data ->
+  unpad Packet.block_size (Cstruct.shift dec hdr_len) >>= fun data ->
   begin
     if compress then
       (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
@@ -1111,8 +1132,10 @@ let handle_static_client t s keys ev =
           let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
           let protocol = match remote idx with _, _, proto -> proto in
           let session = { t.session with protocol } in
-          let now = ptime_to_ts_exn (t.now ()) in
-          let keys, payload = out ~ts:now keys t.session.compress t.rng ping in
+          let keys, payload =
+            let add_timestamp = ptime_to_ts_exn (t.now ()) in
+            out ~add_timestamp keys t.session.compress t.rng ping
+          in
           let state = Client_static (keys, Ready) in
           Ok ({ t with state ; session ; last_sent = ts }, [ payload ], Some est)
         | _ -> Error (`Msg "expected IPv4 addresses")
@@ -1131,8 +1154,11 @@ let handle_static_client t s keys ev =
     | _, `Data cs ->
       begin
         let t = { t with last_received = ts } in
-        let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
-        incoming_data ~ts:true bad_mac keys t.session.compress cs >>| function
+        let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs))
+        and add_timestamp = true
+        and compression = t.session.compress
+        in
+        incoming_data ~add_timestamp bad_mac keys compression cs >>| function
         | None -> (t, [], None)
         | Some payload -> (t, [], Some (`Payload [ payload ]))
       end

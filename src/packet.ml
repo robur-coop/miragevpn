@@ -48,6 +48,8 @@ let packet_id_len = 4
 
 let hmac_len = 20 (* SHA1 is what you say *)
 
+let block_size = 16
+
 let hdr_len = 8 + hmac_len + packet_id_len + 4 + 1
 
 let guard f e = if f then Ok () else Error e
