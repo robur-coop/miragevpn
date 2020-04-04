@@ -157,11 +157,13 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           write_one (Cstruct.append hdr_cs pay) >>= fun () ->
           Lwt_list.iter_s write_one rest
         | Error (`Icmp payload) ->
-          (* TODO really ignore the error? *)
           Lwt.async (fun () ->
               I.write t.private_ip ~ttl:64 hdr.Ipv4_packet.src `ICMP
-                (fun _ -> 0) [ payload ] >|= fun _ ->
-              ());
+                (fun _ -> 0) [ payload ] >|= function
+              | Ok () -> ()
+              | Error err ->
+                Logs.warn (fun m -> m "error %a while sending an ICMP error"
+                              I.pp_error err));
           Lwt.return_unit
         | Error `Drop -> Lwt.return_unit
     in
