@@ -618,20 +618,30 @@ let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
   (ctx, out)
 
 let outgoing s data =
-  match s.state with
-  | Client_static (ctx, c) ->
+  let incr ch out =
+    { ch with packets = succ ch.packets ; bytes = Cstruct.len out + ch.bytes }
+  in
+  match s.state, keys_opt s.channel with
+  | Client_static (ctx, c), _ ->
     let add_timestamp = ptime_to_ts_exn (s.now ()) in
-    let ctx, payload = out ~add_timestamp ctx s.session.compress s.rng data in
-    Ok ({ s with state = Client_static (ctx, c) ; last_sent = s.ts () },
-        payload)
-  | _ ->
-    match keys_opt s.channel with
-    | None -> Error `Not_ready
-    | Some ctx ->
-      let ctx, data = data_out ctx s.session.compress s.session.protocol s.rng s.channel.keyid data in
-      let ch = set_keys s.channel ctx in
-      let channel = { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes } in
-      Ok ({ s with channel ; last_sent = s.ts () }, data)
+    let ctx, payload =
+      out ~add_timestamp ctx s.session.compress s.rng data
+    in
+    let prefix =
+      Packet.encode_protocol s.session.protocol (Cstruct.len payload)
+    in
+    let out = Cstruct.append prefix payload in
+    let channel = incr s.channel out in
+    let state = Client_static (ctx, c) in
+    Ok ({ s with state ; channel ; last_sent = s.ts () }, out)
+  | _, None -> Error `Not_ready
+  | _, Some ctx ->
+    let sess = s.session in
+    let ctx, out =
+      data_out ctx sess.compress sess.protocol s.rng s.channel.keyid data
+    in
+    let channel = incr (set_keys s.channel ctx) out in
+    Ok ({ s with channel ; last_sent = s.ts () }, data)
 
 let ping =
   (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
@@ -1154,13 +1164,20 @@ let handle_static_client t s keys ev =
     | _, `Data cs ->
       begin
         let t = { t with last_received = ts } in
-        let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs))
-        and add_timestamp = true
-        and compression = t.session.compress
+        let add_timestamp = true
+        and compress = t.session.compress
         in
-        incoming_data ~add_timestamp bad_mac keys compression cs >>| function
-        | None -> (t, [], None)
-        | Some payload -> (t, [], Some (`Payload [ payload ]))
+        let rec process_one acc linger =
+          if Cstruct.len linger = 0 then
+            Ok ({ t with linger = Cstruct.empty }, [], acc)
+          else match Packet.decode_protocol t.session.protocol linger with
+            | Error `Partial -> Ok ({ t with linger }, [], acc)
+            | Ok (cs, linger) ->
+              let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
+              incoming_data ~add_timestamp bad_mac keys compress cs >>= fun d ->
+              process_one (merge_payload acc d) linger
+        in
+        process_one None (Cstruct.append t.linger cs)
       end
     | s, ev ->
       Rresult.R.error_msgf "handle_static_client: unexpected event %a in state %a"

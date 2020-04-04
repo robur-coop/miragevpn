@@ -171,16 +171,18 @@ let to_be_signed_control op (header, packet_id, payload) =
 
 let encode_data payload = payload, Cstruct.len payload
 
+let decode_protocol proto buf =
+  match proto with
+  | `Tcp ->
+    guard (Cstruct.len buf >= 2) `Partial >>= fun () ->
+    let plen = Cstruct.BE.get_uint16 buf 0 in
+    guard (Cstruct.len buf - 2 >= plen) `Partial >>| fun () ->
+    Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2)
+  | `Udp -> Ok (buf, Cstruct.empty)
+
 let decode proto buf =
-  (match proto with
-   | `Tcp ->
-     guard (Cstruct.len buf >= 3) `Partial >>= fun () ->
-     let plen = Cstruct.BE.get_uint16 buf 0 in
-     guard (Cstruct.len buf - 2 >= plen) `Partial >>| fun () ->
-     Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2)
-   | `Udp ->
-     guard (Cstruct.len buf >= 1) `Partial >>| fun () ->
-     buf, Cstruct.empty) >>= fun (buf', rest) ->
+  decode_protocol proto buf >>= fun (buf', rest) ->
+  guard (Cstruct.len buf' >= 1) `Partial >>= fun () ->
   let opkey = Cstruct.get_uint8 buf' 0 in
   let op, key = opkey lsr 3, opkey land 0x07 in
   let payload = Cstruct.shift buf' 1 in
@@ -201,6 +203,14 @@ let op_key op key =
   let op = operation_to_int op in
   op lsl 3 lor key
 
+let encode_protocol proto len =
+  match proto with
+  | `Tcp ->
+    let buf = Cstruct.create 2 in
+    Cstruct.BE.set_uint16 buf 0 len;
+    buf
+  | `Udp -> Cstruct.empty
+
 let encode proto (key, p) =
   let payload, len = match p with
     | `Ack ack -> encode_header ack
@@ -213,15 +223,8 @@ let encode proto (key, p) =
     Cstruct.set_uint8 b 0 op;
     b
   in
-  let buf =
-    match proto with
-    | `Tcp ->
-      let buf = Cstruct.create 2 in
-      Cstruct.BE.set_uint16 buf 0 (succ len);
-      buf
-    | `Udp -> Cstruct.empty
-  in
-  Cstruct.concat [ buf ; op_buf ; payload ]
+  let prefix = encode_protocol proto (succ len) in
+  Cstruct.concat [ prefix ; op_buf ; payload ]
 
 let to_be_signed key p =
   let op = op_key (operation p) key in
