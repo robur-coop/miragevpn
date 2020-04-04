@@ -713,7 +713,7 @@ let incoming_data ?(ts = false) err (ctx : keys) compress data =
   unpad block_size (Cstruct.shift dec hdr_len) >>= fun data ->
   begin
     if compress then
-      (* if dec[hdr_len--] == 0xfa, then compression is off *)
+      (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
       match Cstruct.get_uint8 dec (pred hdr_len) with
       | 0xFA -> Ok data
       | 0x66 ->
