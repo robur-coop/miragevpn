@@ -109,7 +109,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
               if local_network hdr.Ipv4_packet.dst then
                 match Ipv4_packet.(Unmarshal.int_to_protocol hdr.proto) with
                 | None ->
-                  Logs.warn (fun m -> m "ignoring %a (cannot decode protocol)"
+                  Logs.warn (fun m -> m "ignoring %a (cannot decode IP protocol number)"
                                 Ipv4_packet.pp hdr)
                 | Some proto ->
                   Lwt.async (fun () ->
