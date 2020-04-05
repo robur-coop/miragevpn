@@ -245,8 +245,8 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                       ())
                   | Error `Drop -> ()
               else
-                Logs.warn (fun m -> m "ignoring %a (not for our network)"
-                              Ipv4_packet.pp hdr)
+                Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
+                              Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (fst (Key_gen.private_ipv4 ())))
           end;
           Lwt.return c
         | Error msg ->
