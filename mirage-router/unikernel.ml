@@ -221,7 +221,8 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                   | Ok hdr ->
                     Lwt.async (fun () ->
                         (* The IPv4.write here takes care of fragmenting the packet*)
-                        I.write t.private_ip ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst
+                        I.write t.private_ip ~ttl:hdr.Ipv4_packet.ttl
+                          ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst
                           proto (fun _ -> 0) [ payload ] >|= function
                         | Ok () -> ()
                         | Error e ->
