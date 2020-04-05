@@ -26,7 +26,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   module Log = (val Logs.src_log log : Logs.LOG)
   module Private_routing = Routing.Make(Log)(A)
 
-  let start _ _ _ _ s net eth arp _ip data _ =
+  let start _ _ _ _ s net eth arp _ip data =
     let private_ip_net, private_ip = Key_gen.private_ipv4 () in
     read_config data >>= function
     | Error (`Msg m) -> Lwt.fail_with m

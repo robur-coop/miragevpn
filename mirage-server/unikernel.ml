@@ -11,7 +11,7 @@ module Main (R : Mirage_random.C) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       let string_of_file _ = Error (`Msg "no string_of_file support") in
       Openvpn.Config.parse ~string_of_file data
 
-  let start _ _ _ _ s data _ =
+  let start _ _ _ _ s data =
     read_config data >>= function
     | Error `Msg msg ->
       Logs.err (fun m -> m "error while reading config %s" msg);
