@@ -598,8 +598,8 @@ let out ?add_timestamp (ctx : keys) compress rng data =
   if compress then
     (* byte (hdr_len - 1) is compression -- 0xFA is "no compression" *)
     Cstruct.set_uint8 hdr (pred hdr_len) 0xfa;
-  let iv = rng Packet.block_size
-  and data = pad Packet.block_size (Cstruct.append hdr data)
+  let iv = rng Packet.cipher_block_size
+  and data = pad Packet.cipher_block_size (Cstruct.append hdr data)
   in
   let open Mirage_crypto in
   let enc = Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
@@ -735,7 +735,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
   let hmac, data = Cstruct.split data Packet.hmac_len in
   let computed_hmac = Hash.SHA1.hmac ~key:ctx.their_hmac data in
   guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
-  let iv, data = Cstruct.split data Packet.block_size in
+  let iv, data = Cstruct.split data Packet.cipher_block_size in
   let dec = Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
   (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
   let hdr_len =
@@ -748,7 +748,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
   Logs.debug (fun m -> m "received packet id is %lu"
                  (Cstruct.BE.get_uint32 dec 0));
   (* TODO validate ts if provided (avoid replay) *)
-  unpad Packet.block_size (Cstruct.shift dec hdr_len) >>= fun data ->
+  unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len) >>= fun data ->
   begin
     if compress then
       (* if dec[hdr_len - 1] == 0xfa, then compression is off *)

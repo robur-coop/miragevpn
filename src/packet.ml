@@ -48,7 +48,7 @@ let packet_id_len = 4
 
 let hmac_len = 20 (* SHA1 is what you say *)
 
-let block_size = 16
+let cipher_block_size = 16
 
 let hdr_len = 8 + hmac_len + packet_id_len + 4 + 1
 
