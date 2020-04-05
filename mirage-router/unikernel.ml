@@ -159,7 +159,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           Lwt_list.iter_s write_one rest
         | Error (`Icmp payload) ->
           Lwt.async (fun () ->
-              I.write t.private_ip ~ttl:64 hdr.Ipv4_packet.src `ICMP
+              I.write t.private_ip ~ttl:255 hdr.Ipv4_packet.src `ICMP
                 (fun _ -> 0) [ payload ] >|= function
               | Ok () -> ()
               | Error err ->
