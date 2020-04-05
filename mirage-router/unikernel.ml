@@ -145,6 +145,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           let hdr, fst, rest =
             if Cstruct.len pay > pay_mtu then
               let fst, rest = Cstruct.split pay pay_mtu in
+              (* need to set 'more fragments' bit in the IPv4 header *)
               let hdr = { hdr with Ipv4_packet.off = 0x2000 } in
               hdr, fst, Fragments.fragment ~mtu:pay_mtu hdr rest
             else
