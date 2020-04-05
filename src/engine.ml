@@ -195,7 +195,7 @@ let derive_keys session (key_source : State.key_source) (tls_data : Packet.tls_d
   in
   keys
 
-let incoming_tls ?(expect_no_reply = false) tls data =
+let incoming_tls tls data =
   match Tls.Engine.handle_tls tls data with
   | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
   | `Ok (r, `Response out, `Data d) -> match r with
@@ -204,13 +204,12 @@ let incoming_tls ?(expect_no_reply = false) tls data =
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
       Error (`Tls e)
-    | `Ok tls' ->
-      if expect_no_reply then
-        match out with
-        | None -> Ok (tls', out, d)
-        | Some _ -> Error (`Msg "expected no TLS reply")
-      else
-        Ok (tls', out, d)
+    | `Ok tls' -> Ok (tls', out, d)
+
+let incoming_tls_without_reply tls data =
+  incoming_tls tls data >>= function
+  | tls', None, d -> Ok (tls', d)
+  | _, Some _, _ -> Error (`Msg "expected no TLS reply")
 
 let maybe_kex_client rng config tls =
   if Tls.Engine.can_handle_appdata tls then
@@ -373,7 +372,7 @@ let incoming_control_client config rng session channel now op data =
     end
   | Push_request_sent (tls, keys), Packet.Control ->
     Logs.debug (fun m -> m "in push request sent");
-    incoming_tls ~expect_no_reply:true tls data >>= fun (_tls', _, d) ->
+    incoming_tls_without_reply tls data >>= fun (_tls', d) ->
     maybe_push_reply config d >>| fun config' ->
     let channel_st = Established keys in
     Logs.info (fun m -> m "channel %d is established now!!!" channel.keyid);
@@ -428,13 +427,13 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
     let out = match tls_response with None -> [] | Some c -> [`Control, c] in
     None, config, session, { channel with channel_st }, out
   | TLS_established (tls, keys), Packet.Control ->
-    incoming_tls ~expect_no_reply:true tls data >>= fun (tls', _, d) ->
+    incoming_tls_without_reply tls data >>= fun (tls', d) ->
     kex_server config session keys tls' d >>| fun ((channel_st, ip_config), out) ->
     (* keys established, move forward to "expect push request (reply with push reply)" *)
     ip_config, config, session, { channel with channel_st }, [ `Control, out ]
   | Push_request_sent (tls, keys), Packet.Control ->
     (* TODO naming: this is actually server_stuff sent, awaiting push request *)
-    incoming_tls ~expect_no_reply:true tls data >>= fun (tls', _, d) ->
+    incoming_tls_without_reply tls data >>= fun (tls', d) ->
     begin match d with
       | None -> Error (`Msg "expected push request")
       | Some data ->
