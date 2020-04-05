@@ -979,7 +979,7 @@ let maybe_hand_timeout timeout ts transport =
 
 let retransmit timeout ts transport =
   let t = Duration.of_sec timeout in
-  (* TODO should I update the timestamp in the packet? *)
+  (* TODO should the timestamp in the packet be updated? *)
   let out, out_packets = IM.fold (fun k (ts', data) (acc, m) ->
       if Int64.sub ts ts' >= t then
         data :: acc, IM.add k (ts, data) m
