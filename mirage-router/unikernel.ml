@@ -80,7 +80,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       | _ -> false
     and is_first_fragment = hdr.Ipv4_packet.off land 0x1FFF = 0
     in
-    if hdr.Ipv4_packet.ttl = 1 then (* time to live exceeded *)
+    if hdr.Ipv4_packet.ttl <= 1 then (* time to live exceeded *)
       if is_first_fragment then
         if is_icmp then begin
           Logs.warn (fun m -> m "received ICMP %a which TTL exceeded"
