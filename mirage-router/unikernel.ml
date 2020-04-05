@@ -97,7 +97,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             Cstruct.len payload > mtu then (* don't fragment set and would fragment *)
       if is_first_fragment then
         if is_icmp then begin
-          Logs.warn (fun m -> m "received ICMP %a with don't fragment, but would fragmentation"
+          Logs.warn (fun m -> m "received ICMP packet %a where don't fragment is set, but would fragment"
                         Ipv4_packet.pp hdr);
           Error `Drop
         end else
