@@ -266,13 +266,17 @@ let mtu config compress =
     | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
     | Some x -> x
   in
-  (* padding, done on packet_id + compress + data *)
+  (* padding, done on packet_id + [timestamp] + compress + data *)
+  let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
-    4 (* packet id *) + if compress then 1 else 0
+    4 + (* packet id *)
+    (if static_key_mode then 4 else 0) + (* time stamp in static key mode *)
+    if compress then 1 else 0
   in
   let hdrs =
-    3 (* hdr: 2 byte length, 1 byte op + key *) +
-    Packet.cipher_block_size (* IV *) +
+    2 + (* hdr: 2 byte length *)
+    (if static_key_mode then 0 else 1) + (* 1 byte op + key *)
+    Packet.cipher_block_size + (* IV *)
     Packet.hmac_len
   in
   (* now we know: tun_mtu - hdrs is space we have for data *)
