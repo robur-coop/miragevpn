@@ -1451,9 +1451,14 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
             List.fold_left (fun (typs, nams, other) -> function
                 | `Dev_type typ -> (typ::typs), nams, other
                 | `Dev name -> typs, (name::nams), other
-                | o -> typs, nams, (o::other))
+                | o -> typs, nams, (o::other)
+                (* o::other reverses the list, in order to keep
+                   Remote and other order-sensitive stanzas intact
+                   we need to List.rev the [tl] list. *)
+              )
               ([], [], []) (current :: tl)
           in
+          let tl = List.rev tl in (* Fix [tl] ordering *)
           begin match typs, names with
             | [typ], [name] ->
               (* custom named tun/tap device: *)
