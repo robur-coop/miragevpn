@@ -66,14 +66,14 @@ let () =
     match read_config_file fn with
     | Ok rules ->
       let outbuf = Buffer.create 2048 in
-      Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n" pp rules ;
+      Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n%!" pp rules ;
       Fmt.pr "%s%!" (pad_output (Buffer.contents outbuf)) ;
       Logs.info (fun m -> m "Read %d entries!" (cardinal rules)) ;
       (* The output was printed, now we generate a warning on stderr
        * if our self-testing fails: *)
       begin match
           parse_client ~string_of_file:(fun _fn -> assert false)
-            (Fmt.strf "%a" pp rules) with
+            (Buffer.contents outbuf) with
       | Error `Msg s->
         Logs.err (fun m ->m "self-test failed to parse: %s" s);
         exit 2
