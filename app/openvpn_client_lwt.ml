@@ -162,7 +162,7 @@ let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
 let now () = Ptime_clock.now ()
 
 let resolve (name, ip_version) =
-  let res = Dns_client_lwt.create ~clock:ts () in
+  let res = Dns_client_lwt.create () in
   match ip_version with
   | `Ipv4 | `Any ->
     begin
