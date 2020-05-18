@@ -128,13 +128,15 @@ dev tun
     (Ok (minimal_config |> Openvpn.Config.add Dev (`Tun, None)))
     explicit_dynamic_tun ;
 
-  let explicit_tun =
+  let explicit_tun_str =
     (* this is interesting because it results in multiple
        dev-type stanzas since [dev tun0] implie [dev-type tun] *)
     Fmt.strf {|%a
 dev tun0
 dev-type tun
-|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
+|} Openvpn.Config.pp minimal_config
+  in
+  let explicit_tun = parse_noextern_client explicit_tun_str in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev and dev-type"
     (Ok tun0) explicit_tun ;
@@ -148,7 +150,26 @@ dev myvlan
   Alcotest.(check (result conf_map pmsg))
     "explicit dev, implicit dev-type"
     (Ok (minimal_config |> Openvpn.Config.add Dev (`Tap, Some "myvlan")))
-    custom_name_tap
+    custom_name_tap ;
+
+  let two_remotes_str =
+    Fmt.strf "%a" Openvpn.Config.pp minimal_config
+    ^ "\ndev tun0\ndev-type tun\nremote number1.org 11\nremote number2.org 22" in
+  let two_remotes =
+    minimal_config
+    |> Openvpn.Config.add Dev (`Tun, Some "tun0")
+    |> Openvpn.Config.add Remote @@
+    Openvpn.Config.get Remote minimal_config
+    @  [
+      `Domain (Domain_name.(of_string_exn "number1.org" |> host_exn)
+                 , `Any), 11, `Udp ;
+      `Domain (Domain_name.(of_string_exn "number2.org" |> host_exn)
+                       , `Any), 22, `Udp ;
+       ] in
+  Alcotest.(check (result conf_map pmsg))
+    "ordering of remotes remains the same after dev-type (regression)"
+    (Ok two_remotes)
+    (two_remotes_str |> parse_noextern_client)
 
 let auth_user_pass_trailing_whitespace () =
   (* Seems to me that the OpenVPN upstream accepts this and we don't.
@@ -249,6 +270,8 @@ testpass
     | Error `Msg msg ->
       raise (Invalid_argument ("Can't parse embedded config" ^ msg))
   in
+  let expected_remotes =
+    ["ip:10.0.42.5:1234"; "ip:10.0.42.3:1194"; "ip:10.0.42.4:1234"] in
   Alcotest.(check (result conf_map pmsg))
     "rport doesn't override explicits that coincide with the default"
     (Ok expected) sample ;
@@ -257,7 +280,22 @@ testpass
     (Ok config) sample ;
   Alcotest.(check (result conf_map pmsg))
     "rport doesn't override explicits that coincide with the default (expected)"
-    (Ok config) (Ok expected)
+    (Ok config) (Ok expected) ;
+  Alcotest.(check @@ result (list string) reject)
+    "order of remotes stays correct"
+    (Ok expected_remotes)
+    (let open Rresult in
+     sample >>| fun sample -> get Remote sample |> List.map (function
+         | `Ip ip, port, _ ->
+          "ip:" ^ Ipaddr.to_string ip ^ ":" ^ string_of_int port
+         | `Domain _, _, _ -> failwith ""
+       )) ;
+  Alcotest.(check @@ result string reject) "serialized version stays correct"
+    (Ok "remote 10.0.42.5 1234 udp4\n\
+    remote 10.0.42.3 1194 udp4\n\
+    remote 10.0.42.4 1234 udp4")
+    (let open Rresult in sample >>| fun sample ->
+     Fmt.strf "%a" pp (singleton Remote (get Remote sample)))
 
 let whitespace_after_tls_auth () =
   let expected = Openvpn.Config.add Tls_auth

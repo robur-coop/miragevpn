@@ -1176,11 +1176,24 @@ let eq : eq = { f = fun (type x) (k: x k) (v:x) (v2:x) ->
       | Tls_auth, (dir, a,b,c,d), (dir', a',b',c',d') ->
         dir = dir' && Cstruct.equal a a' && Cstruct.equal b b'
         && Cstruct.equal c c' && Cstruct.equal d d'
+      | Remote, remotes_lst, remotes_lst2 ->
+        List.for_all2 (fun (a,port1,proto1) (b,port2,proto2) ->
+            port1 = port2 && proto1 = proto2
+            && match a,b with
+            | `Domain (host_a, ipv_a),
+              `Domain (host_b, ipv_b) ->
+              ipv_a = ipv_b && Domain_name.equal host_a host_b
+            | `Ip a , `Ip b ->
+              0 = Ipaddr.compare a b
+            | (`Domain _ | `Ip _),
+              (`Domain _ | `Ip _) -> false
+          ) remotes_lst remotes_lst2
       | _ ->     (*TODO non-polymorphic comparison*)
         let eq = (v = v2) in
         Logs.debug
-          (fun m -> m "eq self-test: @[<v>%a@,<>@,%a@]"
+          (fun m -> m "eq self-test: @[<v>%a@, %s @,%a@]"
               pp (singleton k v)
+              (if true then "=" else "<>")
               pp (singleton k v2)) ;
         eq
     end }
@@ -1438,9 +1451,14 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
             List.fold_left (fun (typs, nams, other) -> function
                 | `Dev_type typ -> (typ::typs), nams, other
                 | `Dev name -> typs, (name::nams), other
-                | o -> typs, nams, (o::other))
+                | o -> typs, nams, (o::other)
+                (* o::other reverses the list, in order to keep
+                   Remote and other order-sensitive stanzas intact
+                   we need to List.rev the [tl] list. *)
+              )
               ([], [], []) (current :: tl)
           in
+          let tl = List.rev tl in (* Fix [tl] ordering *)
           begin match typs, names with
             | [typ], [name] ->
               (* custom named tun/tap device: *)

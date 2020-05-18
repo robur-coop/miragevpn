@@ -24,7 +24,7 @@ depends: [
   "logs"     { >= "0.6.2" }
   "rresult"  { >= "0.6.0" }
 
-  "angstrom"
+  "angstrom" { < "0.14.0" }
   "cstruct"  { >= "4.0.0" }
   "cmdliner"
   "domain-name" { >= "0.2.0" }
@@ -40,7 +40,7 @@ depends: [
   "ptime"
   "rresult"
   "tls" {>= "0.11.0"}
-  "dns-client" {>= "4.0.0"}
+  "dns-client" {>= "4.5.0"}
   "x509" {>= "0.10.0"}
   "duration"
 

@@ -214,7 +214,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
 end
 
 module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
-  module DNS = Dns_client_mirage.Make(R)(M)(S)
+  module DNS = Dns_client_mirage.Make(R)(T)(M)(S)
   module TCP = S.TCPV4
   module UDP = S.UDPV4
 
