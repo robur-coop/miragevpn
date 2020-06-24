@@ -108,7 +108,7 @@ module Conf_map = struct
     | Route_metric : [`Default | `Metric of int] k
     | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
-    | Server : (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) k
+    | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth : ([ `Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_cert   : X509.Certificate.t k
@@ -315,9 +315,10 @@ module Conf_map = struct
     | Script_security, d -> p() "script-security %u" d
     | Secret, (a, b, c, d) ->
       p() "<secret>\n%a\n</secret>" pp_key (a, b, c, d)
-    | Server, (ip, mask) ->
-      p() "server %a %a" Ipaddr.V4.pp ip Ipaddr.V4.pp
-        (Ipaddr.V4.Prefix.netmask mask)
+    | Server, cidr ->
+      p() "server %a %a"
+        Ipaddr.V4.pp (Ipaddr.V4.Prefix.address cidr)
+        Ipaddr.V4.pp (Ipaddr.V4.Prefix.netmask cidr)
     | Tls_auth, (direction, a,b,c,d) ->
       p() "tls-auth [inline]%s\n<tls-auth>\n%a\n</tls-auth>"
         (match direction with
@@ -630,7 +631,7 @@ let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
 let a_secret str =
-  match parse_string (inline_payload "secret") str with
+  match parse_string ~consume:Consume.All (inline_payload "secret") str with
   | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
   | Error e -> Error e
 
@@ -744,7 +745,7 @@ let a_entry_one_number name =
   string name *> a_whitespace *> pos >>= fun off -> commit *>
   (a_single_param <|> fail off "parameter needed"
   ) >>= fun num ->
-  parse_string a_number num |> function
+  parse_string ~consume:Consume.All a_number num |> function
   | Ok v -> return v
   | Error msg -> fail off msg
 
@@ -793,7 +794,7 @@ let a_domain_name =
 
 let a_domain_or_ip =
   a_single_param >>= fun param ->
-  Angstrom.parse_string
+  Angstrom.parse_string ~consume:Consume.All
     (choice ~failure_msg:"not a hostname nor an IP" [
         (a_ip >>| fun ip -> `Ip ip) ;
         (a_domain_name >>| fun dns -> `Domain dns)])
@@ -906,12 +907,11 @@ let a_verify_client_cert =
   ] >>| fun v -> `Entry (B (Verify_client_cert, v))
 
 let a_server =
-  let server ip mask =
-    `Entry (B(Server, (ip, Ipaddr.V4.Prefix.of_netmask mask ip)))
-  in
-  lift2 server
-    (string "server" *> a_whitespace *> a_ipv4_dotted_quad)
-    (a_whitespace *> a_ipv4_dotted_quad)
+  (string "server" *> a_whitespace *> a_ipv4_dotted_quad) >>= fun address ->
+  (a_whitespace *> a_ipv4_dotted_quad) >>= fun netmask ->
+  match Ipaddr.V4.Prefix.of_netmask ~netmask ~address with
+  | Ok cidr -> return (`Entry (B (Server, cidr)))
+  | Error `Msg m -> fail m
 
 let a_cipher =
   string "cipher" *> a_whitespace *>
@@ -1119,7 +1119,7 @@ let a_config_entry : line A.t =
 let parse_internal config_str : (line list, 'x) result =
   let a_ign_ws = skip_many (skip @@ function '\r' | '\n'| ' ' | '\t' -> true
                                            | _ -> false) in
-  config_str |> parse_string
+  config_str |> parse_string ~consume:Consume.All
   @@ fix (fun recurse ->
       (a_ign_ws *> a_config_entry <* a_ign_ws >>= fun entry ->
        commit *>
@@ -1144,8 +1144,9 @@ let parse_inline str = let open Rresult in
   function
   | `Auth_user_pass ->
     (* TODO openvpn doesn't seem to allow inlining passwords, we do.. *)
-    parse_string a_auth_user_pass_payload str
-  | `Tls_auth direction -> parse_string (a_tls_auth_payload direction) str
+    parse_string ~consume:Consume.All a_auth_user_pass_payload str
+  | `Tls_auth direction ->
+    parse_string ~consume:Consume.All (a_tls_auth_payload direction) str
   | `Connection ->
     (* TODO entries can sometimes be nested, like in <connection> blocks:
        The following OpenVPN options may be used inside of  a  <connection> block:
@@ -1155,10 +1156,9 @@ let parse_inline str = let open Rresult in
        proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
     (* TODO basically a Connection block is a subset of Conf_map.t,
        we should use the same parser.*)
-    parse_string a_remote str >>= fun (`Remote (host, port, proto)) ->
-    let proto = match proto with None -> `Udp
-                               (* TODO consult `Proto and `Proto_force *)
-                               | Some x -> x in
+    parse_string ~consume:Consume.All a_remote str >>= fun (`Remote (host, port, proto)) ->
+    (* TODO consult `Proto and `Proto_force *)
+    let proto = match proto with None -> `Udp | Some x -> x in
     let port = match port with `Default_rport -> 1194 | `Port i -> i in
     Ok (B(Remote, ([host, port, proto])))
   | `Ca -> a_ca_payload str

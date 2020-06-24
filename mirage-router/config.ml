@@ -16,6 +16,7 @@ let openvpn_handler =
       package "logs" ;
       package ~pin ~sublibs:["mirage"] "openvpn";
       package "mirage-kv";
+      package ~min:"3.8.0" "mirage-runtime";
     ]
   in
   foreign

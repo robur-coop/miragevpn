@@ -1,6 +1,6 @@
 open Lwt.Infix
 
-let open_tun config {Openvpn.ip ; gateway ; _ }
+let open_tun config { Openvpn.cidr ; gateway }
   : (Openvpn.Config.t * Lwt_unix.file_descr, [> `Msg of string]) Lwt_result.t =
   (* This returns a Config with updated MTU, and a file descriptor for
      the TUN interface *)
@@ -26,7 +26,9 @@ let open_tun config {Openvpn.ip ; gateway ; _ }
       | None -> Openvpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config in
     begin
       (* TODO factor the uname -s out into a separate library *)
-      let local, remote = Ipaddr.V4.to_string ip, Ipaddr.V4.to_string gateway in
+      let local = Ipaddr.V4.to_string (Ipaddr.V4.Prefix.address cidr)
+      and remote = Ipaddr.V4.to_string gateway
+      in
       match
         let cmd = "uname -s" in
         let process = Unix.open_process_in cmd in
@@ -402,7 +404,7 @@ let parse_config filename =
 
 let jump _ filename =
   Printexc.record_backtrace true;
-  Mirage_crypto_rng_unix.initialize ();
+  Mirage_crypto_rng_lwt.initialize ();
   Lwt_main.run (
     parse_config filename >>= function
     | Error `Msg s -> Lwt.fail_with ("config parser: " ^ s)

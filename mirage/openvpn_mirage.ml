@@ -116,9 +116,10 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
           client_state := s';
           let ip =
             match action with
-            | Some `Established  ({ Openvpn.ip ; _ }, _) ->
+            | Some `Established  ({ Openvpn.cidr ; _ }, _) ->
               Log.info (fun m -> m "%a insert ip %a, registering flow"
-                           pp_dst dst Ipaddr.V4.pp ip);
+                           pp_dst dst Ipaddr.V4.Prefix.pp cidr);
+              let ip = Ipaddr.V4.Prefix.address cidr in
               t.connections <- IPM.add ip (f, client_state) t.connections;
               `Continue (Some ip)
             | Some `Exit ->
@@ -234,7 +235,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let now () = Ptime.v (P.now_d_ps ())
 
-  let get_ip t = t.ip_config.Openvpn.ip
+  let get_ip t = Ipaddr.V4.Prefix.address t.ip_config.Openvpn.cidr
 
   let mtu t = t.mtu
 
@@ -449,7 +450,9 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       let rec established () =
         (* TODO: signal to upper layer!? *)
         Lwt_mvar.take est_mvar >>= fun (ip_config', mtu') ->
-        let ip_changed = Ipaddr.V4.compare ip_config.ip ip_config'.ip <> 0 in
+        let ip_changed =
+          let i c = Ipaddr.V4.Prefix.address c.Openvpn.cidr in
+          Ipaddr.V4.compare (i ip_config) (i ip_config') <> 0 in
         Log.debug (fun m -> m "tunnel re-established (ip changed? %B) %a (mtu %d)"
                       ip_changed Openvpn.pp_ip_config ip_config' mtu');
         if ip_changed then
