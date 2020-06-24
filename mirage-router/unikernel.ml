@@ -44,12 +44,12 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Openvpn.Config.parse_client ~string_of_file data
 
   let local_network ip =
-    let net, my_ip = Key_gen.private_ipv4 () in
-    if Ipaddr.V4.compare my_ip ip = 0 then begin
+    let cidr = Key_gen.private_ipv4 () in
+    if Ipaddr.V4.compare (Ipaddr.V4.Prefix.address cidr) ip = 0 then begin
       Logs.warn (fun m -> m "a packet directed to us (ignoring)");
       false
     end else
-      Ipaddr.V4.Prefix.mem ip net
+      Ipaddr.V4.Prefix.mem ip cidr
 
   let forward_or_reject hdr payload mtu =
     (* there are actually four potential outcomes here:
@@ -246,7 +246,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                   | Error `Drop -> ()
               else
                 Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
-                              Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (fst (Key_gen.private_ipv4 ())))
+                              Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (Key_gen.private_ipv4 ()))
           end;
           Lwt.return c
         | Error msg ->

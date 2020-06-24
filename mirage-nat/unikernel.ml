@@ -27,7 +27,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   module Private_routing = Routing.Make(Log)(A)
 
   let start _ _ _ _ s net eth arp _ip data =
-    let private_ip_net, private_ip = Key_gen.private_ipv4 () in
+    let private_ip_cidr = Key_gen.private_ipv4 () in
     read_config data >>= function
     | Error (`Msg m) -> Lwt.fail_with m
     | Ok config ->
@@ -47,7 +47,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             Lwt.return_unit
         and output_private packet =
           let dst = match packet with `IPv4 (p, _) -> p.Ipv4_packet.dst in
-          Private_routing.destination_mac private_ip_net None arp dst >>= function
+          Private_routing.destination_mac private_ip_cidr None arp dst >>= function
           | Error e ->
             Log.err (fun m -> m "could not send packet, error: %s"
                         (match e with `Local -> "local" | `Gateway -> "gateway"));
@@ -87,7 +87,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           Log.debug (fun f -> f "Private interface got a packet: %a"
                         Nat_packet.pp packet);
           let dst = match packet with `IPv4 (p, _) -> p.Ipv4_packet.dst in
-          if Ipaddr.V4.compare dst private_ip = 0 then begin
+          if Ipaddr.V4.compare dst (Ipaddr.V4.Prefix.address private_ip_cidr) = 0 then begin
             Log.debug (fun m -> m "ignoring ip packet for ourselves");
             Lwt.return_unit
           end else
