@@ -404,7 +404,7 @@ let parse_config filename =
 
 let jump _ filename =
   Printexc.record_backtrace true;
-  Mirage_crypto_rng_unix.initialize ();
+  Mirage_crypto_rng_lwt.initialize ();
   Lwt_main.run (
     parse_config filename >>= function
     | Error `Msg s -> Lwt.fail_with ("config parser: " ^ s)
