@@ -24,14 +24,14 @@ depends: [
   "logs"     { >= "0.6.2" }
   "rresult"  { >= "0.6.0" }
 
-  "angstrom" { < "0.14.0" }
+  "angstrom" { >= "0.14.0" }
   "cstruct"  { >= "4.0.0" }
   "cmdliner"
   "domain-name" { >= "0.2.0" }
   "fmt"
   "gmap"     { >= "0.3.0" }
   "hex"      { >= "1.4.0" }
-  "ipaddr"   { >= "3.1.0" }
+  "ipaddr"   { >= "5.0.0" }
   "logs"
   "cstruct-lwt"
   "lwt"

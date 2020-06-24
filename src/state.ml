@@ -87,14 +87,13 @@ let set_keys ch keys =
   { ch with channel_st }
 
 type ip_config = {
-  ip : Ipaddr.V4.t ;
-  prefix : Ipaddr.V4.Prefix.t ;
+  cidr : Ipaddr.V4.Prefix.t ;
   gateway : Ipaddr.V4.t ;
 }
 
-let pp_ip_config ppf { ip ; prefix ; gateway } =
-  Fmt.pf ppf "ip %a prefix %a gateway %a"
-    Ipaddr.V4.pp ip Ipaddr.V4.Prefix.pp prefix Ipaddr.V4.pp gateway
+let pp_ip_config ppf { cidr ; gateway } =
+  Fmt.pf ppf "ip %a gateway %a"
+    Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
 
 type event = [
   | `Resolved of Ipaddr.t
@@ -145,37 +144,40 @@ let pp_action ppf = function
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with
-  | (V4 ip, V4 mask), `Ip (V4 gateway) ->
-    let prefix = Ipaddr.V4.Prefix.of_netmask mask ip in
-    { ip ; prefix ; gateway }
+  | (V4 address, V4 netmask), `Ip (V4 gateway) ->
+    let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
+    { cidr ; gateway }
   | _ -> assert false
 
 let server_ip config =
-  let ip, prefix = Config.get Server config in
-  let network = Ipaddr.V4.Prefix.network prefix in
-  if Ipaddr.V4.Prefix.mem ip prefix && not (Ipaddr.V4.compare ip network = 0) then
-    ip, prefix
+  let cidr = Config.get Server config in
+  let network = Ipaddr.V4.Prefix.network cidr
+  and ip = Ipaddr.V4.Prefix.address cidr
+  in
+  if not (Ipaddr.V4.compare ip network = 0) then
+    ip, cidr
   else
     (* take first IP in subnet (unless server a.b.c.d/netmask) with a.b.c.d not being the network address *)
-    let ip' = Ipaddr.V4.of_int32 (Int32.succ (Ipaddr.V4.to_int32 network)) in
-    assert (Ipaddr.V4.Prefix.mem ip' prefix);
-    ip', prefix
+    let ip' = Ipaddr.V4.Prefix.first cidr in
+    ip', cidr
 
 let next_free_ip config is_not_taken =
-  let _, prefix = Config.get Server config in
-  let network = Ipaddr.V4.Prefix.network prefix in
+  let cidr = Config.get Server config in
+  let network = Ipaddr.V4.Prefix.network cidr in
   let server_ip = fst (server_ip config) in
   (* could be smarter than a linear search *)
   let rec isit ip =
-    if Ipaddr.V4.Prefix.mem ip prefix then
+    if Ipaddr.V4.Prefix.mem ip cidr then
       if not (Ipaddr.V4.compare ip server_ip = 0) && not (Ipaddr.V4.compare ip network = 0) && is_not_taken ip then
-        Ok (ip, prefix)
-      else
-        isit Ipaddr.V4.(of_int32 (Int32.succ (to_int32 ip)))
+        let cidr' = Ipaddr.V4.Prefix.make (Ipaddr.V4.Prefix.bits cidr) ip in
+        Ok (ip, cidr')
+      else match Ipaddr.V4.succ ip with
+        | Ok ip' -> isit ip'
+        | Error e -> Error e
     else
       Error (`Msg "all ips are taken")
   in
-  isit network
+  isit (Ipaddr.V4.Prefix.first cidr)
 
 type session = {
   my_session_id : int64 ;

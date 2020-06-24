@@ -269,10 +269,10 @@ let kex_server config session (keys : key_source) tls data =
   | Some (tls', payload) ->
     begin match Config.find Ifconfig config with
       | None -> Ok (Push_request_sent (tls', keys_ctx), None)
-      | Some (Ipaddr.V4 ip, Ipaddr.V4 mask) ->
+      | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
         let ip_config =
-          let prefix = Ipaddr.V4.Prefix.of_netmask mask ip in
-          { ip ; prefix ; gateway = fst (server_ip config) }
+          let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
+          { cidr ; gateway = fst (server_ip config) }
         in
         Ok (Established keys_ctx, Some ip_config)
       | _ ->
@@ -440,7 +440,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
         if Cstruct.(equal Packet.push_request data) then
           (* send push reply, register IP etc. *)
           let server_ip = fst (server_ip config) in
-          next_free_ip config is_not_taken >>= fun (ip, prefix) ->
+          next_free_ip config is_not_taken >>= fun (ip, cidr) ->
           let ping = match Config.get Ping_interval config with
             | `Not_configured -> 10
             | `Seconds n -> n
@@ -455,13 +455,13 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
             "topology subnet" ;
             "ping " ^ string_of_int ping ;
             restart ;
-            "ifconfig " ^ Ipaddr.V4.to_string ip ^ " " ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask prefix)
+            "ifconfig " ^ Ipaddr.V4.to_string ip ^ " " ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr)
           ] in
           let reply = String.concat "," reply_things in
           push_reply tls' reply >>= fun (_tls'', out) ->
           let channel_st = Established keys in
-          let ip_config = { ip ; prefix ; gateway = server_ip } in
-          let config' = Config.add Ifconfig (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask prefix)) config in
+          let ip_config = { cidr ; gateway = server_ip } in
+          let config' = Config.add Ifconfig (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr)) config in
           Ok (Some ip_config, config', session, { channel with channel_st }, [ `Control, out ])
         else
           Error (`Msg "expected push request")
@@ -1136,9 +1136,8 @@ let handle_static_client t s keys ev =
       begin match Config.get Ifconfig t.config with
         | V4 my_ip, V4 their_ip ->
           let mtu = Config.get Tun_mtu t.config in
-          let prefix = Ipaddr.V4.Prefix.make 24 my_ip in
-          (* TODO -- completely unclear which netmask, it is a point-to-point interface *)
-          let est = `Established ({ ip = my_ip ; prefix ; gateway = their_ip }, mtu) in
+          let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
+          let est = `Established ({ cidr ; gateway = their_ip }, mtu) in
           let protocol = match remote idx with _, _, proto -> proto in
           let session = { t.session with protocol } in
           let keys, payload =

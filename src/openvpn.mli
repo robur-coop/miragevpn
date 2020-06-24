@@ -168,7 +168,7 @@ module Config : sig
 
     | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
-    | Server : (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) k
+    | Server : Ipaddr.V4.Prefix.t k
 
     | Tls_auth : ([`Incoming | `Outgoing] option
                   * Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
@@ -254,8 +254,7 @@ type t
 type server
 
 type ip_config = {
-  ip : Ipaddr.V4.t ;
-  prefix : Ipaddr.V4.Prefix.t ;
+  cidr : Ipaddr.V4.Prefix.t ;
   gateway : Ipaddr.V4.t ;
 }
 
