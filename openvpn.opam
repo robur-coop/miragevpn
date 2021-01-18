@@ -45,9 +45,13 @@ depends: [
   "duration"
 
   "tuntap" {>= "1.8.1"}
+
+  "astring"
+  "mtime"
+  "randomconv"
   # mirage:
   "mirage-stack" {>= "2.0.0"}
-  "mirage-protocols" {>= "4.0.0"}
+  "mirage-protocols" {>= "5.0.0"}
   "tcpip" {>= "4.1.0"}
   "mirage-random" {>= "2.0.0"}
   "mirage-clock" {>= "3.0.0"}

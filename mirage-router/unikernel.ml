@@ -218,7 +218,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                   Logs.warn (fun m -> m "ignoring %a (cannot decode IP protocol number)"
                                 Ipv4_packet.pp hdr)
                 | Some proto ->
-                  match forward_or_reject hdr payload (I.mtu t.private_ip) with
+                  match forward_or_reject hdr payload (I.mtu t.private_ip ~dst:hdr.Ipv4_packet.dst) with
                   | Ok hdr ->
                     Lwt.async (fun () ->
                         (* The IPv4.write here takes care of fragmenting the packet*)

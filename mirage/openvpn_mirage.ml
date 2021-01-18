@@ -494,7 +494,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
 
   let get_ip t = O.get_ip t.ovpn
 
-  let mtu t = O.mtu t.ovpn
+  let mtu t ~dst:_ = O.mtu t.ovpn
 
   let encode hdr data =
     let payload_len = Cstruct.len data
@@ -532,7 +532,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
         proto = Ipv4_packet.Marshal.protocol_to_int proto }
     in
     (* now we take chunks of (mtu - hdr_len) one at a time *)
-    let mtu = mtu t in
+    let mtu = mtu t ~dst in
     let ip_payload_len = mtu - Ipv4_wire.sizeof_ipv4 in
     if (not fragment && ip_payload_len < pay_len) || ip_payload_len <= 0 then
       Lwt.return (Error `Would_fragment)
