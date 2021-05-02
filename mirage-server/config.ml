@@ -16,7 +16,7 @@ let openvpn_handler =
   in
   foreign
     ~packages
-    "Unikernel.Main" (random @-> mclock @-> pclock @-> time @-> stackv4 @-> kv_ro @-> job)
+    "Unikernel.Main" (random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> kv_ro @-> job)
 
 let () =
-  register "ovpn-server" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4 default_network $ data ]
+  register "ovpn-server" [openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ generic_stackv4v6 default_network $ data ]

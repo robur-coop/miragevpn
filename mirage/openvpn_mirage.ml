@@ -42,8 +42,8 @@ module Log = (val Logs.src_log src : Logs.LOG)
 (* NB for the internal/VPN thingy, a stack is needed that is not backed by an
    ethernet interface or similar, but only virtual (i.e. using 10.8.0.1,
    send/recv operations local only) *)
-module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
-  module TCP = S.TCPV4
+module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) = struct
+  module TCP = S.TCP
 
   module IPM = Map.Make(Ipaddr.V4)
 
@@ -56,7 +56,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
   let now () = Ptime.v (P.now_d_ps ())
 
   let pp_dst ppf (dst, port) =
-    Fmt.pf ppf "%a:%u" Ipaddr.V4.pp dst port
+    Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
 
   let write t dst cs =
     match IPM.find_opt dst t.connections with
@@ -208,20 +208,20 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
       Log.info (fun m -> m "openvpn server listening on port %d, using %a/%d"
                    port Ipaddr.V4.pp (fst ip) (Ipaddr.V4.Prefix.bits (snd ip)));
       let server = { server ; ip ; connections = IPM.empty } in
-      S.listen_tcpv4 stack ~port (callback server);
+      S.listen_tcp stack ~port (callback server);
       Lwt.async (timer server);
       server
 
 end
 
-module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
+module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) = struct
   module DNS = Dns_client_mirage.Make(R)(T)(M)(S)
-  module TCP = S.TCPV4
-  module UDP = S.UDPV4
+  module TCP = S.TCP
+  module UDP = S.UDP
 
   type conn = {
     mutable o_client : Openvpn.t ;
-    mutable peer : [ `Udp of UDP.t * (int * Ipaddr.V4.t * int) | `Tcp of TCP.flow ] option ;
+    mutable peer : [ `Udp of UDP.t * (int * Ipaddr.t * int) | `Tcp of TCP.flow ] option ;
     data_mvar : Cstruct.t list Lwt_mvar.t ;
     est_mvar : (Openvpn.ip_config * int) Lwt_mvar.t ;
     event_mvar : Openvpn.event Lwt_mvar.t ;
@@ -242,7 +242,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let transmit_tcp flow data =
     let ip, port = TCP.dst flow in
     Log.debug (fun m -> m "sending %d bytes to %a:%d"
-                 (Cstruct.lenv data) Ipaddr.V4.pp ip port);
+                 (Cstruct.lenv data) Ipaddr.pp ip port);
     TCP.writev flow data >|= function
     | Ok () -> true
     | Error e ->
@@ -296,7 +296,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
 
   let rec reader c flow =
     let ip, port = TCP.dst flow in
-    Log.debug (fun m -> m "reading flow %a:%d" Ipaddr.V4.pp ip port);
+    Log.debug (fun m -> m "reading flow %a:%d" Ipaddr.pp ip port);
     read_flow flow >>= fun r ->
     let n =
       match r with
@@ -304,7 +304,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       | `Data r -> Cstruct.len r
       | _ -> assert false
     in
-    Log.debug (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.V4.pp ip port n);
+    Log.debug (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.pp ip port n);
     Lwt_mvar.put c r >>= fun () ->
     match r with
     | `Data _ -> reader c flow
@@ -313,27 +313,27 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Lwt.return_unit
 
   let udp_read_cb port c (our_port, peer_ip, their_port) ~src ~dst:_ ~src_port data =
-    if port = our_port && src_port = their_port && Ipaddr.V4.compare peer_ip src = 0 then begin
-      Log.debug (fun m -> m "read %a:%d (%d bytes)" Ipaddr.V4.pp src src_port
+    if port = our_port && src_port = their_port && Ipaddr.compare peer_ip src = 0 then begin
+      Log.debug (fun m -> m "read %a:%d (%d bytes)" Ipaddr.pp src src_port
                     (Cstruct.len data));
       Lwt_mvar.put c (`Data data)
     end else begin
       Log.info (fun m -> m "ignoring unsolicited data from %a:%d (expected %a:%d, our %d dst %d)"
-                   Ipaddr.V4.pp src src_port Ipaddr.V4.pp peer_ip their_port
+                   Ipaddr.pp src src_port Ipaddr.pp peer_ip their_port
                    our_port port);
       Lwt.return_unit
     end
 
   (* TODO the "sw" argument is not used and should be removed! *)
   let connect_tcp sw s (ip, port) =
-    TCP.create_connection (S.tcpv4 s) (ip, port) >|= function
+    TCP.create_connection (S.tcp s) (ip, port) >|= function
     | Ok flow ->
       Log.info (fun m -> m "connection to %a:%d established"
-                   Ipaddr.V4.pp ip port);
+                   Ipaddr.pp ip port);
       (sw, Some flow)
     | Error tcp_err ->
       Log.err (fun m -> m "failed to connect to %a:%d: %a"
-                  Ipaddr.V4.pp ip port TCP.pp_error tcp_err);
+                  Ipaddr.pp ip port TCP.pp_error tcp_err);
       (sw, None)
 
   (* TODO could be part of type conn above *)
@@ -345,22 +345,19 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       resolve_hostname s name >>= fun r ->
       let ev = match r with None -> `Resolve_failed | Some x -> `Resolved x in
       Lwt_mvar.put conn.event_mvar ev
-    | `Connect (Ipaddr.V6 _, _, _) ->
-      Log.err (fun m -> m "IPv6 not implemented yet, won't connect");
-      Lwt_mvar.put conn.event_mvar `Connection_failed
-    | `Connect (Ipaddr.V4 ip, port, `Udp) ->
+    | `Connect (ip, port, `Udp) ->
       (* we don't use the switch, but an earlier connection attempt may have used TCP *)
       Lwt_switch.turn_off !conn_est >>= fun () ->
       conn_est := Lwt_switch.create ();
       (* TODO we may wish to filter certain ports (< 1024) *)
       let our_port = Randomconv.int16 R.generate in
       let peer = our_port, ip, port in
-      conn.peer <- Some (`Udp (S.udpv4 s, peer));
-      S.listen_udpv4 s ~port:our_port (udp_read_cb our_port conn.event_mvar peer);
+      conn.peer <- Some (`Udp (S.udp s, peer));
+      S.listen_udp s ~port:our_port (udp_read_cb our_port conn.event_mvar peer);
       (* TODO for UDP, we atm can't figure out connection failures
          (timeout should work, but ICMP refused/.. won't be delivered here) *)
       Lwt_mvar.put conn.event_mvar `Connected
-    | `Connect (Ipaddr.V4 ip, port, `Tcp) ->
+    | `Connect (ip, port, `Tcp) ->
       Lwt_switch.turn_off !conn_est >>= fun () ->
       let sw = Lwt_switch.create () in
       conn_est := sw;
@@ -373,7 +370,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             conn.peer <- Some (`Tcp flow);
             Lwt.async (fun () -> reader conn.event_mvar flow);
             Log.info (fun m -> m "successfully established connection to %a:%d"
-                         Ipaddr.V4.pp ip port);
+                         Ipaddr.pp ip port);
             `Connected
         in
         Lwt_mvar.put conn.event_mvar ev
@@ -389,7 +386,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
           Log.err (fun m -> m "unsure how to disconnect UDP"); Lwt.return_unit
         | Some (`Tcp f) ->
           let ip, port = TCP.dst f in
-          Log.err (fun m -> m "disconnecting flow %a:%d" Ipaddr.V4.pp ip port);
+          Log.err (fun m -> m "disconnecting flow %a:%d" Ipaddr.pp ip port);
           conn.peer <- None ; TCP.close f
       end
     | `Exit -> Lwt.fail_with "exit called"
@@ -466,7 +463,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Ok t
 end
 
-module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4) = struct
+module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) = struct
   module O = Make(R)(M)(P)(T)(S)
 
   type t = {

@@ -197,8 +197,8 @@ let derive_keys session (key_source : State.key_source) (tls_data : Packet.tls_d
 
 let incoming_tls tls data =
   match Tls.Engine.handle_tls tls data with
-  | `Fail (f, `Response _) -> Error (`Tls (`Fail f))
-  | `Ok (r, `Response out, `Data d) -> match r with
+  | Error (f, `Response _) -> Error (`Tls (`Fail f))
+  | Ok (r, `Response out, `Data d) -> match r with
     | `Eof | `Alert _ as e ->
       Logs.err (fun m -> m "response %a, TLS payload %a"
                    Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
@@ -320,12 +320,12 @@ let incoming_control_client config rng session channel now op data =
           Logs.info (fun m -> m "authenticating with CA %a"
                         X509.Certificate.pp ca);
           X509.Authenticator.chain_of_trust
-            ~hash_whitelist:Mirage_crypto.Hash.hashes
+            ~allowed_hashes:Mirage_crypto.Hash.hashes
             ~time:(fun () -> Some now) [ ca ]
       in
       let certificates =
         match Config.find Tls_cert config, Config.find Tls_key config with
-        | Some cert, Some (`RSA key) -> `Single ([cert], key)
+        | Some cert, Some key -> `Single ([cert], key)
         | _ -> `None
       in
       Tls.(Engine.client (Config.client ~certificates ~authenticator ()))
@@ -395,7 +395,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
   match channel.channel_st, op with
   | Expect_reset, (Packet.Hard_reset_client | Packet.Soft_reset) ->
     (* TODO may need to do client certificate authentication here! *)
-    let _ca, server, `RSA key =
+    let _ca, server, key =
       Config.get Ca config,
       Config.get Tls_cert config,
       Config.get Tls_key config

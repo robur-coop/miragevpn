@@ -9,8 +9,8 @@
 open Lwt.Infix
 
 module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S)
-    (S : Mirage_stack.V4)
-    (N : Mirage_net.S) (E : Mirage_protocols.ETHERNET) (A : Mirage_protocols.ARP) (I : Mirage_protocols.IPV4)
+    (S : Mirage_stack.V4V6)
+    (N : Mirage_net.S) (E : Mirage_protocols.ETHERNET) (A : Mirage_protocols.ARP) (_ : Mirage_protocols.IPV4)
     (FS: Mirage_kv.RO) = struct
 
   module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)

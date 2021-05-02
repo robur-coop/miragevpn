@@ -10,7 +10,7 @@ maintainer:   ["robur"]
 license:      "AGPL"
 
 build: [
-  ["dune" "subst" ] {pinned}
+  ["dune" "subst" ] {dev}
   ["dune" "build"   "-p" name "-j" jobs]
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
@@ -39,9 +39,9 @@ depends: [
   "mirage-crypto-rng" {>= "0.8.0"}
   "ptime"
   "rresult"
-  "tls" {>= "0.11.0"}
-  "dns-client" {>= "4.5.0"}
-  "x509" {>= "0.10.0"}
+  "tls" {>= "0.13.0"}
+  "dns-client" {>= "5.0.0"}
+  "x509" {>= "0.13.0"}
   "duration"
 
   "tuntap" {>= "1.8.1"}
@@ -50,7 +50,7 @@ depends: [
   "mtime"
   "randomconv"
   # mirage:
-  "mirage-stack" {>= "2.0.0"}
+  "mirage-stack" {>= "2.2.0"}
   "mirage-protocols" {>= "5.0.0"}
   "tcpip" {>= "4.1.0"}
   "mirage-random" {>= "2.0.0"}
