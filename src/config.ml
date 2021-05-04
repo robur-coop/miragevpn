@@ -635,6 +635,8 @@ let a_secret str =
   | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
   | Error e -> Error e
 
+let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
+
 let a_auth_user_pass_payload =
   (* To protect against a client passing a maliciously  formed  user‐
      name  or  password string, the username string must consist only
@@ -670,7 +672,7 @@ let a_auth_user_pass_payload =
                    turned into an underscore '_' , is this intentional?"
                   (pass_pos + !bad) !bad);
       ) >>= fun pass ->
-    a_ign_whitespace_no_comment *>
+    a_ign_whitespace_nl *>
     return (B (Auth_user_pass, (user,pass)))
   ) <|> fail "reading user/password file failed"
 
