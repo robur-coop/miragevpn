@@ -64,7 +64,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     let icmp_err ?(subheader = Unused) ?(code = 0) ty =
       (* ICMP packet is 8 byte header, plus original IP header, plus original
          payload (8 bytes) *)
-      let plen = min 8 (Cstruct.len payload) in
+      let plen = min 8 (Cstruct.length payload) in
       let orig_payload = Cstruct.sub payload 0 plen in
       let ip_hdr =
         Ipv4_packet.Marshal.make_cstruct ~payload_len:plen hdr
@@ -94,7 +94,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         Error `Drop
       end
     else if hdr.Ipv4_packet.off land 0x4000 = 0x4000 &&
-            Cstruct.len payload > mtu then (* don't fragment set and would fragment *)
+            Cstruct.length payload > mtu then (* don't fragment set and would fragment *)
       if is_first_fragment then
         if is_icmp then begin
           Logs.warn (fun m -> m "received ICMP packet %a where don't fragment is set, but would fragment"
@@ -143,7 +143,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         match forward_or_reject hdr pay pay_mtu with
         | Ok hdr ->
           let hdr, fst, rest =
-            if Cstruct.len pay > pay_mtu then
+            if Cstruct.length pay > pay_mtu then
               let fst, rest = Cstruct.split pay pay_mtu in
               (* need to set 'more fragments' bit in the IPv4 header *)
               let hdr = { hdr with Ipv4_packet.off = 0x2000 } in
@@ -152,7 +152,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
               hdr, pay, []
           in
           let hdr_cs =
-            Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.len fst) hdr
+            Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.length fst) hdr
           in
           let write_one data = O.write t.ovpn data >|= fun _ -> () in
           write_one (Cstruct.append hdr_cs pay) >>= fun () ->
@@ -238,7 +238,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                                dst = hdr.Ipv4_packet.src ;
                                proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
                     } in
-                    let payload_len = Cstruct.len pay in
+                    let payload_len = Cstruct.length pay in
                     let hdr_cs = Ipv4_packet.Marshal.make_cstruct ~payload_len hdr in
                     Lwt.async (fun () ->
                       O.write t.ovpn (Cstruct.append hdr_cs pay) >|= fun _ ->

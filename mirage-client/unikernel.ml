@@ -24,11 +24,11 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     match proto with
     | 1 ->
       Logs.warn (fun m -> m "received ICMP frame %a -> %a (%d bytes)"
-                    Ipaddr.V4.pp src Ipaddr.V4.pp dst (Cstruct.len buf));
+                    Ipaddr.V4.pp src Ipaddr.V4.pp dst (Cstruct.length buf));
       I.input icmp ~src ~dst buf
     | _ ->
       Logs.info (fun m -> m "received IPv4 frame (proto %d) %a -> %a (%d bytes)"
-                    proto Ipaddr.V4.pp src Ipaddr.V4.pp dst (Cstruct.len buf));
+                    proto Ipaddr.V4.pp src Ipaddr.V4.pp dst (Cstruct.length buf));
       Lwt.return_unit
 
   let start _ _ _ _ s data =

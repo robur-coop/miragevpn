@@ -72,7 +72,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             begin function
               | Ok () ->
                 Lwt_list.iter_s (fun pkt ->
-                    let size = Cstruct.len pkt in
+                    let size = Cstruct.length pkt in
                     E.write eth dst `IPv4 ~size
                       (fun buf -> Cstruct.blit pkt 0 buf 0 size ; size) >|= function
                     | Error e -> Log.err (fun f -> f "Failed to send packet to private %a"
