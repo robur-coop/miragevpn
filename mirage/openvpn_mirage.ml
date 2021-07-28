@@ -142,7 +142,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
                           and ip' = { ip with src = ip.dst ; dst = ip.src }
                           in
                           let data = Cstruct.append (Icmpv4_packet.Marshal.make_cstruct ~payload reply) payload in
-                          let hdr = Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.len data) ip' in
+                          let hdr = Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.length data) ip' in
                           Lwt.async (fun () -> write t ip.src (Cstruct.append hdr data))
                         | Error e ->
                           Log.warn (fun m -> m "ignoring icmp frame from, decoding error %s" e)
@@ -301,7 +301,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     let n =
       match r with
       | `Connection_failed -> 0
-      | `Data r -> Cstruct.len r
+      | `Data r -> Cstruct.length r
       | _ -> assert false
     in
     Log.debug (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.pp ip port n);
@@ -315,7 +315,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   let udp_read_cb port c (our_port, peer_ip, their_port) ~src ~dst:_ ~src_port data =
     if port = our_port && src_port = their_port && Ipaddr.compare peer_ip src = 0 then begin
       Log.debug (fun m -> m "read %a:%d (%d bytes)" Ipaddr.pp src src_port
-                    (Cstruct.len data));
+                    (Cstruct.length data));
       Lwt_mvar.put c (`Data data)
     end else begin
       Log.info (fun m -> m "ignoring unsolicited data from %a:%d (expected %a:%d, our %d dst %d)"
@@ -494,7 +494,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
   let mtu t ~dst:_ = O.mtu t.ovpn
 
   let encode hdr data =
-    let payload_len = Cstruct.len data
+    let payload_len = Cstruct.length data
     and hdr_buf = Cstruct.create Ipv4_wire.sizeof_ipv4
     in
     match Ipv4_packet.Marshal.into_cstruct ~payload_len hdr hdr_buf with
@@ -518,7 +518,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
         Cstruct.empty
     in
     let payload = Cstruct.concat (u_hdr :: bufs) in
-    let pay_len = Cstruct.len payload in
+    let pay_len = Cstruct.length payload in
     let hdr =
       let src = match src with None -> get_ip t | Some x -> x in
       let off = if fragment then 0x0000 else 0x4000 in
@@ -564,7 +564,7 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
       Lwt.return_unit
     | Ok (packet, payload) ->
       Log.debug (fun m -> m "received IPv4 frame: %a (payload %d bytes)"
-                    Ipv4_packet.pp packet (Cstruct.len payload));
+                    Ipv4_packet.pp packet (Cstruct.length payload));
       let f', r = Fragments.process t.frags (M.elapsed_ns ()) packet payload in
       t.frags <- f';
       match r with

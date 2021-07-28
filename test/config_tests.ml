@@ -35,10 +35,10 @@ let a_inline_payload str =
   in
   let data = content [] false (Astring.String.cuts ~sep:"\n" str) in
   let cs = Cstruct.of_hex (Astring.String.concat ~sep:"" data) in
-  if Cstruct.len cs = 256 then
+  if Cstruct.length cs = 256 then
     Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128+64) 64)
   else
-    Alcotest.failf "wrong size %d, need exactly 256 bytes" (Cstruct.len cs)
+    Alcotest.failf "wrong size %d, need exactly 256 bytes" (Cstruct.length cs)
 
 let string_of_file filename =
   let config_dir = "sample-configuration-files" in

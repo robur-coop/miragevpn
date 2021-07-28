@@ -25,7 +25,7 @@ depends: [
   "rresult"  { >= "0.6.0" }
 
   "angstrom" { >= "0.14.0" }
-  "cstruct"  { >= "4.0.0" }
+  "cstruct"  { >= "6.0.0" }
   "cmdliner"
   "domain-name" { >= "0.2.0" }
   "fmt"

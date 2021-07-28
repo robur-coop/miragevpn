@@ -166,7 +166,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     expand (hmac ~key seed) len
   in
   let halve secret =
-    Cstruct.split secret (Cstruct.len secret / 2)
+    Cstruct.split secret (Cstruct.length secret / 2)
   in
   let s1, s2 = halve secret in
   let md5 = p_hash Mirage_crypto.Hash.MD5.(hmac, digest_size) s1
@@ -238,7 +238,7 @@ let merge_server_config_into_client config tls_data =
 let maybe_kdf ?with_premaster session key = function
   | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
-    Logs.debug (fun m -> m "received tls payload %d bytes" (Cstruct.len data));
+    Logs.debug (fun m -> m "received tls payload %d bytes" (Cstruct.length data));
     Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
     let keys = derive_keys session key tls_data in
     (* TODO offsets and length depend on some configuration parameters (such as cipher), no? *)
@@ -297,7 +297,7 @@ let maybe_push_reply config = function
     if Cstruct.(equal empty data) then
       Error (`Msg "push request sent: empty TLS reply")
     else
-      let str = Cstruct.(to_string (sub data 0 (pred (len data)))) in
+      let str = Cstruct.(to_string (sub data 0 (pred (length data)))) in
       Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
       begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
         | Some ("", opts) -> Config.merge_push_reply config opts
@@ -559,7 +559,7 @@ let pp_error ppf = function
 
 let pad block_size cs =
   let pad_len =
-    let l = (Cstruct.len cs) mod block_size in
+    let l = (Cstruct.length cs) mod block_size in
     if l = 0 then block_size else block_size - l
   in
   let out = Cstruct.create pad_len in
@@ -567,7 +567,7 @@ let pad block_size cs =
   Cstruct.append cs out
 
 let unpad block_size cs =
-  let l = Cstruct.len cs in
+  let l = Cstruct.length cs in
   let amount = Cstruct.get_uint8 cs (pred l) in
   let len = l - amount in
   if len >= 0 && amount <= block_size then
@@ -613,12 +613,12 @@ let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
   let ctx, payload = out ?add_timestamp ctx compress rng data in
   let out = Packet.encode protocol (key, `Data payload) in
   Logs.debug (fun m -> m "sending %d bytes data (enc %d) out id %lu"
-                 (Cstruct.len data) (Cstruct.len out) ctx.my_packet_id);
+                 (Cstruct.length data) (Cstruct.length out) ctx.my_packet_id);
   (ctx, out)
 
 let outgoing s data =
   let incr ch out =
-    { ch with packets = succ ch.packets ; bytes = Cstruct.len out + ch.bytes }
+    { ch with packets = succ ch.packets ; bytes = Cstruct.length out + ch.bytes }
   in
   match s.state, keys_opt s.channel with
   | Client_static (ctx, c), _ ->
@@ -627,7 +627,7 @@ let outgoing s data =
       out ~add_timestamp ctx s.session.compress s.rng data
     in
     let prefix =
-      Packet.encode_protocol s.session.protocol (Cstruct.len payload)
+      Packet.encode_protocol s.session.protocol (Cstruct.length payload)
     in
     let out = Cstruct.append prefix payload in
     let channel = incr s.channel out in
@@ -740,7 +740,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
   let hdr_len =
     4 + (if add_timestamp then 4 else 0) + (if compress then 1 else 0)
   in
-  guard (Cstruct.len dec >= hdr_len)
+  guard (Cstruct.length dec >= hdr_len)
     (Rresult.R.msgf "payload too short (need %d bytes): %a"
        hdr_len Cstruct.hexdump_pp dec) >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
@@ -787,11 +787,11 @@ let wrap_hmac_control now ts mtu session key transport outs =
             session, transport, [ `Ack header ]
           | `Control ->
             let rec one session transport off acc =
-              if off = Cstruct.len out then
+              if off = Cstruct.length out then
                 session, transport, List.rev acc
               else
                 let session, transport, header = header session transport now_ts in
-                let l = min mtu (Cstruct.len out - off) in
+                let l = min mtu (Cstruct.length out - off) in
                 let data = Cstruct.sub out off l in
                 let transport, m_id = next_message_id transport in
                 let out = `Control (Packet.Control, (header, m_id, data)) in
@@ -1166,7 +1166,7 @@ let handle_static_client t s keys ev =
         and compress = t.session.compress
         in
         let rec process_one acc linger =
-          if Cstruct.len linger = 0 then
+          if Cstruct.length linger = 0 then
             Ok ({ t with linger = Cstruct.empty }, [], acc)
           else match Packet.decode_protocol t.session.protocol linger with
             | Error `Partial -> Ok ({ t with linger }, [], acc)

@@ -63,7 +63,7 @@ type channel = {
 }
 
 let received_packet ch data =
-  { ch with packets = succ ch.packets ; bytes = Cstruct.len data + ch.bytes }
+  { ch with packets = succ ch.packets ; bytes = Cstruct.length data + ch.bytes }
 
 let pp_channel ppf c =
   Fmt.pf ppf "channel %d %a@ started %Lu bytes %d packets %d@ transport %a"
@@ -110,7 +110,7 @@ let pp_event ppf = function
   | `Connected -> Fmt.string ppf "connected"
   | `Connection_failed -> Fmt.string ppf "connection failed"
   | `Tick -> Fmt.string ppf "tick"
-  | `Data cs -> Fmt.pf ppf "data %d bytes" (Cstruct.len cs)
+  | `Data cs -> Fmt.pf ppf "data %d bytes" (Cstruct.length cs)
 
 type action = [
   | `Resolve of [ `host ] Domain_name.t * [`Ipv4 | `Ipv6 | `Any]
@@ -253,7 +253,7 @@ let pp ppf t =
   let lame_duck = match t.lame_duck with None -> None | Some (ch, _) -> Some ch in
   Fmt.pf ppf "@[linger %d state %a session %a@.active %a@.lame duck %a@.\
               last-rcvd %Lu last-sent %Lu@]"
-    (Cstruct.len t.linger)
+    (Cstruct.length t.linger)
     pp_state t.state
     pp_session t.session
     pp_channel t.channel

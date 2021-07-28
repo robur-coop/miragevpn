@@ -57,7 +57,7 @@ let open_tun config { Openvpn.cidr ; gateway }
          (match devname with None -> "dynamic" | Some dev -> dev) msg)
 
 let rec write_to_fd fd data =
-  if Cstruct.len data = 0 then
+  if Cstruct.length data = 0 then
     Lwt_result.return ()
   else
     Lwt.catch (fun () ->
@@ -80,7 +80,7 @@ let write_multiple_to_fd fd bufs =
 
 let write_udp sa fd data =
   Lwt.catch (fun () ->
-      let len = Cstruct.len data in
+      let len = Cstruct.length data in
       Lwt_unix.sendto fd (Cstruct.to_bytes data) 0 len [] sa >|= fun sent ->
       if sent <> len then
         Logs.warn (fun m -> m "UDP short write (length %d, written %d)" len sent);
@@ -330,7 +330,7 @@ let send_recv conn config ip_config _mtu =
           (* not using write_to_fd here because partial writes to a tun
              interface are semantically different from single write()s: *)
           Lwt_cstruct.write tun_fd pkt >|= function
-          | written when written = Cstruct.len pkt -> true
+          | written when written = Cstruct.length pkt -> true
           | _ -> false
         ) app_data >>= function
       | true -> process_incoming ()
