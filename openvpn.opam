@@ -40,7 +40,7 @@ depends: [
   "ptime"
   "rresult"
   "tls" {>= "0.15.0"}
-  "dns-client" {>= "5.0.0"}
+  "dns-client" {>= "6.0.0"}
   "x509" {>= "0.15.0"}
   "duration"
 
