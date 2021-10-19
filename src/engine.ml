@@ -315,7 +315,7 @@ let incoming_control_client config rng session channel now op data =
       let authenticator = match Config.find Ca config with
         | None ->
           Logs.warn (fun m -> m "not authenticating certificate (missing CA)");
-          (fun ~host:_ _ -> Ok None)
+          (fun ?ip:_ ~host:_ _ -> Ok None)
         | Some ca ->
           Logs.info (fun m -> m "authenticating with CA %a"
                         X509.Certificate.pp ca);
