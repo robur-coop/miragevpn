@@ -110,7 +110,7 @@ let test_dev_type () =
     |> add Dev (`Tun, Some "tun0") in
 
   let implicit_dev_type_tun =
-    Fmt.strf {|%a
+    Fmt.str {|%a
 dev tun0
 |} Openvpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
@@ -120,7 +120,7 @@ dev tun0
   let explicit_dynamic_tun =
     (* here [dev-type] is implied, and the client should pick its own number
        for the tun device: *)
-    Fmt.strf {|%a
+    Fmt.str {|%a
 dev tun
 |} Openvpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
@@ -131,7 +131,7 @@ dev tun
   let explicit_tun_str =
     (* this is interesting because it results in multiple
        dev-type stanzas since [dev tun0] implie [dev-type tun] *)
-    Fmt.strf {|%a
+    Fmt.str {|%a
 dev tun0
 dev-type tun
 |} Openvpn.Config.pp minimal_config
@@ -143,7 +143,7 @@ dev-type tun
 
   let custom_name_tap =
     (* here we specify a custom name, which necessitates a [dev-type] *)
-    Fmt.strf {|%a
+    Fmt.str {|%a
 dev-type tap
 dev myvlan
 |} Openvpn.Config.pp minimal_config |> parse_noextern_client in
@@ -153,7 +153,7 @@ dev myvlan
     custom_name_tap ;
 
   let two_remotes_str =
-    Fmt.strf "%a" Openvpn.Config.pp minimal_config
+    Fmt.str "%a" Openvpn.Config.pp minimal_config
     ^ "\ndev tun0\ndev-type tun\nremote number1.org 11\nremote number2.org 22" in
   let two_remotes =
     minimal_config
@@ -295,7 +295,7 @@ testpass
     remote 10.0.42.3 1194 udp4\n\
     remote 10.0.42.4 1234 udp4")
     (let open Rresult in sample >>| fun sample ->
-     Fmt.strf "%a" pp (singleton Remote (get Remote sample)))
+     Fmt.str "%a" pp (singleton Remote (get Remote sample)))
 
 let whitespace_after_tls_auth () =
   let expected = Openvpn.Config.add Tls_auth
@@ -303,7 +303,7 @@ let whitespace_after_tls_auth () =
        Cstruct.create 64, Cstruct.create 64,
        Cstruct.create 64, Cstruct.create 64) minimal_config in
   let with_newlines =
-    Fmt.strf {|%a
+    Fmt.str {|%a
 tls-auth [inline]
 <tls-auth>
 -----BEGIN OpenVPN Static key V1-----
