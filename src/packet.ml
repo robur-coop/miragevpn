@@ -67,8 +67,8 @@ type header = {
 let pp_header ppf hdr =
   Fmt.pf ppf "local %Lu packet_id %ld timestamp %ld hmac %a ack %a remote %a"
     hdr.local_session hdr.packet_id hdr.timestamp Cstruct.hexdump_pp hdr.hmac
-    Fmt.(list ~sep:(unit ", ") uint32) hdr.ack_message_ids
-    Fmt.(option ~none:(unit " ") uint64) hdr.remote_session
+    Fmt.(list ~sep:(any ", ") uint32) hdr.ack_message_ids
+    Fmt.(option ~none:(any " ") uint64) hdr.remote_session
 
 let decode_header buf =
   guard (Cstruct.length buf >= hdr_len) `Partial >>= fun () ->
@@ -278,8 +278,8 @@ let pp_tls_data ppf t =
   Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a"
     (Cstruct.length t.pre_master) (Cstruct.length t.random1) (Cstruct.length t.random2)
     t.options
-    Fmt.(option ~none:(unit "no user + pass")
-           (prefix (unit "user: ") (pair ~sep:(unit ", pass") string string)))
+    Fmt.(option ~none:(any "no user + pass")
+           (append (any "user: ") (pair ~sep:(any ", pass") string string)))
     t.user_pass
 
 let key_method = 0x02

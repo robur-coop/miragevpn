@@ -307,7 +307,7 @@ let rec event conn =
   | Ok (t', outs, action) ->
     conn.o_client <- t';
     Logs.info (fun m -> m "handling action %a"
-                  Fmt.(option ~none:(unit "none") Openvpn.pp_action) action);
+                  Fmt.(option ~none:(any "none") Openvpn.pp_action) action);
     (match outs with
      | [] -> ()
      | _ ->

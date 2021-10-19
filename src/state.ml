@@ -257,7 +257,7 @@ let pp ppf t =
     pp_state t.state
     pp_session t.session
     pp_channel t.channel
-    Fmt.(option ~none:(unit "no") pp_channel) lame_duck
+    Fmt.(option ~none:(any "no") pp_channel) lame_duck
     t.last_received t.last_sent
 
 let compress s = s.session.compress

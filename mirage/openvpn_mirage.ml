@@ -406,7 +406,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Ok (t', outs, action) ->
       conn.o_client <- t';
       Log.debug (fun m -> m "handling action %a"
-                    Fmt.(option ~none:(unit "none") Openvpn.pp_action) action);
+                    Fmt.(option ~none:(any "none") Openvpn.pp_action) action);
       (match outs with
        | [] -> ()
        | _ ->

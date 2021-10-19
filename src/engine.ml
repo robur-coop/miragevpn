@@ -201,8 +201,8 @@ let incoming_tls tls data =
   | Ok (r, `Response out, `Data d) -> match r with
     | `Eof | `Alert _ as e ->
       Logs.err (fun m -> m "response %a, TLS payload %a"
-                   Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) out
-                   Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+                   Fmt.(option ~none:(any "no") Cstruct.hexdump_pp) out
+                   Fmt.(option ~none:(any "no") Cstruct.hexdump_pp) d);
       Error (`Tls e)
     | `Ok tls' -> Ok (tls', out, d)
 
@@ -302,7 +302,7 @@ let maybe_push_reply config = function
       begin match Astring.String.cut ~sep:"PUSH_REPLY" str with
         | Some ("", opts) -> Config.merge_push_reply config opts
         | _ ->
-          Error (`Msg (Fmt.strf "push request expected push_reply, got %S" str))
+          Error (`Msg (Fmt.str "push request expected push_reply, got %S" str))
       end
   | None -> Error (`Msg "push request expected data, received no data")
 
@@ -335,7 +335,7 @@ let incoming_control_client config rng session channel now op data =
     (* we reply with ACK + maybe TLS response *)
     incoming_tls tls data >>= fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS payload is %a"
-                   Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+                   Fmt.(option ~none:(any "no") Cstruct.hexdump_pp) d);
     maybe_kex_client rng config tls' >>| fun (channel_st, data) ->
     let out = match tls_response, data with
       | None, None -> [] (* happens while handshake is in process and we're waiting for further messages from the server *)
@@ -412,7 +412,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts _ke
     (* we reply with ACK + maybe TLS response *)
     incoming_tls tls data >>| fun (tls', tls_response, d) ->
     Logs.debug (fun m -> m "TLS handshake payload is %a"
-                   Fmt.(option ~none:(unit "no") Cstruct.hexdump_pp) d);
+                   Fmt.(option ~none:(any "no") Cstruct.hexdump_pp) d);
     (* if tls is established, move to next state (await tls_data) *)
     let channel_st =
       if Tls.Engine.can_handle_appdata tls' then
@@ -535,7 +535,7 @@ let pp_error ppf = function
       Packet.pp_header hdr pp_transport state
   | `Non_monotonic_message_id (state, msg_id, hdr) ->
     Fmt.pf ppf "non monotonic message id %a in %a@ (state %a)"
-      Fmt.(option ~none:(unit "no") int32) msg_id Packet.pp_header hdr pp_transport state
+      Fmt.(option ~none:(any "no") int32) msg_id Packet.pp_header hdr pp_transport state
   | `Mismatch_their_session_id (state, hdr) ->
     Fmt.pf ppf "mismatched their session id in %a@ (state %a)"
       Packet.pp_header hdr pp_transport state
@@ -950,7 +950,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
   in
   Logs.debug (fun m -> m "out state is %a" State.pp s');
   Logs.debug (fun m -> m "%d outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
-  Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(unit "no") pp_action) act);
+  Logs.debug (fun m -> m "action %a" Fmt.(option ~none:(any "no") pp_action) act);
   s', out, act'
 
 let maybe_ping_timeout state =

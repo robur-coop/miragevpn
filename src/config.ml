@@ -170,11 +170,11 @@ module Conf_map = struct
 
   let pp_key ppf (a, b, c, d) =
     Fmt.pf ppf "-----BEGIN OpenVPN Static key V1-----\n%a\n-----END OpenVPN Static key V1-----"
-      Fmt.(array ~sep:(unit"\n") string)
+      Fmt.(array ~sep:(any"\n") string)
       (match Cstruct.concat [a;b;c;d] |> Hex.of_cstruct with
        | `Hex h -> Array.init (256/16) (fun i -> String.sub h (i*32) 32))
 
-  let pp_b ?(sep=Fmt.unit "@.") ppf (b:b) =
+  let pp_b ?(sep=Fmt.any "@.") ppf (b:b) =
     let p () = Fmt.pf ppf in
     let B (k,v) = b in
     let pp_x509 entry_typ cert =
@@ -186,7 +186,7 @@ module Conf_map = struct
         entry_typ
         (match X509.(Distinguished_name.common_name (Certificate.subject cert)) with
          | None -> "NO common name" | Some x -> x)
-        (Fmt.(pair ~sep:(unit" -> ") Ptime.(pp_human()) Ptime.(pp_human())))
+        (Fmt.(pair ~sep:(any " -> ") Ptime.(pp_human()) Ptime.(pp_human())))
         (X509.Certificate.validity cert)
         X509.Host.Set.pp (X509.Certificate.hostnames cert)
         Hex.pp (Hex.of_cstruct (X509.Certificate.fingerprint `SHA256 cert))
@@ -303,8 +303,8 @@ module Conf_map = struct
               | `Vpn_gateway -> "vpn_gateway") in
           p() "route %a %a %a %s"
             pp_addr network
-            Fmt.(option ~none:(unit"default") Ipaddr.Prefix.pp) netmask
-            Fmt.(option ~none:(unit"default") pp_addr) gateway
+            Fmt.(option ~none:(any "default") Ipaddr.Prefix.pp) netmask
+            Fmt.(option ~none:(any "default") pp_addr) gateway
             (match metric with `Default -> "default"
                              | `Metric i -> string_of_int i)
         end
@@ -344,7 +344,7 @@ module Conf_map = struct
       p() "verify-client-cert %s"
         (match mode with `None -> "none" | `Optional -> "optional" | `Required -> "require")
 
-  let pp_with_sep ?(sep=Fmt.unit "@.") ppf t =
+  let pp_with_sep ?(sep=Fmt.any "@.") ppf t =
     let minimized_t =
       if find Tls_mode t = Some `Client && mem Pull t then begin
         Fmt.pf ppf "client\n" ; remove Tls_mode t |> remove Pull
@@ -410,7 +410,7 @@ let pp_line ppf (x : line) =
        (match proto with
           None -> "any"| Some `Tcp -> "tcp" | Some `Udp -> "udp")
    | `Entries bs -> v ppf "entries: @[<v>%a@]"
-                     Fmt.(list ~sep:(unit"@,") pp_b) bs
+                     Fmt.(list ~sep:(any "@,") pp_b) bs
    | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b
    | `Comment s -> v ppf "# %s" s
    | `Ignored s -> v ppf "# IGNORED: %s" s
@@ -480,12 +480,12 @@ let a_number =
   take_while1 (function '0'..'9' -> true | _ -> false) >>= fun str ->
   match int_of_string str with
   | i when string_of_int i = str -> return i
-  | _ -> fail (Fmt.strf "Invalid number: %S" str)
-  | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
+  | _ -> fail (Fmt.str "Invalid number: %S" str)
+  | exception _ -> fail (Fmt.str "Invalid number: %S" str)
 
 let a_number_range min' max' =
   a_number >>= function | n when n <= max' && min' <= n -> return n
-                        | n -> fail (Fmt.strf "Number out of range: %d" n)
+                        | n -> fail (Fmt.str "Number out of range: %d" n)
 
 let a_client =
   (* alias for --tls-client --pull *)
@@ -565,7 +565,7 @@ let a_x509_cert_payload ctx constructor str =
   Logs.debug (fun m -> m "x509 cert: %s" ctx);
   match X509.Certificate.decode_pem (Cstruct.of_string str) with
   | Ok cert -> Ok (constructor cert)
-  | Error (`Msg msg) -> Error (Fmt.strf "%s: invalid certificate: %s" ctx msg)
+  | Error (`Msg msg) -> Error (Fmt.str "%s: invalid certificate: %s" ctx msg)
 
 let a_ca = a_option_with_single_path "ca" `Ca
 let a_ca_payload str =
@@ -612,7 +612,7 @@ let inline_payload element =
   <* commit <* (
     (skip_many (a_newline <|> a_whitespace) *> end_of_input)
     <|> (pos >>= fun i ->
-         abort (Fmt.strf "Data after -----END mark at byte offset %d" i)))
+         abort (Fmt.str "Data after -----END mark at byte offset %d" i)))
   >>= (fun lst ->
       let sz = Cstruct.lenv lst in
       if 256 = sz then return lst else
@@ -649,14 +649,14 @@ let a_auth_user_pass_payload =
     a_line (function '_'|'-'|'.'|'@'|'a'..'z'|'A'..'Z'|'0'..'9' -> true
                         | _ -> false) >>= (function
         | "" -> ( *> ) commit @@ fail @@
-          Fmt.strf "auth-user-pass (byte %d): \
-                    username is empty, expected on first line!" user_pos
+          Fmt.str "auth-user-pass (byte %d): \
+                   username is empty, expected on first line!" user_pos
         | user -> return user)  >>= fun user ->
     pos >>= fun pass_pos ->
     a_line not_control_char >>= (function
         | "" -> ( *> ) commit @@ fail @@
-          Fmt.strf "auth-user-pass (byte %d): \
-                    password is empty, expected on second line!" pass_pos
+          Fmt.str "auth-user-pass (byte %d): \
+                   password is empty, expected on second line!" pass_pos
         | raw_pass ->
           let bad = ref ~-1 in
           let count = ref 0 in
@@ -727,7 +727,7 @@ let a_hex =
   (string "0x" *> take_while1 is_hex) >>= fun str ->
   match int_of_string ("0x" ^ str) with
   | i -> return i
-  | exception _ -> fail (Fmt.strf "Invalid number: %S" str)
+  | exception _ -> fail (Fmt.str "Invalid number: %S" str)
 let _TODO = a_hex
 
 let a_tls_version_min =
@@ -742,7 +742,7 @@ let a_tls_version_min =
 
 let a_entry_one_number name =
   let fail off reason =
-    fail @@ Fmt.strf
+    fail @@ Fmt.str
       "offset %d: Error parsing %s directive as integer: %s" off name reason in
   string name *> a_whitespace *> pos >>= fun off -> commit *>
   (a_single_param <|> fail off "parameter needed"
@@ -772,14 +772,14 @@ let a_lport =
 let a_ipv4_dotted_quad =
   take_while1 (function '0'..'9' |'.' -> true | _ -> false) >>= fun ip ->
   match Ipaddr.V4.of_string ip with
-  | Error `Msg x -> fail (Fmt.strf "Invalid IPv4: %s: %S" x ip)
+  | Error `Msg x -> fail (Fmt.str "Invalid IPv4: %s: %S" x ip)
   | Ok ip -> return ip
 
 let a_ipv6_coloned_hex =
   take_while1 (function '0'..'9' | ':' | 'a'..'f' | 'A'..'F' -> true
                                  | _ -> false) >>= fun ip ->
   match Ipaddr.V6.of_string ip with
-  | Error `Msg x -> fail (Fmt.strf "Invalid IPv6: %s: %S" x ip)
+  | Error `Msg x -> fail (Fmt.str "Invalid IPv6: %s: %S" x ip)
   | Ok ip -> return ip
 
 let a_ip =
@@ -789,9 +789,9 @@ let a_ip =
 let a_domain_name =
   take_till (function '\x00'..'\x1f' | ' ' | '"' | '\'' -> true | _ -> false)
   >>= fun str -> match Domain_name.of_string str with
-  | Error `Msg x -> fail (Fmt.strf "Invalid domain name: %s: %S" x str)
+  | Error `Msg x -> fail (Fmt.str "Invalid domain name: %s: %S" x str)
   | Ok x -> match Domain_name.host x with
-    | Error `Msg x -> fail (Fmt.strf "Invalid host name: %s: %S" x str)
+    | Error `Msg x -> fail (Fmt.str "Invalid host name: %s: %S" x str)
     | Ok x -> return x
 
 let a_domain_or_ip =
@@ -949,7 +949,7 @@ let a_remote
     | Some "tcp" -> return (Some `Tcp, `Any)
     | Some "tcp4" -> return (Some `Tcp, `Ipv4)
     | Some "tcp6" -> return (Some `Tcp, `Ipv6)
-    | Some x -> fail (Fmt.strf "remote: unknown protocol designation %S" x)
+    | Some x -> fail (Fmt.str "remote: unknown protocol designation %S" x)
     | None -> return (None, `Any)
    ) >>| fun protos -> port, protos
   ) >>= fun (port, protos) ->
@@ -961,7 +961,7 @@ let a_remote
     | `Ip (Ipaddr.V6 _ as i), (dp, (`Any | `Ipv6)) ->
       return @@ `Remote (`Ip i, port, dp)
     | `Ip ip, (_, (`Ipv4 | `Ipv6 as v)) ->
-      fail (Fmt.strf "remote: ip addr %a is required to be %s."
+      fail (Fmt.str "remote: ip addr %a is required to be %s."
               Ipaddr.pp ip (match v with `Ipv4 -> "IPv4" | `Ipv6 -> "IPv6"))
   end
 
@@ -984,7 +984,7 @@ let a_route =
     ( (a_whitespace *>
        (
          (a_ip >>= fun ip -> (char '/' *> a_number_range 0 32) >>= fun mask ->
-          match Ipaddr.Prefix.of_string (Fmt.strf "%a/%d" Ipaddr.pp ip mask)
+          match Ipaddr.Prefix.of_string (Fmt.str "%a/%d" Ipaddr.pp ip mask)
           with Error `Msg err -> fail err | Ok n -> return n)
          <|> (choice
                 [ string "default" *>
@@ -1253,7 +1253,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
           | ((None | Some _ as name), None) ->
             Ok (Some (Dev, (fst v2, name)))
           | Some n, Some n2 ->
-            Error (Fmt.strf "[dev %S] conflicts with [dev %S]" n n2)
+            Error (Fmt.str "[dev %S] conflicts with [dev %S]" n n2)
         end
       | Dhcp_dns -> Ok (Some (Dhcp_dns, (get Dhcp_dns t @ v)))
       | Dhcp_ntp -> Ok (Some (Dhcp_ntp, (get Dhcp_ntp t @ v)))
@@ -1294,7 +1294,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
             m "Config key %a was supplied multiple times with same value"
               pp (singleton k v)) ; Ok None
       (* else: *)
-      | _ -> Error (Fmt.strf "conflicting keys: %a not in %a"
+      | _ -> Error (Fmt.str "conflicting keys: %a not in %a"
                       pp (singleton k v) pp t)
     end
 
@@ -1434,7 +1434,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           let rec consult_tl ?rport = function
             | [] -> Ok rport
             | `Rport conf::_ when rport <> None && Some conf <> rport  ->
-              Error (Fmt.strf "conflicting rport directives: %d <> %a"
+              Error (Fmt.str "conflicting rport directives: %d <> %a"
                        conf Fmt.(option int) rport)
             | `Rport rport::tl -> consult_tl ~rport tl
             | _hd::tl -> consult_tl ?rport tl in
@@ -1471,14 +1471,14 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               begin match find Dev acc with
                 | Some (typ2, _name) when typ = typ2 -> loop acc tl
                 | Some (_, _name) ->
-                  Error (Fmt.strf "dev-type %S conflicts with \
+                  Error (Fmt.str "dev-type %S conflicts with \
                                    inferred type for [dev] stanza"
                            (match typ with `Tap -> "tap" | `Tun -> "tun"))
                 | None -> retb ~tl (B(Dev,(typ, None)))
               end
             | [], [] -> Error "BUG in config parser: `Dev|`Dev_type empty list"
             | [], name::_extra_devs ->
-              Error (Fmt.strf
+              Error (Fmt.str
                        "[dev %S] stanza without required [dev-type]" name)
             | _ -> Error "multiple conflicting [dev-type] stanzas present"
           end
@@ -1564,7 +1564,7 @@ let merge_push_reply client (push_config:string) =
           _ when eq.f k a b -> some_a
 
         | _ when not (will_accept k b) ->
-          invalid_arg @@ Fmt.strf
+          invalid_arg @@ Fmt.str
             "push-reply: won't accept %a" pp (singleton k b)
 
         (* at this point we need to merge them*)
@@ -1580,7 +1580,7 @@ let merge_push_reply client (push_config:string) =
       if will_accept k v
       then b (* <-- use server version *)
       else invalid_arg @@
-        Fmt.strf "server pushed disallowed: %a" pp (singleton k v)
+        Fmt.str "server pushed disallowed: %a" pp (singleton k v)
   in
   try Ok (merge { f } client push_config)
   with Invalid_argument msg -> Error (`Msg msg)
@@ -1604,12 +1604,12 @@ let client_generate_connect_options t =
       | B (Tls_mode, `Client) -> true
       | _ -> false) t in
   let serialized =
-    (Fmt.strf "V4,tls-client,%s%a"
+    (Fmt.str "V4,tls-client,%s%a"
        (match Conf_map.find Dev t with
         | Some (`Tun, _) -> "dev-type tun,"
         | Some (`Tap, _) -> "dev-type tap,"
         | _ -> "")
-       (Conf_map.pp_with_sep ~sep:(Fmt.unit ",")) excerpt) in
+       (Conf_map.pp_with_sep ~sep:(Fmt.any ",")) excerpt) in
   Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
                 serialized) ;
   Ok serialized
