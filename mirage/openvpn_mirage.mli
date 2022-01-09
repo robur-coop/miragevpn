@@ -7,7 +7,7 @@
     - established ++ read on connection -> handle + forward/write to destination
 
 *)
-module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) : sig
+module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) : sig
   type t
 
   val connect : Openvpn.Config.t -> S.t -> t
@@ -15,7 +15,7 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
   val write : t -> Ipaddr.V4.t -> Cstruct.t -> unit Lwt.t
 end
 
-module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) : sig
+module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) : sig
   type t
 
   val mtu : t -> int
@@ -32,8 +32,8 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
   val write : t -> Cstruct.t -> bool Lwt.t
 end
 
-module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) : sig
-  include Mirage_protocols.IPV4
+module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) : sig
+  include Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t
 
   val connect : Openvpn.Config.t -> S.t ->
     (t * (tcp:callback -> udp:callback -> default:(proto:int -> callback) -> t -> unit Lwt.t),

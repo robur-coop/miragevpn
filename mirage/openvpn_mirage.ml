@@ -42,7 +42,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 (* NB for the internal/VPN thingy, a stack is needed that is not backed by an
    ethernet interface or similar, but only virtual (i.e. using 10.8.0.1,
    send/recv operations local only) *)
-module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) = struct
+module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) = struct
   module TCP = S.TCP
 
   module IPM = Map.Make(Ipaddr.V4)
@@ -208,13 +208,13 @@ module Server (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.
       Log.info (fun m -> m "openvpn server listening on port %d, using %a/%d"
                    port Ipaddr.V4.pp (fst ip) (Ipaddr.V4.Prefix.bits (snd ip)));
       let server = { server ; ip ; connections = IPM.empty } in
-      S.listen_tcp stack ~port (callback server);
+      S.TCP.listen (S.tcp stack) ~port (callback server);
       Lwt.async (timer server);
       server
 
 end
 
-module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) = struct
+module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) = struct
   module DNS = Dns_client_mirage.Make(R)(T)(M)(P)(S)
   module TCP = S.TCP
   module UDP = S.UDP
@@ -353,7 +353,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       let our_port = Randomconv.int16 R.generate in
       let peer = our_port, ip, port in
       conn.peer <- Some (`Udp (S.udp s, peer));
-      S.listen_udp s ~port:our_port (udp_read_cb our_port conn.event_mvar peer);
+      S.UDP.listen (S.udp s) ~port:our_port (udp_read_cb our_port conn.event_mvar peer);
       (* TODO for UDP, we atm can't figure out connection failures
          (timeout should work, but ICMP refused/.. won't be delivered here) *)
       Lwt_mvar.put conn.event_mvar `Connected
@@ -463,7 +463,7 @@ module Make (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Ok t
 end
 
-module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) = struct
+module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) = struct
   module O = Make(R)(M)(P)(T)(S)
 
   type t = {
@@ -476,12 +476,12 @@ module Make_stack (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_cl
   type callback = src:ipaddr -> dst:ipaddr -> Cstruct.t -> unit Lwt.t
   let pp_ipaddr = Ipaddr.V4.pp
 
-  type error = [ Mirage_protocols.Ip.error
+  type error = [ Tcpip.Ip.error
                | `Msg of string
                | `Would_fragment
                | `Openvpn of Openvpn.error ]
   let pp_error ppf = function
-    | #Mirage_protocols.Ip.error as e -> Mirage_protocols.Ip.pp_error ppf e
+    | #Tcpip.Ip.error as e -> Tcpip.Ip.pp_error ppf e
     | `Msg m -> Fmt.pf ppf "message %s" m
     | `Openvpn e -> Openvpn.pp_error ppf e
 
