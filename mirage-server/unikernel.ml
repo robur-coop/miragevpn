@@ -1,6 +1,6 @@
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6) (FS: Mirage_kv.RO) = struct
+module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) (FS: Mirage_kv.RO) = struct
 
   module O = Openvpn_mirage.Server(R)(M)(P)(T)(S)
 

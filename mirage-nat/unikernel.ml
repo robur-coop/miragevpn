@@ -9,8 +9,8 @@
 open Lwt.Infix
 
 module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S)
-    (S : Mirage_stack.V4V6)
-    (N : Mirage_net.S) (E : Mirage_protocols.ETHERNET) (A : Mirage_protocols.ARP) (_ : Mirage_protocols.IPV4)
+    (S : Tcpip.Stack.V4V6)
+    (N : Mirage_net.S) (E : Ethernet.S) (A : Arp.S) (_ : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t)
     (FS: Mirage_kv.RO) = struct
 
   module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)
@@ -142,7 +142,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
             | Ok Some pkt -> ingest_private table pkt
           and arpv4 = A.input arp
           in
-          let header_size = Ethernet_wire.sizeof_ethernet
+          let header_size = Ethernet.Packet.sizeof_ethernet
           and input = E.input ~arpv4 ~ipv4 ~ipv6:(fun _ -> Lwt.return_unit) eth in
           N.listen ~header_size net input >|= function
           | Error e -> Log.err (fun m -> m "private interface stopped: %a"

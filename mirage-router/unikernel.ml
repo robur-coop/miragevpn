@@ -31,8 +31,8 @@
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Mirage_stack.V4V6)
-    (N : Mirage_net.S) (E : Mirage_protocols.ETHERNET) (A : Mirage_protocols.ARP) (I : Mirage_protocols.IPV4) (FS: Mirage_kv.RO) = struct
+module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6)
+    (N : Mirage_net.S) (E : Ethernet.S) (A : Arp.S) (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t) (FS: Mirage_kv.RO) = struct
 
   module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)
 
@@ -172,12 +172,12 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       (* addressed on ethernet layer to us _and_ on ip layer src = local_network *)
       (* and ip layer dst <> local_network *)
       let should_be_routed eth_hdr ip_hdr =
-        Macaddr.compare eth_hdr.Ethernet_packet.destination (N.mac net) = 0 &&
+        Macaddr.compare eth_hdr.Ethernet.Packet.destination (N.mac net) = 0 &&
         local_network ip_hdr.Ipv4_packet.src &&
         not (local_network ip_hdr.Ipv4_packet.dst)
       in
-      match Ethernet_packet.Unmarshal.of_cstruct buf with
-      | Ok (eth_hdr, payload) when eth_hdr.Ethernet_packet.ethertype = `IPv4 ->
+      match Ethernet.Packet.of_cstruct buf with
+      | Ok (eth_hdr, payload) when eth_hdr.Ethernet.Packet.ethertype = `IPv4 ->
         begin match Ipv4_packet.Unmarshal.of_cstruct payload with
           | Ok (ip_hdr, payload) ->
             if should_be_routed eth_hdr ip_hdr then
@@ -195,7 +195,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         Lwt.return_unit
       | Ok _ -> our_listen buf
     in
-    N.listen net ~header_size:Ethernet_wire.sizeof_ethernet listen >|= function
+    N.listen net ~header_size:Ethernet.Packet.sizeof_ethernet listen >|= function
     | Error e ->
       Logs.warn (fun m -> m "error %a listening on private network" N.pp_error e)
     | Ok () ->
