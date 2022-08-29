@@ -117,7 +117,7 @@ let read_from_fd fd =
       let cs = Cstruct.of_bytes ~len:count buf in
       Logs.debug (fun m -> m "read %d bytes" count) ;
       Lwt.return cs)
-  |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
+  |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_tcp mvar fd =
   read_from_fd fd >>= function
@@ -147,7 +147,7 @@ let read_udp =
         Logs.warn (fun m -> m "ignoring unsolicited data from %a (expected %a)"
                       pp_sockaddr sa' pp_sockaddr sa);
         Lwt.return None)
-  |> Lwt_result.map_err (fun e -> `Msg (Printexc.to_string e))
+  |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
   read_udp r >>= function
@@ -428,7 +428,9 @@ let config =
   Arg.(required & pos 0 (some file) None & info [] ~doc ~docv:"CONFIG")
 
 let cmd =
-  Term.(term_result (const jump $ setup_log $ config)),
-  Term.info "openvpn_client" ~version:"%%VERSION_NUM%%"
+  let term = Term.(term_result (const jump $ setup_log $ config))
+  and info = Cmd.info "openvpn_client" ~version:"%%VERSION_NUM%%"
+  in
+  Cmd.v info term
 
-let () = match Term.eval cmd with `Ok () -> exit 0 | _ -> exit 1
+let () = exit (Cmd.eval cmd)

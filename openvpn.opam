@@ -26,7 +26,7 @@ depends: [
 
   "angstrom" { >= "0.14.0" }
   "cstruct"  { >= "6.0.0" }
-  "cmdliner"
+  "cmdliner" { >= "1.1.0" }
   "domain-name" { >= "0.2.0" }
   "fmt"
   "gmap"     { >= "0.3.0" }
@@ -34,7 +34,7 @@ depends: [
   "ipaddr"   { >= "5.0.0" }
   "logs"
   "cstruct-lwt"
-  "lwt"
+  "lwt" {>= "5.6.0"}
   "mirage-crypto"
   "mirage-crypto-rng" {>= "0.8.0"}
   "ptime"
