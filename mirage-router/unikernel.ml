@@ -49,6 +49,10 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
       Logs.warn (fun m -> m "a packet directed to us (ignoring)");
       false
     end else
+    if Ipaddr.V4.compare (Ipaddr.V4.Prefix.broadcast cidr) ip = 0 then begin
+      Logs.debug (fun m -> m "dropping broadcast (RFC 2644)");
+      false
+    end else
       Ipaddr.V4.Prefix.mem ip cidr
 
   let forward_or_reject hdr payload mtu =
