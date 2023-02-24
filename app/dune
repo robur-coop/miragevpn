@@ -4,8 +4,8 @@
   (package openvpn)
   (modules openvpn_client_lwt)
   (libraries openvpn lwt lwt.unix cmdliner fmt.tty logs.fmt logs.cli fmt.cli
-             ipaddr ipaddr.unix ptime.clock.os dns-client.lwt
-             mirage-crypto-rng.lwt mtime.clock.os tuntap cstruct-lwt))
+             ipaddr ipaddr.unix ptime.clock.os dns-client-lwt
+             mirage-crypto-rng-lwt mtime.clock.os tuntap cstruct-lwt))
 
 (executable
   (name openvpn_config_parser)

@@ -36,11 +36,13 @@ depends: [
   "cstruct-lwt"
   "lwt" {>= "5.6.0"}
   "mirage-crypto"
-  "mirage-crypto-rng" {>= "0.8.0"}
+  "mirage-crypto-rng" {>= "0.11.0"}
+  "mirage-crypto-rng-lwt" {>= "0.11.0"}
   "ptime"
   "rresult"
   "tls" {>= "0.15.0"}
-  "dns-client" {>= "6.0.0"}
+  "dns-client" {>= "7.0.0"}
+  "dns-client-lwt" {>= "7.0.0"}
   "x509" {>= "0.15.0"}
   "duration"
 
@@ -50,6 +52,7 @@ depends: [
   "mtime"
   "randomconv"
   # mirage:
+  "dns-client-mirage" {>= "7.0.0"}
   "tcpip" {>= "7.0.0"}
   "mirage-random" {>= "2.0.0"}
   "mirage-clock" {>= "3.0.0"}

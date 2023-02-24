@@ -3,5 +3,5 @@
  (public_name openvpn.mirage)
  (libraries openvpn logs ipaddr cstruct
             rresult tcpip tcpip.icmpv4 tcpip.tcp tcpip.udp tcpip.ipv4
-            mirage-random mirage-clock dns-client dns-client.mirage)
+            mirage-random mirage-clock dns-client dns-client-mirage)
  (wrapped false))
