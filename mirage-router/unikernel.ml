@@ -32,21 +32,46 @@
 open Lwt.Infix
 
 module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6)
-    (N : Mirage_net.S) (E : Ethernet.S) (A : Arp.S) (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t) (FS: Mirage_kv.RO) = struct
+    (N : Mirage_net.S) (E : Ethernet.S) (A : Arp.S) (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t) (B: Mirage_block.S) = struct
 
   module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)
 
-  let read_config data =
-    FS.get data (Mirage_kv.Key.v "openvpn.config") >|= function
-    | Error e -> Rresult.R.error_to_msg ~pp_error:FS.pp_error (Error e)
-    | Ok data ->
-      let string_of_file _ = Error (`Msg "not supported") in
-      Openvpn.Config.parse_client ~string_of_file data
+  let strip_0_suffix cfg =
+    let rec find0 idx =
+      if idx < Cstruct.length cfg then
+        if Cstruct.get_uint8 cfg idx = 0 then
+          idx
+        else
+          find0 (succ idx)
+      else
+        idx
+    in
+    Cstruct.sub cfg 0 (find0 0)
+
+  let read_data block =
+    B.get_info block >>= fun { Mirage_block.sector_size ; size_sectors ; _ } ->
+    let data =
+      let rec more acc = function
+        | 0 -> acc
+        | n -> more (Cstruct.create sector_size :: acc) (pred n)
+      in
+      more [] (Int64.to_int size_sectors)
+    in
+    B.read block 0L data >|= function
+    | Ok () -> Ok data
+    | Error e -> Rresult.R.error_msgf "%a" B.pp_error e
+
+  let read_config block =
+    let open Lwt_result.Infix in
+    read_data block >>= fun data ->
+    let config = strip_0_suffix (Cstruct.concat data) in
+    let string_of_file _ = Error (`Msg "not supported") in
+    Lwt.return (Openvpn.Config.parse_client ~string_of_file (Cstruct.to_string config))
 
   let local_network ip =
     let cidr = Key_gen.private_ipv4 () in
     if Ipaddr.V4.compare (Ipaddr.V4.Prefix.address cidr) ip = 0 then begin
-      Logs.warn (fun m -> m "a packet directed to us (ignoring)");
+      (* Logs.warn (fun m -> m "a packet directed to us (ignoring)"); *)
       false
     end else
     if Ipaddr.V4.compare (Ipaddr.V4.Prefix.broadcast cidr) ip = 0 then begin
@@ -137,9 +162,9 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
         Fragments.process t.private_fragments (M.elapsed_ns ()) ip_hdr payload
       in
       t.private_fragments <- c;
-      Logs.info (fun m -> m "%B forwarding packet %a"
-                    (match pkt with None -> false | Some _ -> true)
-                    Ipv4_packet.pp ip_hdr);
+      Logs.debug (fun m -> m "%B forwarding packet %a"
+                     (match pkt with None -> false | Some _ -> true)
+                     Ipv4_packet.pp ip_hdr);
       match pkt with
       | None -> Lwt.return_unit
       | Some (hdr, pay) ->
@@ -230,10 +255,11 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                           ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst
                           proto (fun _ -> 0) [ payload ] >|= function
                         | Ok () -> ()
-                        | Error e ->
+                        | Error _e ->
                           (* could send back host unreachable if this was an arp timeout *)
-                          Logs.err (fun m -> m "error %a while forwarding %a"
-                                       I.pp_error e Ipv4_packet.pp hdr))
+                          (* Logs.err (fun m -> m "error %a while forwarding %a"
+                                         I.pp_error e Ipv4_packet.pp hdr)) *)
+                          ())
                   | Error (`Icmp pay) ->
                     (* send icmp error back via ovpn *)
                     let hdr = {
@@ -249,8 +275,9 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
                       ())
                   | Error `Drop -> ()
               else
-                Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
-                              Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (Key_gen.private_ipv4 ()))
+                (* Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
+                              Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (Key_gen.private_ipv4 ())) *)
+                ()
           end;
           Lwt.return c
         | Error msg ->
@@ -261,9 +288,9 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     t.ovpn_fragments <- frags;
     ovpn_recv t
 
-  let start _ _ _ _ s net eth arp ip data =
+  let start _ _ _ _ s net eth arp ip block =
     (let open Lwt_result.Infix in
-     read_config data >>= fun config ->
+     read_config block >>= fun config ->
      O.connect config s >>= fun ovpn ->
      Logs.info (fun m -> m "tunnel established");
      let t = {
