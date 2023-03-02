@@ -95,5 +95,5 @@ let () =
   register "ovpn-router" [
     optional_syslog default_console default_posix_clock management_stack ;
     optional_monitoring default_time default_posix_clock management_stack ;
-    openvpn_handler $ default_console $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ stack $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ block $ management_stack
+    openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ stack $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ block
   ]
