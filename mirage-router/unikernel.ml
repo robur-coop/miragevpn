@@ -34,7 +34,7 @@ open Lwt.Infix
 module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6)
     (N : Mirage_net.S) (E : Ethernet.S) (A : Arp.S) (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t) (B: Mirage_block.S) = struct
 
-  module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)
+  module O = Miragevpn_mirage.Make(R)(M)(P)(T)(S)
 
   let strip_0_suffix cfg =
     let rec find0 idx =
@@ -66,7 +66,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     read_data block >>= fun data ->
     let config = strip_0_suffix (Cstruct.concat data) in
     let string_of_file _ = Error (`Msg "not supported") in
-    Lwt.return (Openvpn.Config.parse_client ~string_of_file (Cstruct.to_string config))
+    Lwt.return (Miragevpn.Config.parse_client ~string_of_file (Cstruct.to_string config))
 
   let local_network ip =
     let cidr = Key_gen.private_ipv4 () in

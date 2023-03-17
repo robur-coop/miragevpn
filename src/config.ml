@@ -1,5 +1,5 @@
-module Logs = (val Logs.(src_log @@ Src.create
-                           ~doc:"Openvpn library's configuration module"
+module Log = (val Logs.(src_log @@ Src.create
+                           ~doc:"Miragevpn library's configuration module"
                            "ovpn.config") : Logs.LOG)
 open Angstrom
 
@@ -24,7 +24,7 @@ type inline_or_path = [ `Need_inline of inlineable
 let int_of_ping_interval = function
   | `Not_configured -> 0
   | `Seconds 0 ->
-    failwith "Openvpn.Config, internal invariant \
+    failwith "Miragevpn.Config, internal invariant \
               Ping_interval `Seconds <> 0 violated"
   | `Seconds n -> n
 
@@ -40,7 +40,7 @@ module Conf_map = struct
            (must be in the format from `man openvpn`)
         - a_config_entry:
            Expose it to the parser
-     - openvpn.mli:Config 'a k:
+     - Miragevpn.mli:Config 'a k:
          Expose it in the mli interface.
          Must add a docstring comment detailing which config entry the
          key corresponds to, and its semantics if there can be any doubt.
@@ -146,7 +146,7 @@ module Conf_map = struct
         (match find Tls_mode t, find Secret t with
          | None, None | Some `Server, _ -> Error "is a TLS server, not a TLS client"
          | None, Some _ ->
-           Logs.warn (fun m -> m "using non-forward secure static key mode");
+           Log.warn (fun m -> m "using non-forward secure static key mode");
            Ok ()
          | Some _, Some _ -> Error "both static secret and TLS mode specified"
          | Some `Client, None ->
@@ -562,7 +562,7 @@ let a_option_with_single_path name kind =
   a_filepath kind
 
 let a_x509_cert_payload ctx constructor str =
-  Logs.debug (fun m -> m "x509 cert: %s" ctx);
+  Log.debug (fun m -> m "x509 cert: %s" ctx);
   match X509.Certificate.decode_pem (Cstruct.of_string str) with
   | Ok cert -> Ok (constructor cert)
   | Error (`Msg msg) -> Error (Fmt.str "%s: invalid certificate: %s" ctx msg)
@@ -666,7 +666,7 @@ let a_auth_user_pass_payload =
                 bad := !count ; incr count ; '_'
               | ch -> incr count ; ch) raw_pass
           |> return <* return @@ if 0 <= !bad then
-            Logs.warn (fun m ->
+            Log.warn (fun m ->
                 m "config: user-auth-pass at (byte offset %d line offset %d) \
                    contains special character that will be \
                    turned into an underscore '_' , is this intentional?"
@@ -1055,7 +1055,7 @@ let a_not_implemented =
       string "explicit-exit-notify" ;
     ] <* a_whitespace >>= fun key ->
   take_while (function '\n' -> false | _ -> true) >>| fun rest ->
-  Logs.warn (fun m ->m "IGNORING %S %S" key rest) ;
+  Log.warn (fun m ->m "IGNORING %S %S" key rest) ;
   `Ignored (key ^ " " ^ rest)
 
 let a_config_entry : line A.t =
@@ -1192,7 +1192,7 @@ let eq : eq = { f = fun (type x) (k: x k) (v:x) (v2:x) ->
           ) remotes_lst remotes_lst2
       | _ ->     (*TODO non-polymorphic comparison*)
         let eq = (v = v2) in
-        Logs.debug
+        Log.debug
           (fun m -> m "eq self-test: @[<v>%a@, %s @,%a@]"
               pp (singleton k v)
               (if true then "=" else "<>")
@@ -1206,7 +1206,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
   (* when called by merge_push_reply, [v] is the server-provided value,
      and [t] is the local configuration *)
   let warn () =
-    Logs.debug (fun m -> m "Configuration flag appears twice: %a"
+    Log.debug (fun m -> m "Configuration flag appears twice: %a"
                    pp (singleton k v)); Ok None in
   match find k t with
   | None -> Ok (Some (k,v))
@@ -1220,7 +1220,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Remote_random -> warn ()
       (* can be pushed, but can't change: *)
       | Auth_retry ->
-         Logs.warn (fun m ->
+         Log.warn (fun m ->
             m "resolve_conflict: ignoring Auth_retry (should \
                only be done when called from merge_push_reply. TODO.");
          Ok (Some (k,v2))
@@ -1267,13 +1267,13 @@ let resolve_conflict (type a) t (k:a key) (v:a)
       | Ping_interval ->
         begin match find Ping_interval t with
           | Some old when old <> v ->
-            Logs.warn (fun m -> m "Overriding previous interval %d with %d"
+            Log.warn (fun m -> m "Overriding previous interval %d with %d"
                           (int_of_ping_interval old) (int_of_ping_interval v))
           | _ -> () end ; Ok (Some (k, v))
       | Ping_timeout ->
         let override ~old ~next =
           if old <> next then
-            Logs.warn (fun m ->
+            Log.warn (fun m ->
                 m "Overriding previous ping timeout %d with %d" old next) ;
           Ok (Some (k,v))
         in
@@ -1290,7 +1290,7 @@ let resolve_conflict (type a) t (k:a key) (v:a)
         end
       (* adding wouldn't change anything: *)
       | _ when v = v2 -> (* TODO polymorphic comparison *)
-        Logs.debug (fun m ->
+        Log.debug (fun m ->
             m "Config key %a was supplied multiple times with same value"
               pp (singleton k v)) ; Ok None
       (* else: *)
@@ -1304,7 +1304,7 @@ let resolve_add_conflict t (B(k,v)) =
   | Some (k,v) -> add k v t | None -> t
 
 let valid_server_options ~client:_ _server_t =
-  Logs.err (fun m -> m "TODO valid_server_options is not implemented") ;
+  Log.err (fun m -> m "TODO valid_server_options is not implemented") ;
   Ok ()
 
 let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) result =
@@ -1320,7 +1320,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           match resolve_add_conflict acc b with
           | Ok _ as next -> next
           | Error err ->
-            Logs.debug (fun m -> m "%S : %a" err pp acc);
+            Log.debug (fun m -> m "%S : %a" err pp acc);
             Error err) (Ok acc) kv) >>= fun acc -> loop acc tl in
       let retb ?tl b = multib ?tl [b] in
       begin match hd with
@@ -1340,7 +1340,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               | `Inline (kind2, _) -> String.equal looking_for kind2
               | _ -> false) tl with
           | `Inline (_, x)::inline_tl, other_tl ->
-            Logs.debug (fun m -> m "consuming [inline] %s" looking_for);
+            Log.debug (fun m -> m "consuming [inline] %s" looking_for);
             parse_inline x kind >>= resolve_add_conflict acc >>= fun acc ->
             loop acc (other_tl @ inline_tl)
           | [], _ ->
@@ -1364,7 +1364,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
               | `Need_inline k when String.equal fname
                     (string_of_inlineable k)-> true
               | _ -> false) tl then [hd]
-          else begin Logs.warn (fun m ->
+          else begin Log.warn (fun m ->
               m "Inline block %S seems to be redundant" fname); [] end
         | `Ignored _ -> loop acc tl
         | `Comment _ -> loop acc tl
@@ -1392,7 +1392,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
         | `Keepalive (interval, timeout) ->
           begin match find Ping_interval acc with
             | Some old ->
-              Logs.warn (fun m ->
+              Log.warn (fun m ->
                   m "keepalive %d %d overrides former ping interval %d"
                     interval timeout (int_of_ping_interval old));
             | None -> () end ;
@@ -1400,7 +1400,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           let keepalive_action was_old next =
             let maybe_warn old =
               if was_old && old <> next then
-                Logs.warn (fun m ->
+                Log.warn (fun m ->
                     m "keepalive %d %d overrides former ping timeout %d"
                       interval timeout old) in
             function
@@ -1420,7 +1420,7 @@ let parse_next (effect:parser_effect) initial_state : (parser_state, 'err) resul
           loop (add Ping_timeout timeout acc) tl
         | ( `Proto_force _
           | `Socks_proxy _) as line ->
-          Logs.warn (fun m -> m"ignoring unimplemented option: %a"
+          Log.warn (fun m -> m"ignoring unimplemented option: %a"
                         pp_line line) ;
           multib []
         | `Remote (host, port, proto) ->
@@ -1610,7 +1610,7 @@ let client_generate_connect_options t =
         | Some (`Tap, _) -> "dev-type tap,"
         | _ -> "")
        (Conf_map.pp_with_sep ~sep:(Fmt.any ",")) excerpt) in
-  Logs.warn (fun m -> m "serialized connect options, probably incorrect: %S"
+  Log.warn (fun m -> m "serialized connect options, probably incorrect: %S"
                 serialized) ;
   Ok serialized
 
@@ -1622,7 +1622,7 @@ let client_merge_server_config client server_str =
      for instance choosing [tun-mtu = min (server,client)].
   *)
   let open Rresult in
-  Logs.warn (fun m -> m "Config.client_merge_server_config \
+  Log.warn (fun m -> m "Config.client_merge_server_config \
                          @[<v>is not implemented@ %S@]"
                 server_str);
   Ok client

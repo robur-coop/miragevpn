@@ -1,5 +1,5 @@
 open Rresult
-open Openvpn.Config
+open Miragevpn.Config
 
 let read_config_file fn =
   let string_of_file ~dir filename =

@@ -1,7 +1,7 @@
 (library
   (name lzo)
   (modules lzo)
-  (public_name openvpn.lzo)
+  (public_name miragevpn.lzo)
   (libraries fmt logs rresult)
 )
 

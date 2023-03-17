@@ -13,14 +13,14 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     (N : Mirage_net.S) (E : Ethernet.S) (A : Arp.S) (_ : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t)
     (FS: Mirage_kv.RO) = struct
 
-  module O = Openvpn_mirage.Make(R)(M)(P)(T)(S)
+  module O = Miragevpn_mirage.Make(R)(M)(P)(T)(S)
 
   let read_config data =
     FS.get data (Mirage_kv.Key.v "openvpn.config") >|= function
     | Error e -> Rresult.R.error_to_msg ~pp_error:FS.pp_error (Error e)
     | Ok data ->
       let string_of_file _ = Error (`Msg "not supported") in
-      Openvpn.Config.parse_client ~string_of_file data
+      Miragevpn.Config.parse_client ~string_of_file data
 
   let log = Logs.Src.create "nat" ~doc:"NAT device"
   module Log = (val Logs.src_log log : Logs.LOG)
