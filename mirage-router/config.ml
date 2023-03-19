@@ -5,12 +5,12 @@ let private_ethernet = etif private_netif
 let private_arp = arp private_ethernet
 let private_ipv4 = create_ipv4 ~group:"private" private_ethernet private_arp
 
-let openvpn_handler =
+let miragevpn_handler =
   let packages =
-    let pin = "git+https://github.com/roburio/openvpn.git" in
+    let pin = "git+https://github.com/roburio/miragevpn.git" in
     [
       package "logs" ;
-      package ~pin ~sublibs:["mirage"] "openvpn";
+      package ~pin ~sublibs:["mirage"] "miragevpn";
       package "mirage-kv";
       package ~min:"3.8.0" "mirage-runtime";
     ]
@@ -39,7 +39,7 @@ let management_stack =
 
 let name =
   let doc = Key.Arg.info ~doc:"Name of the unikernel" [ "name" ] in
-  Key.(v (create "name" Arg.(opt string "openvpn.robur.coop" doc)))
+  Key.(v (create "name" Arg.(opt string "miragevpn.robur.coop" doc)))
 
 let monitoring =
   let monitor =
@@ -95,5 +95,5 @@ let () =
   register "ovpn-router" [
     optional_syslog default_console default_posix_clock management_stack ;
     optional_monitoring default_time default_posix_clock management_stack ;
-    openvpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ stack $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ block
+    miragevpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ stack $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ block
   ]

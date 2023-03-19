@@ -1,11 +1,11 @@
 open Lwt.Infix
 
-let open_tun config { Openvpn.cidr ; gateway }
-  : (Openvpn.Config.t * Lwt_unix.file_descr, [> `Msg of string]) Lwt_result.t =
+let open_tun config { Miragevpn.cidr ; gateway }
+  : (Miragevpn.Config.t * Lwt_unix.file_descr, [> `Msg of string]) Lwt_result.t =
   (* This returns a Config with updated MTU, and a file descriptor for
      the TUN interface *)
   let open Lwt_result.Infix in
-  begin match Openvpn.Config.find Dev config with
+  begin match Miragevpn.Config.find Dev config with
     | None | Some (`Tun, None) -> Ok None
     | Some (`Tun, Some name) -> Ok (Some name)
     | Some (`Tap, name) ->
@@ -21,9 +21,9 @@ let open_tun config { Openvpn.cidr ; gateway }
     Tuntap.set_up_and_running dev;
     Logs.debug (fun m -> m "set TUN interface up and running");
     (* TODO set the mtu of the device *)
-    let config = match Openvpn.Config.find Tun_mtu config with
+    let config = match Miragevpn.Config.find Tun_mtu config with
       | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
-      | None -> Openvpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config in
+      | None -> Miragevpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config in
     begin
       (* TODO factor the uname -s out into a separate library *)
       let local = Ipaddr.V4.to_string (Ipaddr.V4.Prefix.address cidr)
@@ -236,12 +236,12 @@ let connect_udp ip port =
   Unix.ADDR_INET (unix_ip, port), fd
 
 type conn = {
-  mutable o_client : Openvpn.t ;
+  mutable o_client : Miragevpn.t ;
   mutable peer : ([ `Udp of Lwt_unix.sockaddr * Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ]) option ;
   mutable est_switch : Lwt_switch.t ;
   data_mvar : Cstruct.t list Lwt_mvar.t ;
-  est_mvar : (Openvpn.ip_config * int) Lwt_mvar.t ;
-  event_mvar : Openvpn.event Lwt_mvar.t ;
+  est_mvar : (Miragevpn.ip_config * int) Lwt_mvar.t ;
+  event_mvar : Miragevpn.event Lwt_mvar.t ;
 }
 
 let safe_close fd =
@@ -293,21 +293,21 @@ let handle_action conn = function
   | `Exit -> Lwt.fail_with "exit called"
   | `Payload data -> Lwt_mvar.put conn.data_mvar data
   | `Established (ip, mtu) ->
-    Logs.app (fun m -> m "established %a" Openvpn.pp_ip_config ip);
+    Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
     Lwt_mvar.put conn.est_mvar (ip, mtu)
 
 let rec event conn =
   Logs.info (fun m -> m "processing event");
   Lwt_mvar.take conn.event_mvar >>= fun ev ->
-  Logs.info (fun m -> m "now for real processing event %a" Openvpn.pp_event ev);
-  match Openvpn.handle conn.o_client ev with
+  Logs.info (fun m -> m "now for real processing event %a" Miragevpn.pp_event ev);
+  match Miragevpn.handle conn.o_client ev with
   | Error e ->
-    Logs.err (fun m -> m "openvpn handle failed %a" Openvpn.pp_error e);
+    Logs.err (fun m -> m "miragevpn handle failed %a" Miragevpn.pp_error e);
     Lwt.return_unit
   | Ok (t', outs, action) ->
     conn.o_client <- t';
     Logs.info (fun m -> m "handling action %a"
-                  Fmt.(option ~none:(any "none") Openvpn.pp_action) action);
+                  Fmt.(option ~none:(any "none") Miragevpn.pp_action) action);
     (match outs with
      | [] -> ()
      | _ ->
@@ -341,7 +341,7 @@ let send_recv conn config ip_config _mtu =
       let buf = Cstruct.create 1500 in
       Lwt_cstruct.read tun_fd buf |> Lwt_result.ok
       >|= Cstruct.sub buf 0 >>= fun buf ->
-      match Openvpn.outgoing conn.o_client buf with
+      match Miragevpn.outgoing conn.o_client buf with
       | Error `Not_ready -> Lwt.fail_with "tunnel not ready, dropping data"
       | Ok (s', out) ->
         conn.o_client <- s';
@@ -355,7 +355,7 @@ let send_recv conn config ip_config _mtu =
     Lwt.pick [ process_incoming () ; process_outgoing tun_fd ]
 
 let establish_tunnel config =
-  match Openvpn.client config ts now Mirage_crypto_rng.generate with
+  match Miragevpn.client config ts now Mirage_crypto_rng.generate with
   | Error `Msg msg ->
     Logs.err (fun m -> m "client construction failed %s" msg);
     Lwt.fail_with msg
@@ -377,7 +377,7 @@ let establish_tunnel config =
     Logs.info (fun m -> m "waiting for established");
     Lwt_mvar.take est_mvar >>= fun (ip_config, mtu) ->
     Logs.info (fun m -> m "now established %a (mtu %d)"
-                  Openvpn.pp_ip_config ip_config mtu);
+                  Miragevpn.pp_ip_config ip_config mtu);
     send_recv conn config ip_config mtu
 
 let string_of_file ~dir filename =
@@ -399,7 +399,7 @@ let parse_config filename =
   let dir, filename = Filename.(dirname filename, basename filename) in
   let string_of_file = string_of_file ~dir in
   match string_of_file filename with
-  | Ok str -> Openvpn.Config.parse_client ~string_of_file str
+  | Ok str -> Miragevpn.Config.parse_client ~string_of_file str
   | Error _ as e -> e
 
 let jump _ filename =
@@ -429,7 +429,7 @@ let config =
 
 let cmd =
   let term = Term.(term_result (const jump $ setup_log $ config))
-  and info = Cmd.info "openvpn_client" ~version:"%%VERSION_NUM%%"
+  and info = Cmd.info "miragevpn_client" ~version:"%%VERSION_NUM%%"
   in
   Cmd.v info term
 

@@ -6,15 +6,15 @@ let a_x509_cert_payload ctx constructor str =
   | Error (`Msg msg) -> Alcotest.failf "%s: invalid certificate: %s" ctx msg
 
 let a_ca_payload str =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   a_x509_cert_payload "ca" (fun c -> B(Ca,c)) str
 
 let a_cert_payload str =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   a_x509_cert_payload "cert" (fun c -> B(Tls_cert,c)) str
 
 let a_key_payload str =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   match X509.Private_key.decode_pem (Cstruct.of_string str) with
   | Ok key -> B (Tls_key, key)
   | Error (`Msg msg) -> Alcotest.failf "no key found in x509 tls-key %s" msg
@@ -55,21 +55,21 @@ let pmsg =
     (fun (`Msg a) (`Msg b) -> String.equal a b)
 
 let conf_map = Alcotest.testable
-    Openvpn.Config.pp Openvpn.Config.(equal eq)
+    Miragevpn.Config.pp Miragevpn.Config.(equal eq)
 
 let parse_noextern_client conf =
-  Openvpn.Config.parse_client ~string_of_file:(fun path ->
+  Miragevpn.Config.parse_client ~string_of_file:(fun path ->
       Rresult.R.error_msgf
         "this test suite does not read external files, \
          but a config asked for: %S" path) conf
 
-let add_b (Openvpn.Config.B (k, v)) t =
-  Openvpn.Config.add k v t
+let add_b (Miragevpn.Config.B (k, v)) t =
+  Miragevpn.Config.add k v t
 
 let minimal_config =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   empty
-  (* from {!Openvpn.Config.Defaults.client_config} *)
+  (* from {!Miragevpn.Config.Defaults.client_config} *)
   |> add Ping_interval `Not_configured
   |> add Ping_timeout (`Restart 120)
   |> add Renegotiate_seconds 3600
@@ -105,14 +105,14 @@ remote 10.0.0.1|} in
 
 let test_dev_type () =
   let tun0 =
-    let open Openvpn.Config in
+    let open Miragevpn.Config in
     minimal_config
     |> add Dev (`Tun, Some "tun0") in
 
   let implicit_dev_type_tun =
     Fmt.str {|%a
 dev tun0
-|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
+|} Miragevpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev, implicit dev-type"
     (Ok tun0) implicit_dev_type_tun ;
@@ -122,10 +122,10 @@ dev tun0
        for the tun device: *)
     Fmt.str {|%a
 dev tun
-|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
+|} Miragevpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev tun specifying dynamic allocation"
-    (Ok (minimal_config |> Openvpn.Config.add Dev (`Tun, None)))
+    (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tun, None)))
     explicit_dynamic_tun ;
 
   let explicit_tun_str =
@@ -134,7 +134,7 @@ dev tun
     Fmt.str {|%a
 dev tun0
 dev-type tun
-|} Openvpn.Config.pp minimal_config
+|} Miragevpn.Config.pp minimal_config
   in
   let explicit_tun = parse_noextern_client explicit_tun_str in
   Alcotest.(check (result conf_map pmsg))
@@ -146,20 +146,20 @@ dev-type tun
     Fmt.str {|%a
 dev-type tap
 dev myvlan
-|} Openvpn.Config.pp minimal_config |> parse_noextern_client in
+|} Miragevpn.Config.pp minimal_config |> parse_noextern_client in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev, implicit dev-type"
-    (Ok (minimal_config |> Openvpn.Config.add Dev (`Tap, Some "myvlan")))
+    (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tap, Some "myvlan")))
     custom_name_tap ;
 
   let two_remotes_str =
-    Fmt.str "%a" Openvpn.Config.pp minimal_config
+    Fmt.str "%a" Miragevpn.Config.pp minimal_config
     ^ "\ndev tun0\ndev-type tun\nremote number1.org 11\nremote number2.org 22" in
   let two_remotes =
     minimal_config
-    |> Openvpn.Config.add Dev (`Tun, Some "tun0")
-    |> Openvpn.Config.add Remote @@
-    Openvpn.Config.get Remote minimal_config
+    |> Miragevpn.Config.add Dev (`Tun, Some "tun0")
+    |> Miragevpn.Config.add Remote @@
+    Miragevpn.Config.get Remote minimal_config
     @  [
       `Domain (Domain_name.(of_string_exn "number1.org" |> host_exn)
                  , `Any), 11, `Udp ;
@@ -222,9 +222,9 @@ let auth_user_pass_trailing_whitespace () =
 let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
      the rport directive correctly. TODO *)
-  (* see https://github.com/roburio/openvpn/pull/12#issuecomment-581449319 *)
+  (* see https://github.com/roburio/miragevpn/pull/12#issuecomment-581449319 *)
   let config =
-    Openvpn.Config.add Remote
+    Miragevpn.Config.add Remote
       [ `Ip (Ipaddr.of_string_exn "10.0.42.5"), 1234, `Udp ;
         `Ip (Ipaddr.of_string_exn "10.0.42.3"), 1194, `Udp ;
         `Ip (Ipaddr.of_string_exn "10.0.42.4"), 1234, `Udp ]
@@ -245,7 +245,7 @@ testpass
     rport 1234
     remote 10.0.42.4
 |} in
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   let sample = parse_client
       ~string_of_file:(fun _ -> Rresult.R.error_msg "oops")
       sample
@@ -298,7 +298,7 @@ testpass
      Fmt.str "%a" pp (singleton Remote (get Remote sample)))
 
 let whitespace_after_tls_auth () =
-  let expected = Openvpn.Config.add Tls_auth
+  let expected = Miragevpn.Config.add Tls_auth
       (None,
        Cstruct.create 64, Cstruct.create 64,
        Cstruct.create 64, Cstruct.create 64) minimal_config in
@@ -327,7 +327,7 @@ tls-auth [inline]
 
 
 </tls-auth>
-|} Openvpn.Config.pp minimal_config
+|} Miragevpn.Config.pp minimal_config
   in
   Alcotest.(check (result conf_map pmsg))
     "Allow whitespace after ----END of tls-auth"
@@ -347,7 +347,7 @@ remote 10.0.0.1
 remote 10.0.0.2
 remote 10.0.0.3
 remote 10.0.0.4|} in
-  let config = Openvpn.Config.add
+  let config = Miragevpn.Config.add
       Remote [ `Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp ;
                `Ip (Ipaddr.of_string_exn "10.0.0.2"), 1194, `Udp ;
                `Ip (Ipaddr.of_string_exn "10.0.0.3"), 1194, `Udp ;
@@ -370,7 +370,7 @@ remote 10.0.0.1 1234
 remote 10.0.0.2 1234
 remote 10.0.0.3 1234
 remote 10.0.0.4 1234|} in
-  let config = Openvpn.Config.add
+  let config = Miragevpn.Config.add
       Remote [ `Ip (Ipaddr.of_string_exn "10.0.0.1"), 1234, `Udp ;
                `Ip (Ipaddr.of_string_exn "10.0.0.2"), 1234, `Udp ;
                `Ip (Ipaddr.of_string_exn "10.0.0.3"), 1234, `Udp ;
@@ -383,7 +383,7 @@ remote 10.0.0.4 1234|} in
 let parse_client_configuration ?config file () =
   let data = string_of_file file in
   let string_of_file n = Ok (string_of_file n) in
-  match Openvpn.Config.parse_client ~string_of_file data with
+  match Miragevpn.Config.parse_client ~string_of_file data with
   | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" file err
   | Ok conf -> match config with
     | None -> ()
@@ -393,7 +393,7 @@ let parse_client_configuration ?config file () =
         cfg conf
 
 let minimal_ta_conf =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   let tls_auth =
     let a, b, c, d = a_inline_payload (string_of_file "ta.key") in
     None, a, b, c, d
@@ -402,7 +402,7 @@ let minimal_ta_conf =
   |> add Tls_auth tls_auth
 
 let client_conf =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   let tls_auth =
     let a, b, c, d = a_inline_payload (string_of_file "ta.key") in
     Some `Incoming, a, b, c, d
@@ -428,7 +428,7 @@ let client_conf =
   |> add Verb 3
 
 let tls_home_conf =
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   minimal_config
   |> remove Auth_user_pass
   |> add Dev (`Tun, None)
@@ -500,7 +500,7 @@ efabaa5e34619f13adbe58b6c83536d3
     None, a, b, c, d
   in
   let host s = Domain_name.(host_exn (of_string_exn s)) in
-  let open Openvpn.Config in
+  let open Miragevpn.Config in
   minimal_config
   |> add Pull ()
   |> add Dev (`Tun, Some "tun0")

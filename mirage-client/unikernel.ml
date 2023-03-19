@@ -10,7 +10,7 @@ open Lwt.Infix
 
 module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PCLOCK) (T : Mirage_time.S) (S : Tcpip.Stack.V4V6) (FS: Mirage_kv.RO) = struct
 
-  module O = Openvpn_mirage.Make_stack(R)(M)(P)(T)(S)
+  module O = Miragevpn_mirage.Make_stack(R)(M)(P)(T)(S)
   module I = Icmpv4.Make(O)
 
   let read_config data =
@@ -18,7 +18,7 @@ module Main (R : Mirage_random.S) (M : Mirage_clock.MCLOCK) (P : Mirage_clock.PC
     | Error e -> Rresult.R.error_to_msg ~pp_error:FS.pp_error (Error e)
     | Ok data ->
       let string_of_file _ = Error (`Msg "not supported") in
-      Openvpn.Config.parse_client ~string_of_file data
+      Miragevpn.Config.parse_client ~string_of_file data
 
   let cb icmp ~proto ~src ~dst buf =
     match proto with

@@ -1,10 +1,10 @@
 opam-version: "2.0"
 synopsis:     "Library implementing the OpenVPN protocol and configuration format"
-name:         "openvpn"
-homepage:     "https://github.com/roburio/openvpn"
-dev-repo:     "git+https://github.com/roburio/openvpn.git"
-bug-reports:  "https://github.com/roburio/openvpn/issues"
-doc:          "https://github.com/roburio/openvpn/doc"
+name:         "miragevpn"
+homepage:     "https://github.com/roburio/miragevpn"
+dev-repo:     "git+https://github.com/roburio/miragevpn.git"
+bug-reports:  "https://github.com/roburio/miragevpn/issues"
+doc:          "https://github.com/roburio/miragevpn/doc"
 author:       ["robur"]
 maintainer:   ["robur"]
 license:      "AGPL"

@@ -6,7 +6,7 @@ services:
 sudo: false
 env:
   global:
-    - PACKAGE="openvpn"
+    - PACKAGE="miragevpn"
     - TESTS=false
     - DISTRO=alpine
   matrix:

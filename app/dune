@@ -1,15 +1,15 @@
 (executable
-  (name openvpn_client_lwt)
-  (public_name openvpn-client-lwt)
-  (package openvpn)
-  (modules openvpn_client_lwt)
-  (libraries openvpn lwt lwt.unix cmdliner fmt.tty logs.fmt logs.cli fmt.cli
+  (name miragevpn_client_lwt)
+  (public_name miragevpn-client-lwt)
+  (package miragevpn)
+  (modules miragevpn_client_lwt)
+  (libraries miragevpn lwt lwt.unix cmdliner fmt.tty logs logs.fmt logs.cli fmt.cli
              ipaddr ipaddr.unix ptime.clock.os dns-client-lwt
              mirage-crypto-rng-lwt mtime.clock.os tuntap cstruct-lwt))
 
 (executable
   (name openvpn_config_parser)
   (public_name openvpn-config-parser)
-  (package openvpn)
+  (package miragevpn)
   (modules openvpn_config_parser)
-  (libraries openvpn logs.fmt fmt.tty rresult))
+  (libraries miragevpn logs logs.fmt fmt.tty rresult))
