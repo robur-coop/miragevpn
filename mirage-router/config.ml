@@ -67,33 +67,33 @@ let syslog =
     Key.(v (create "syslog" Arg.(opt (some ip_address) None doc)))
   in
   let connect _ modname = function
-    | [ console ; _ ; stack ] ->
+    | [ _ ; stack ] ->
       Fmt.str "Lwt.return (match %a with\
                | None -> Logs.warn (fun m -> m \"no syslog specified, dumping on stdout\")\
-               | Some ip -> Logs.set_reporter (%s.create %s %s ip ~hostname:%a ()))"
-        Key.serialize_call syslog modname console stack
+               | Some ip -> Logs.set_reporter (%s.create %s ip ~hostname:%a ()))"
+        Key.serialize_call syslog modname stack
         Key.serialize_call name
     | _ -> assert false
   in
   impl
-    ~packages:[ package ~sublibs:["mirage"] ~min:"0.3.0" "logs-syslog" ]
+    ~packages:[ package ~sublibs:["mirage"] ~min:"0.4.0" "logs-syslog" ]
     ~keys:[ name ; syslog ]
     ~connect "Logs_syslog_mirage.Udp"
-    (console @-> pclock @-> stackv4v6 @-> job)
+    (pclock @-> stackv4v6 @-> job)
 
 let optional_monitoring time pclock stack =
   if_impl (Key.value enable_monitoring)
     (monitoring $ time $ pclock $ stack)
     noop
 
-let optional_syslog console pclock stack =
+let optional_syslog pclock stack =
   if_impl (Key.value enable_monitoring)
-    (syslog $ console $ pclock $ stack)
+    (syslog $ pclock $ stack)
     noop
 
 let () =
   register "ovpn-router" [
-    optional_syslog default_console default_posix_clock management_stack ;
+    optional_syslog default_posix_clock management_stack ;
     optional_monitoring default_time default_posix_clock management_stack ;
     miragevpn_handler $ default_random $ default_monotonic_clock $ default_posix_clock $ default_time $ stack $ private_netif $ private_ethernet $ private_arp $ private_ipv4 $ block
   ]
