@@ -7,7 +7,7 @@ let private_ipv4 = create_ipv4 ~group:"private" private_ethernet private_arp
 
 let miragevpn_handler =
   let packages =
-    let pin = "git+https://github.com/roburio/miragevpn.git" in
+    let pin = "git+https://github.com/robur-coop/miragevpn.git" in
     [
       package "logs" ;
       package ~pin ~sublibs:["mirage"] "miragevpn";
