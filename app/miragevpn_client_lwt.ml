@@ -107,16 +107,16 @@ let transmit data = function
   | None -> Lwt.return false
 
 let read_from_fd fd =
-  Lwt_result.catch (
-    let bufsize = 2048 in
-    let buf = Bytes.create bufsize in
-    Lwt_unix.read fd buf 0 bufsize >>= fun count ->
-    if count = 0 then
-      Lwt.fail_with "end of file from server"
-    else
-      let cs = Cstruct.of_bytes ~len:count buf in
-      Logs.debug (fun m -> m "read %d bytes" count) ;
-      Lwt.return cs)
+  Lwt_result.catch (fun () ->
+      let bufsize = 2048 in
+      let buf = Bytes.create bufsize in
+      Lwt_unix.read fd buf 0 bufsize >>= fun count ->
+      if count = 0 then
+        Lwt.fail_with "end of file from server"
+      else
+        let cs = Cstruct.of_bytes ~len:count buf in
+        Logs.debug (fun m -> m "read %d bytes" count) ;
+        Lwt.return cs)
   |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_tcp mvar fd =
@@ -132,21 +132,21 @@ let read_udp =
   let bufsize = 65535 in
   let buf = Bytes.create bufsize in
   fun (sa, fd) ->
-    Lwt_result.catch (
-      Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
-      if sa = sa' then
-        let cs = Cstruct.of_bytes ~len:count buf in
-        Logs.debug (fun m -> m "read %d bytes" count) ;
-        Lwt.return (Some cs)
-      else
-        let pp_sockaddr ppf = function
-          | Unix.ADDR_UNIX s -> Fmt.pf ppf "unix %s" s
-          | Unix.ADDR_INET (ip, port) ->
-            Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr ip) port
-        in
-        Logs.warn (fun m -> m "ignoring unsolicited data from %a (expected %a)"
-                      pp_sockaddr sa' pp_sockaddr sa);
-        Lwt.return None)
+    Lwt_result.catch (fun () ->
+        Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
+        if sa = sa' then
+          let cs = Cstruct.of_bytes ~len:count buf in
+          Logs.debug (fun m -> m "read %d bytes" count) ;
+          Lwt.return (Some cs)
+        else
+          let pp_sockaddr ppf = function
+            | Unix.ADDR_UNIX s -> Fmt.pf ppf "unix %s" s
+            | Unix.ADDR_INET (ip, port) ->
+              Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr ip) port
+          in
+          Logs.warn (fun m -> m "ignoring unsolicited data from %a (expected %a)"
+                        pp_sockaddr sa' pp_sockaddr sa);
+          Lwt.return None)
   |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
