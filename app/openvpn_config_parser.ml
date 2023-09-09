@@ -4,15 +4,13 @@ open Miragevpn.Config
 let read_config_file fn =
   let string_of_file ~dir filename =
     let file =
-      if Filename.is_relative filename then
-        Filename.concat dir filename
-      else
-        filename
+      if Filename.is_relative filename then Filename.concat dir filename
+      else filename
     in
     try
       let fh = open_in file in
       let content = really_input_string fh (in_channel_length fh) in
-      close_in_noerr fh ;
+      close_in_noerr fh;
       Ok content
     with _ -> Rresult.R.error_msgf "Error reading file %S" file
   in
@@ -38,18 +36,22 @@ let pad_output output =
   let rec pad acc = function
     | 0 -> acc
     | n ->
-      let chunk = min n 77 in
-      let next = "\n" (* subtract length of this (= 1) below: *)
-                 ^ String.make (chunk - 1) '#'
-                 ^ acc in
-      pad next (n - chunk) in
+        let chunk = min n 77 in
+        let next =
+          "\n" (* subtract length of this (= 1) below: *)
+          ^ String.make (chunk - 1) '#'
+          ^ acc
+        in
+        pad next (n - chunk)
+  in
   let initial_padding = "\n\n" in
   let ideal_size =
     String.length alignment_header (* at beginning, before padding *)
     + String.length initial_padding (* between padding and config contents *)
-    + String.length output in
+    + String.length output
+  in
   let padding_size = 512 - (ideal_size mod 512) in
-  alignment_header ^ (pad initial_padding padding_size) ^ output
+  alignment_header ^ pad initial_padding padding_size ^ output
 
 let () =
   (* Testing code for pad_output: *)
@@ -58,27 +60,29 @@ let () =
             0 = String.length res mod 512)
     done ; ignore (exit 0) ;
   *)
-  if not !Sys.interactive then begin
-    Fmt_tty.setup_std_outputs () ;
-    Logs.set_reporter (Logs_fmt.reporter());
-    Logs.set_level (Some Logs.Debug) ;
+  if not !Sys.interactive then (
+    Fmt_tty.setup_std_outputs ();
+    Logs.set_reporter (Logs_fmt.reporter ());
+    Logs.set_level (Some Logs.Debug);
     let fn = Sys.argv.(1) in
     match read_config_file fn with
-    | Ok rules ->
-      let outbuf = Buffer.create 2048 in
-      Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n%!" pp rules ;
-      Fmt.pr "%s%!" (pad_output (Buffer.contents outbuf)) ;
-      Logs.info (fun m -> m "Read %d entries!" (cardinal rules)) ;
-      (* The output was printed, now we generate a warning on stderr
-       * if our self-testing fails: *)
-      begin match
-          parse_client ~string_of_file:(fun _fn -> assert false)
-            (Buffer.contents outbuf) with
-      | Error `Msg s->
-        Logs.err (fun m ->m "self-test failed to parse: %s" s);
-        exit 2
-      | Ok dogfood when equal eq rules dogfood -> ()
-      | Ok _ -> Logs.err (fun m -> m "self-test failed"); exit 1
-      end
-    | Error `Msg s -> Logs.err (fun m -> m "%s" s)
-  end
+    | Ok rules -> (
+        let outbuf = Buffer.create 2048 in
+        Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n%!" pp rules;
+        Fmt.pr "%s%!" (pad_output (Buffer.contents outbuf));
+        Logs.info (fun m -> m "Read %d entries!" (cardinal rules));
+        (* The output was printed, now we generate a warning on stderr
+         * if our self-testing fails: *)
+        match
+          parse_client
+            ~string_of_file:(fun _fn -> assert false)
+            (Buffer.contents outbuf)
+        with
+        | Error (`Msg s) ->
+            Logs.err (fun m -> m "self-test failed to parse: %s" s);
+            exit 2
+        | Ok dogfood when equal eq rules dogfood -> ()
+        | Ok _ ->
+            Logs.err (fun m -> m "self-test failed");
+            exit 1)
+    | Error (`Msg s) -> Logs.err (fun m -> m "%s" s))
