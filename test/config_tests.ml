@@ -222,7 +222,7 @@ let auth_user_pass_trailing_whitespace () =
 let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
      the rport directive correctly. TODO *)
-  (* see https://github.com/roburio/miragevpn/pull/12#issuecomment-581449319 *)
+  (* see https://github.com/robur-coop/miragevpn/pull/12#issuecomment-581449319 *)
   let config =
     Miragevpn.Config.add Remote
       [ `Ip (Ipaddr.of_string_exn "10.0.42.5"), 1234, `Udp ;
