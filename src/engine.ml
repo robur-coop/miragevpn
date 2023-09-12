@@ -67,9 +67,25 @@ let secret config =
       and cipher cs = Cstruct.sub cs 0 32 in
       Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
 
+let get_remotes rng config =
+  let remotes = Config.get Config.Remote config in
+  if not (Config.mem Config.Remote_random config) then
+    remotes
+  else
+    let remotes = Array.of_list remotes in
+    let () =
+      for i = Array.length remotes - 1 downto 1 do
+        let j = Randomconv.int rng ~bound:(succ i) in
+        let t = remotes.(i) in
+        remotes.(i) <- remotes.(j);
+        remotes.(j) <- t
+      done
+    in
+    Array.to_list remotes
+
 let client config ts now rng =
   let current_ts = ts () in
-  (match Config.get Remote config with
+  (match get_remotes rng config with
   | (`Domain (name, ip_version), _port, _proto) :: _ ->
       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
   | (`Ip ip, port, dp) :: _ ->
@@ -1195,9 +1211,9 @@ let retransmit timeout ts transport =
   in
   ({ transport with out_packets }, out)
 
-let resolve_connect_client config ts s ev =
+let resolve_connect_client rng config ts s ev =
   let remote, next_remote =
-    let remotes = Config.get Remote config in
+    let remotes = get_remotes rng config in
     let r idx = List.nth remotes idx in
     let next idx =
       if succ idx = List.length remotes then None else Some (r (succ idx))
@@ -1251,7 +1267,7 @@ let resolve_connect_client config ts s ev =
 let handle_client t s ev =
   let now = t.now () and ts = t.ts () in
   let client cs = Client cs in
-  match resolve_connect_client t.config ts s ev with
+  match resolve_connect_client t.rng t.config ts s ev with
   | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
@@ -1337,7 +1353,7 @@ let handle_server ?is_not_taken t s ev =
 let handle_static_client t s keys ev =
   let ts = t.ts () in
   let client cs = Client_static (keys, cs) in
-  match resolve_connect_client t.config ts s ev with
+  match resolve_connect_client t.rng t.config ts s ev with
   | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
