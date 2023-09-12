@@ -116,7 +116,7 @@ let read_from_fd fd =
       let bufsize = 2048 in
       let buf = Bytes.create bufsize in
       Lwt_unix.read fd buf 0 bufsize >>= fun count ->
-      if count = 0 then Lwt.fail_with "end of file from server"
+      if count = 0 then failwith "end of file from server"
       else
         let cs = Cstruct.of_bytes ~len:count buf in
         Logs.debug (fun m -> m "read %d bytes" count);
@@ -290,7 +290,7 @@ let handle_action conn = function
           Logs.warn (fun m -> m "disconnecting!");
           conn.peer <- None;
           safe_close fd)
-  | `Exit -> Lwt.fail_with "exit called"
+  | `Exit -> failwith "exit called"
   | `Payload data -> Lwt_mvar.put conn.data_mvar data
   | `Established (ip, mtu) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
@@ -325,7 +325,7 @@ let rec event conn =
 
 let send_recv conn config ip_config _mtu =
   open_tun config ip_config (* TODO mtu *) >>= function
-  | Error (`Msg msg) -> Lwt.fail_with ("error opening tun " ^ msg)
+  | Error (`Msg msg) -> failwith ("error opening tun " ^ msg)
   | Ok (_, tun_fd) ->
       let rec process_incoming () =
         Lwt_mvar.take conn.data_mvar >>= fun app_data ->
@@ -347,13 +347,13 @@ let send_recv conn config ip_config _mtu =
         Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= Cstruct.sub buf 0
         >>= fun buf ->
         match Miragevpn.outgoing conn.o_client buf with
-        | Error `Not_ready -> Lwt.fail_with "tunnel not ready, dropping data"
+        | Error `Not_ready -> failwith "tunnel not ready, dropping data"
         | Ok (s', out) ->
             conn.o_client <- s';
             let open Lwt.Infix in
             transmit [ out ] conn.peer >>= fun sent ->
             if sent then process_outgoing tun_fd
-            else Lwt.fail_with "couldn't send"
+            else failwith "couldn't send"
       in
       Lwt.pick [ process_incoming (); process_outgoing tun_fd ]
 
@@ -361,7 +361,7 @@ let establish_tunnel config =
   match Miragevpn.client config ts now Mirage_crypto_rng.generate with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "client construction failed %s" msg);
-      Lwt.fail_with msg
+      failwith msg
   | Ok (o_client, action) ->
       let data_mvar = Lwt_mvar.create_empty ()
       and est_mvar = Lwt_mvar.create_empty ()
@@ -415,7 +415,7 @@ let jump _ filename =
   Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
   Lwt_main.run
     (parse_config filename >>= function
-     | Error (`Msg s) -> Lwt.fail_with ("config parser: " ^ s)
+     | Error (`Msg s) -> failwith ("config parser: " ^ s)
      | Ok config -> establish_tunnel config)
 (* <- Lwt_main.run *)
 

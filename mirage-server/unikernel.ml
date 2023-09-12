@@ -21,7 +21,7 @@ struct
     read_config data >>= function
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "error while reading config %s" msg);
-        Lwt.fail_with "config file error"
+        failwith "config file error"
     | Ok config ->
         let _t = O.connect config s in
         let task, _u = Lwt.task () in

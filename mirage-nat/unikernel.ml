@@ -37,10 +37,10 @@ struct
   let start _ _ _ _ s net eth arp _ip data =
     let private_ip_cidr = Key_gen.private_ipv4 () in
     read_config data >>= function
-    | Error (`Msg m) -> Lwt.fail_with m
+    | Error (`Msg m) -> failwith m
     | Ok config -> (
         O.connect config s >>= function
-        | Error (`Msg m) -> Lwt.fail_with m
+        | Error (`Msg m) -> failwith m
         | Ok ovpn ->
             Logs.info (fun m -> m "tunnel established");
             let output_tunnel packet =

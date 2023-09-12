@@ -448,7 +448,7 @@ struct
             Log.err (fun m -> m "disconnecting flow %a:%d" Ipaddr.pp ip port);
             conn.peer <- None;
             TCP.close f)
-    | `Exit -> Lwt.fail_with "exit called"
+    | `Exit -> failwith "exit called"
     | `Payload data -> Lwt_mvar.put conn.data_mvar data
     | `Established (ip, mtu) ->
         Log.debug (fun m -> m "action = established");
