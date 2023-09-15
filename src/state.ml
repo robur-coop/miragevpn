@@ -236,14 +236,20 @@ let pp_server_state ppf = function
   | Server_ready -> Fmt.string ppf "server ready"
   | Server_rekeying c -> Fmt.pf ppf "server rekeying %a" pp_channel c
 
+type remote =
+  ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
+   | `Ip of Ipaddr.t ]
+   * int
+   * [ `Udp | `Tcp ])
+
 type state =
-  | Client of client_state
-  | Client_static of keys * client_state
+  | Client of remote list * client_state
+  | Client_static of keys * remote list * client_state
   | Server of server_state
 
 let pp_state ppf = function
-  | Client c -> pp_client_state ppf c
-  | Client_static (_, c) -> Fmt.pf ppf "client static %a" pp_client_state c
+  | Client (_, c) -> pp_client_state ppf c
+  | Client_static (_, _, c) -> Fmt.pf ppf "client static %a" pp_client_state c
   | Server s -> pp_server_state ppf s
 
 type t = {
@@ -321,9 +327,9 @@ let channel_of_keyid keyid s =
         Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
     | _ -> (
         match s.state with
-        | Client (Rekeying channel) when channel.keyid = keyid ->
+        | Client (remotes, Rekeying channel) when channel.keyid = keyid ->
             let set s ch =
-              let state = Client (Rekeying ch) in
+              let state = Client (remotes, Rekeying ch) in
               { s with state }
             in
             Some (channel, set)

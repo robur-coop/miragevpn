@@ -85,7 +85,8 @@ let get_remotes rng config =
 
 let client config ts now rng =
   let current_ts = ts () in
-  (match get_remotes rng config with
+  let remotes = get_remotes rng config in
+  (match remotes with
   | (`Domain (name, ip_version), _port, _proto) :: _ ->
       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
   | (`Ip ip, port, dp) :: _ ->
@@ -115,7 +116,7 @@ let client config ts now rng =
       let state =
         {
           config;
-          state = Client_static (keys, state);
+          state = Client_static (keys, remotes, state);
           linger = Cstruct.empty;
           rng;
           ts;
@@ -134,7 +135,7 @@ let client config ts now rng =
       let state =
         {
           config;
-          state = Client state;
+          state = Client (remotes, state);
           linger = Cstruct.empty;
           rng;
           ts;
@@ -772,7 +773,7 @@ let outgoing s data =
     { ch with packets = succ ch.packets; bytes = Cstruct.length out + ch.bytes }
   in
   match (s.state, keys_opt s.channel) with
-  | Client_static (ctx, c), _ ->
+  | Client_static (ctx, remotes, c), _ ->
       let add_timestamp = ptime_to_ts_exn (s.now ()) in
       let ctx, payload = out ~add_timestamp ctx s.session.compress s.rng data in
       let prefix =
@@ -780,7 +781,7 @@ let outgoing s data =
       in
       let out = Cstruct.append prefix payload in
       let channel = incr s.channel out in
-      let state = Client_static (ctx, c) in
+      let state = Client_static (ctx, remotes, c) in
       Ok ({ s with state; channel; last_sent = s.ts () }, out)
   | _, None -> Error `Not_ready
   | _, Some ctx ->
@@ -820,9 +821,9 @@ let maybe_init_rekey s =
     init_channel Packet.Soft_reset s.session keyid (s.now ()) (s.ts ())
   in
   match s.state with
-  | Client Ready ->
+  | Client (remotes, Ready) ->
       (* allocate new channel, send out a rst (and await a rst) *)
-      let state = Client (Rekeying channel) in
+      let state = Client (remotes, Rekeying channel) in
       ({ s with state; session }, [ out ])
   | Server Server_ready ->
       let state = Server (Server_rekeying channel) in
@@ -1010,9 +1011,9 @@ let find_channel state key p =
   | None -> (
       Logs.warn (fun m -> m "no channel found! %d" key);
       match (state.state, p) with
-      | Client Ready, `Control (Packet.Soft_reset, _) ->
+      | Client (remotes, Ready), `Control (Packet.Soft_reset, _) ->
           let channel = new_channel key (state.ts ()) in
-          Some (channel, fun s ch -> { s with state = Client (Rekeying ch) })
+          Some (channel, fun s ch -> { s with state = Client (remotes, Rekeying ch) })
       | Server Server_ready, `Control (Packet.Soft_reset, _) ->
           let channel = new_channel key (state.ts ()) in
           Some
@@ -1103,7 +1104,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         | None -> (set_ch state ch, out, act)
                         | Some ip_config -> (
                             match state.state with
-                            | Client (Handshaking _) ->
+                            | Client (remotes, Handshaking _) ->
                                 let compress =
                                   match Config.find Comp_lzo config with
                                   | None -> false
@@ -1116,20 +1117,20 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 in
                                 ( {
                                     state with
-                                    state = Client Ready;
+                                    state = Client (remotes, Ready);
                                     session;
                                     channel = ch;
                                   },
                                   out,
                                   act )
-                            | Client (Rekeying _) ->
+                            | Client (remotes, Rekeying _) ->
                                 (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
                                 let lame_duck =
                                   Some (state.channel, state.ts ())
                                 in
                                 ( {
                                     state with
-                                    state = Client Ready;
+                                    state = Client (remotes, Ready);
                                     channel = ch;
                                     lame_duck;
                                   },
@@ -1211,30 +1212,24 @@ let retransmit timeout ts transport =
   in
   ({ transport with out_packets }, out)
 
-let resolve_connect_client rng config ts s ev =
-  let remote, next_remote =
-    let remotes = get_remotes rng config in
-    let r idx = List.nth remotes idx in
-    let next idx =
-      if succ idx = List.length remotes then None else Some (r (succ idx))
-    in
-    (r, next)
-  and retry_exceeded r =
+let resolve_connect_client config ts remotes s ev =
+  let retry_exceeded r =
     match Config.get Connect_retry_max config with
     | `Times m -> m > r
     | `Unlimited -> false
   in
   let next_or_fail idx retry =
-    let idx', retry', v =
-      match next_remote idx with
-      | None -> (0, succ retry, remote 0)
-      | Some x -> (succ idx, retry, x)
+    let idx', retry' =
+      if succ idx >= List.length remotes then
+        (0, succ retry)
+      else
+        (succ idx, retry)
     in
     if retry_exceeded retry' then
       Error (`Msg "maximum connection retries exceeded")
     else
       Ok
-        (match v with
+        (match List.nth remotes idx' with
         | `Domain (name, ip_version), _, _ ->
             (Resolving (idx', ts, retry'), `Resolve (name, ip_version))
         | `Ip ip, port, dp ->
@@ -1243,7 +1238,7 @@ let resolve_connect_client rng config ts s ev =
   match (s, ev) with
   | Resolving (idx, _, retry), `Resolved ip ->
       (* TODO enforce ipv4/ipv6 *)
-      let endp = match remote idx with _, port, dp -> (ip, port, dp) in
+      let endp = match List.nth remotes idx with _, port, dp -> (ip, port, dp) in
       Ok (Connecting (idx, ts, retry), Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
       next_or_fail idx retry >>| fun (state, action) -> (state, Some action)
@@ -1262,12 +1257,12 @@ let resolve_connect_client rng config ts s ev =
   | _, `Connection_failed ->
       (* re-start from scratch *)
       next_or_fail (-1) 0 >>| fun (state, action) -> (state, Some action)
-  | _ -> Error (`Not_handled (remote, next_or_fail))
+  | _ -> Error (`Not_handled (List.nth remotes, next_or_fail))
 
-let handle_client t s ev =
+let handle_client t remotes s ev =
   let now = t.now () and ts = t.ts () in
-  let client cs = Client cs in
-  match resolve_connect_client t.rng t.config ts s ev with
+  let client cs = Client (remotes, cs) in
+  match resolve_connect_client t.config ts remotes s ev with
   | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
@@ -1350,10 +1345,10 @@ let handle_server ?is_not_taken t s ev =
       Rresult.R.error_msgf "handle_server: unexpected event %a in state %a"
         pp_event ev pp_server_state s
 
-let handle_static_client t s keys ev =
+let handle_static_client t remotes s keys ev =
   let ts = t.ts () in
-  let client cs = Client_static (keys, cs) in
-  match resolve_connect_client t.rng t.config ts s ev with
+  let client cs = Client_static (keys, remotes, cs) in
+  match resolve_connect_client t.config ts remotes s ev with
   | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
@@ -1370,7 +1365,7 @@ let handle_static_client t s keys ev =
                 let add_timestamp = ptime_to_ts_exn (t.now ()) in
                 out ~add_timestamp keys t.session.compress t.rng ping
               in
-              let state = Client_static (keys, Ready) in
+              let state = Client_static (keys, remotes, Ready) in
               Ok
                 ( { t with state; session; last_sent = ts },
                   [ payload ],
@@ -1407,6 +1402,6 @@ let handle_static_client t s keys ev =
 
 let handle t ?is_not_taken ev =
   match t.state with
-  | Client c -> handle_client t c ev
-  | Client_static (k, c) -> handle_static_client t c k ev
+  | Client (remotes, c) -> handle_client t remotes c ev
+  | Client_static (k, remotes, c) -> handle_static_client t remotes c k ev
   | Server s -> handle_server ?is_not_taken t s ev
