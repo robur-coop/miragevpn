@@ -69,6 +69,21 @@ let secret config =
 
 let client config ts now rng =
   let current_ts = ts () in
+  let config =
+    match Config.get Remote_random config with
+    | exception Not_found -> config
+    | () ->
+      let remotes = Config.get Remote config in
+      let remotes = Array.of_list remotes in
+      for i = Array.length remotes - 1 downto 1 do
+        let j = Randomconv.int rng ~bound:(succ i) in
+        let t = remotes.(i) in
+        remotes.(i) <- remotes.(j);
+        remotes.(j) <- t
+      done;
+      let remotes = Array.to_list remotes in
+      Config.add Remote remotes config
+  in
   (match Config.get Remote config with
   | (`Domain (name, ip_version), _port, _proto) :: _ ->
       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
