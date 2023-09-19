@@ -1,4 +1,13 @@
 let () = Printexc.record_backtrace true
+let error_msgf fmt = Fmt.kstr (fun str -> Error (`Msg str)) fmt
+
+module Lzo = struct
+  let decompress str =
+    let bstr = Bigstringaf.of_string str ~off:0 ~len:(String.length str) in
+    match Lzo.uncompress_with_buffer bstr with
+    | Ok _ as v -> v
+    | Error err -> error_msgf "%a" Lzo.pp_error err
+end
 
 module Lzo_tests = struct
   let string_enc = Alcotest.testable (fun ppf v -> Fmt.pf ppf "%S" v) ( = )
@@ -11,7 +20,7 @@ module Lzo_tests = struct
     (* this used to hang *)
     Alcotest.(check (result reject alco_msg))
       "ensure it fails without exception"
-      (Error (`Msg "Copy_literal would read past input bounds"))
+      (Error (`Msg "Malformed input"))
       (Lzo.decompress "\x00\x00\x11\x00\x00")
 
   let regression_02 () =
@@ -67,7 +76,7 @@ module Lzo_tests = struct
     Alcotest.check
       Alcotest.(result reject alco_msg)
       "afl-regression-05: invalid returns error"
-      (Error (`Msg "Copy_literal would read past input bounds"))
+      (Error (`Msg "Malformed input"))
       (Lzo.decompress
          ("\164"
         (* Copy_literal (147, Trailing_no_extra)
@@ -89,7 +98,7 @@ module Lzo_tests = struct
     Alcotest.check
       Alcotest.(result reject alco_msg)
       "afl: input EOF without End_of_stream marker returns Error"
-      (Error (`Msg "Would read past input"))
+      (Error (`Msg "Unexpected end of input"))
       (Lzo.decompress
          ("K\248\251W\253\153\195#=\214\236\139\2090\198\154\205O\234\019\199"
         ^ "\144\203\209\162\249\210\020\130\129\171\225;\221]\239\250\144\192"
@@ -1830,17 +1839,17 @@ module Lzo_tests = struct
     *)
     Alcotest.(check (result reject alco_msg))
       "literal run of 1073742016 bytes, overflows (2**30)-1"
-      (Error (`Msg "LZO: count_zeroes literal length would overflow"))
+      (Error (`Msg "Malformed input"))
       (Lzo.decompress
          ("\000" ^ String.make 4210753 '\x00' ^ "\x01\x11\x00\x00"));
     Alcotest.(check (result reject alco_msg))
       "literal run of 2147483776 bytes, overflows (2**31)-1"
-      (Error (`Msg "LZO: count_zeroes literal length would overflow"))
+      (Error (`Msg "Malformed input"))
       (Lzo.decompress
          ("\000" ^ String.make 8421505 '\x00' ^ "\x01\x11\x00\x00"));
     Alcotest.(check (result reject alco_msg))
       "literal run of 4295297776 bytes, overflows (2**32)-1"
-      (Error (`Msg "LZO: count_zeroes literal length would overflow"))
+      (Error (`Msg "Malformed input"))
       (Lzo.decompress
          ("\000" ^ String.make 16844305 '\x00' ^ "\x01\x11\x00\x00"))
 
