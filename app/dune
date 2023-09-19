@@ -12,4 +12,4 @@
   (public_name openvpn-config-parser)
   (package miragevpn)
   (modules openvpn_config_parser)
-  (libraries miragevpn logs logs.fmt fmt.tty rresult))
+  (libraries miragevpn logs logs.fmt fmt.tty))

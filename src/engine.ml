@@ -1,5 +1,4 @@
 open State
-open Rresult.R.Infix
 
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
@@ -68,6 +67,7 @@ let secret config =
       Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
 
 let client config ts now rng =
+  let open Result.Infix in
   let current_ts = ts () in
   (match Config.get Remote config with
   | (`Domain (name, ip_version), _port, _proto) :: _ ->
@@ -133,6 +133,7 @@ let client config ts now rng =
       Ok (state, action)
 
 let server server_config server_ts server_now server_rng =
+  let open Result.Infix in
   let port =
     match Config.find Port server_config with None -> 1194 | Some p -> p
   in
@@ -265,11 +266,13 @@ let incoming_tls tls data =
       | `Ok tls' -> Ok (tls', out, d))
 
 let incoming_tls_without_reply tls data =
+  let open Result.Infix in
   incoming_tls tls data >>= function
   | tls', None, d -> Ok (tls', d)
   | _, Some _, _ -> Error (`Msg "expected no TLS reply")
 
 let maybe_kex_client rng config tls =
+  let open Result.Infix in
   if Tls.Engine.can_handle_appdata tls then
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
     Config.client_generate_connect_options config >>= fun options ->
@@ -296,6 +299,7 @@ let merge_server_config_into_client config tls_data =
 let maybe_kdf ?with_premaster session key = function
   | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
+      let open Result.Infix in
       Logs.debug (fun m ->
           m "received tls payload %d bytes" (Cstruct.length data));
       Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
@@ -326,6 +330,7 @@ let maybe_kdf ?with_premaster session key = function
       (tls_data, keys_ctx)
 
 let kex_server config session (keys : key_source) tls data =
+  let open Result.Infix in
   maybe_kdf ~with_premaster:true session keys data
   >>= fun (_tls_data, keys_ctx) ->
   (* TODO verify username + password, respect incoming tls_data *)
@@ -419,6 +424,7 @@ let incoming_control_client config rng session channel now op data =
           [ (`Control, ch) ] )
   | TLS_handshake tls, Packet.Control ->
       (* we reply with ACK + maybe TLS response *)
+      let open Result.Infix in
       incoming_tls tls data >>= fun (tls', tls_response, d) ->
       Logs.debug (fun m ->
           m "TLS payload is %a"
@@ -438,6 +444,7 @@ let incoming_control_client config rng session channel now op data =
       in
       (None, config, { channel with channel_st }, out)
   | TLS_established (tls, key), Packet.Control -> (
+      let open Result.Infix in
       incoming_tls tls data >>= fun (tls', tls_resp, d) ->
       maybe_kdf session key d >>= fun (tls_data, keys) ->
       let config = merge_server_config_into_client config tls_data in
@@ -465,6 +472,7 @@ let incoming_control_client config rng session channel now op data =
             { channel with channel_st },
             tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] ))
   | Push_request_sent (tls, keys), Packet.Control ->
+      let open Result.Infix in
       Logs.debug (fun m -> m "in push request sent");
       incoming_tls_without_reply tls data >>= fun (_tls', d) ->
       maybe_push_reply config d >>| fun config' ->
@@ -508,6 +516,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       Ok (None, config, session, channel, [ (control_typ, Cstruct.empty) ])
   | TLS_handshake tls, Packet.Control ->
       (* we reply with ACK + maybe TLS response *)
+      let open Result.Infix in
       incoming_tls tls data >>| fun (tls', tls_response, d) ->
       Logs.debug (fun m ->
           m "TLS handshake payload is %a"
@@ -527,6 +536,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       in
       (None, config, session, { channel with channel_st }, out)
   | TLS_established (tls, keys), Packet.Control ->
+      let open Result.Infix in
       incoming_tls_without_reply tls data >>= fun (tls', d) ->
       kex_server config session keys tls' d
       >>| fun ((channel_st, ip_config), out) ->
@@ -538,6 +548,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         [ (`Control, out) ] )
   | Push_request_sent (tls, keys), Packet.Control -> (
       (* TODO naming: this is actually server_stuff sent, awaiting push request *)
+      let open Result.Infix in
       incoming_tls_without_reply tls data
       >>= fun (tls', d) ->
       match d with
@@ -594,6 +605,7 @@ let incoming_control is_not_taken config rng state session channel now ts key op
         channel);
   match state with
   | Client _ ->
+      let open Result.Infix in
       incoming_control_client config rng session channel now op data
       >>| fun (est, config', ch'', outs) -> (est, config', session, ch'', outs)
   | Server _ ->
@@ -603,6 +615,7 @@ let incoming_control is_not_taken config rng state session channel now ts key op
       Error (`Msg "client with static keys, no control packets expected")
 
 let expected_packet session transport data =
+  let open Result.Infix in
   (* expects monotonic packet + message id, session ids matching *)
   let hdr = Packet.header data and msg_id = Packet.message_id data in
   (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
@@ -869,6 +882,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
      ~add_timestamp is provided and true.
   *)
   let open Mirage_crypto in
+  let open Result.Infix in
   let hmac, data = Cstruct.split data Packet.hmac_len in
   let computed_hmac = Hash.SHA1.hmac ~key:ctx.their_hmac data in
   guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
@@ -880,7 +894,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
   in
   guard
     (Cstruct.length dec >= hdr_len)
-    (Rresult.R.msgf "payload too short (need %d bytes): %a" hdr_len
+    (Result.msgf "payload too short (need %d bytes): %a" hdr_len
        Cstruct.hexdump_pp dec)
   >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
@@ -898,7 +912,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
          Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
          lz
      | comp ->
-         Rresult.R.error_msgf "unknown compression %#X in packet:@.%a" comp
+         Result.error_msgf "unknown compression %#X in packet:@.%a" comp
            Cstruct.hexdump_pp dec
    else Ok data)
   >>| fun data' ->
@@ -908,6 +922,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
   else Some data'
 
 let check_control_integrity err key p hmac_key =
+  let open Result.Infix in
   let computed_mac, packet_mac =
     (compute_hmac key p hmac_key, Packet.((header p).hmac))
   in
@@ -1008,6 +1023,7 @@ let find_channel state key p =
           None)
 
 let incoming ?(is_not_taken = fun _ip -> false) state buf =
+  let open Result.Infix in
   let state = { state with last_received = state.ts () } in
   let rec multi buf (state, out, act) =
     match Packet.decode state.session.protocol buf with
@@ -1196,6 +1212,7 @@ let retransmit timeout ts transport =
   ({ transport with out_packets }, out)
 
 let resolve_connect_client config ts s ev =
+  let open Result.Infix in
   let remote, next_remote =
     let remotes = Config.get Remote config in
     let r idx = List.nth remotes idx in
@@ -1249,6 +1266,7 @@ let resolve_connect_client config ts s ev =
   | _ -> Error (`Not_handled (remote, next_or_fail))
 
 let handle_client t s ev =
+  let open Result.Infix in
   let now = t.now () and ts = t.ts () in
   let client cs = Client cs in
   match resolve_connect_client t.config ts s ev with
@@ -1310,7 +1328,7 @@ let handle_client t s ev =
                   Ok (t', out @ outs, None)))
       | _, `Data cs -> incoming t cs
       | s, ev ->
-          Rresult.R.error_msgf "handle_client: unexpected event %a in state %a"
+          Result.error_msgf "handle_client: unexpected event %a in state %a"
             pp_event ev pp_client_state s)
 
 (* timeouts from a server perspective:
@@ -1331,10 +1349,11 @@ let handle_server ?is_not_taken t s ev =
       Logs.warn (fun m -> m "ignorig tick in handshaking");
       Ok (t, [], None)
   | s, ev ->
-      Rresult.R.error_msgf "handle_server: unexpected event %a in state %a"
+      Result.error_msgf "handle_server: unexpected event %a in state %a"
         pp_event ev pp_server_state s
 
 let handle_static_client t s keys ev =
+  let open Result.Infix in
   let ts = t.ts () in
   let client cs = Client_static (keys, cs) in
   match resolve_connect_client t.config ts s ev with
@@ -1385,7 +1404,7 @@ let handle_static_client t s keys ev =
           in
           process_one None (Cstruct.append t.linger cs)
       | s, ev ->
-          Rresult.R.error_msgf
+          Result.error_msgf
             "handle_static_client: unexpected event %a in state %a" pp_event ev
             pp_client_state s)
 

@@ -1,6 +1,3 @@
-open Rresult
-
-
 module Config : sig
   (** OpenVPN configuration parsing module *)
 
@@ -219,11 +216,11 @@ module Config : sig
   val eq : eq
   (** [eq] is an implementation of [cmp] for use with [{!equal} cmp t t2] *)
 
-  val client_generate_connect_options : t -> (string, R.msg) result
+  val client_generate_connect_options : t -> (string, [> `Msg of string ]) result
   (** Exports the excerpts from the client configuration sent to the server
       when the client initially connects. *)
 
-  val client_merge_server_config : t -> string -> (t, R.msg) result
+  val client_merge_server_config : t -> string -> (t, [> `Msg of string ]) result
   (** Apply config excerpt from server received upon initial connection.
       [client_merge_server_config client_config server_config] is a success if
       [server_config] does not conflict with [client_config].
@@ -231,18 +228,18 @@ module Config : sig
       - atm: do what validate_server_options did, returning unmodified.
   *)
 
-  val merge_push_reply : t -> string -> (t, [> R.msg]) result
+  val merge_push_reply : t -> string -> (t, [> `Msg of string ]) result
   (** [merge_push_reply client_config push_config] is a successful
       merge of [client_config] and [push_config] if [push_config] does not
       conflict with [client_config].
       TODO return conflicting subset as error
   *)
 
-  val parse : string_of_file:(string -> (string, R.msg) result) ->
-    string -> (t, [> R.msg]) result
+  val parse : string_of_file:(string -> (string, [ `Msg of string ]) result) ->
+    string -> (t, [> `Msg of string ]) result
 
-  val parse_client : string_of_file:(string -> (string, R.msg) result) ->
-    string -> (t, [> R.msg]) result
+  val parse_client : string_of_file:(string -> (string, [ `Msg of string ]) result) ->
+    string -> (t, [> `Msg of string ]) result
   (** Parses a configuration string, looking up references to external files
       as needed. Validates the client configuration. Default client options are
       applied. *)
@@ -283,14 +280,14 @@ type action = [
 val pp_action : action Fmt.t
 
 val client : Config.t -> (unit -> int64) -> (unit -> Ptime.t) ->
-  (int -> Cstruct.t) -> (t * action, Rresult.R.msg) result
+  (int -> Cstruct.t) -> (t * action, [> `Msg of string ]) result
 (** [client config ts now rng] constructs a [t], returns the remote to
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
 
 val server : Config.t -> (unit -> int64) -> (unit -> Ptime.t) ->
   (int -> Cstruct.t) ->
-  (server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int, Rresult.R.msg) result
+  (server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int, [> `Msg of string ]) result
 (** [server config ts now rng] constructs a [server], its [ip, netmask] and
     [port]. It returns an error if the configuration does not contain a tls-auth
     element. *)

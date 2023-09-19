@@ -1,5 +1,7 @@
 open Lwt.Infix
 
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
+
 let open_tun config { Miragevpn.cidr; gateway } :
     (Miragevpn.Config.t * Lwt_unix.file_descr, [> `Msg of string ]) Lwt_result.t
     =
@@ -10,7 +12,7 @@ let open_tun config { Miragevpn.cidr; gateway } :
   | None | Some (`Tun, None) -> Ok None
   | Some (`Tun, Some name) -> Ok (Some name)
   | Some (`Tap, name) ->
-      Rresult.R.error_msgf "using a TAP interface (for %S) is not supported"
+      error_msgf "using a TAP interface (for %S) is not supported"
         (match name with Some n -> n | None -> "dynamic device"))
   |> Lwt_result.lift
   >>= fun devname ->
@@ -54,8 +56,8 @@ let open_tun config { Miragevpn.cidr; gateway } :
     Logs.debug (fun m -> m "allocated TUN interface %s" dev);
     Lwt_result.return (config, Lwt_unix.of_unix_file_descr fd)
   with Failure msg ->
-    Lwt_result.fail
-      (Rresult.R.msgf "%s: Failed to allocate TUN interface: %s"
+    Lwt.return
+      (error_msgf "%s: Failed to allocate TUN interface: %s"
          (match devname with None -> "dynamic" | Some dev -> dev)
          msg)
 
@@ -66,8 +68,7 @@ let rec write_to_fd fd data =
       (fun () ->
         Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
       (fun e ->
-        Lwt_result.lift
-          (Rresult.R.error_msgf "TCP write error %s" (Printexc.to_string e)))
+        Lwt_result.lift (error_msgf "TCP write error %s" (Printexc.to_string e)))
 
 let write_multiple_to_fd fd bufs =
   Lwt_list.fold_left_s
@@ -91,8 +92,7 @@ let write_udp sa fd data =
             m "UDP short write (length %d, written %d)" len sent);
       Ok ())
     (fun e ->
-      Lwt_result.lift
-        (Rresult.R.error_msgf "UDP write error %s" (Printexc.to_string e)))
+      Lwt_result.lift (error_msgf "UDP write error %s" (Printexc.to_string e)))
 
 let write_multiple_udp sa fd bufs =
   Lwt_list.fold_left_s
@@ -352,8 +352,7 @@ let send_recv conn config ip_config _mtu =
             conn.o_client <- s';
             let open Lwt.Infix in
             transmit [ out ] conn.peer >>= fun sent ->
-            if sent then process_outgoing tun_fd
-            else failwith "couldn't send"
+            if sent then process_outgoing tun_fd else failwith "couldn't send"
       in
       Lwt.pick [ process_incoming (); process_outgoing tun_fd ]
 
@@ -399,7 +398,7 @@ let string_of_file ~dir filename =
     let content = really_input_string fh (in_channel_length fh) in
     close_in_noerr fh;
     Ok content
-  with _ -> Rresult.R.error_msgf "Error reading file %S" file
+  with _ -> error_msgf "Error reading file %S" file
 
 let parse_config filename =
   Lwt.return

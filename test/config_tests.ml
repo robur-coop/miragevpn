@@ -1,3 +1,10 @@
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
+
+module Infix = struct
+  let ( >>= ) = Result.bind
+  let ( >>| ) x f = Result.map f x
+end
+
 let a_x509_cert_payload ctx constructor str =
   Logs.debug (fun m -> m "x509 cert: %s" ctx);
   match X509.Certificate.decode_pem (Cstruct.of_string str) with
@@ -57,7 +64,7 @@ let conf_map = Alcotest.testable Miragevpn.Config.pp Miragevpn.Config.(equal eq)
 let parse_noextern_client conf =
   Miragevpn.Config.parse_client
     ~string_of_file:(fun path ->
-      Rresult.R.error_msgf
+      error_msgf
         "this test suite does not read external files, but a config asked for: \
          %S"
         path)
@@ -257,7 +264,7 @@ testpass
   in
   let open Miragevpn.Config in
   let sample =
-    parse_client ~string_of_file:(fun _ -> Rresult.R.error_msg "oops") sample
+    parse_client ~string_of_file:(fun _ -> error_msgf "oops") sample
   in
   let expected =
     {|
@@ -294,7 +301,7 @@ testpass
     (Ok config) (Ok expected);
   Alcotest.(check @@ result (list string) reject)
     "order of remotes stays correct" (Ok expected_remotes)
-    (let open Rresult in
+    (let open Infix in
      sample >>| fun sample ->
      get Remote sample
      |> List.map (function
@@ -307,7 +314,7 @@ testpass
        "remote 10.0.42.5 1234 udp4\n\
         remote 10.0.42.3 1194 udp4\n\
         remote 10.0.42.4 1234 udp4")
-    (let open Rresult in
+    (let open Infix in
      sample >>| fun sample ->
      Fmt.str "%a" pp (singleton Remote (get Remote sample)))
 
