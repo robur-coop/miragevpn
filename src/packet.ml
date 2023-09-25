@@ -2,8 +2,6 @@
 
    no support for key method v1! *)
 
-open Rresult.R.Infix
-
 type error = [ `Partial | `Unknown_operation of int | `Malformed of string ]
 
 let pp_error ppf = function
@@ -74,6 +72,7 @@ let pp_header ppf hdr =
     hdr.remote_session
 
 let decode_header buf =
+  let open Result.Infix in
   guard (Cstruct.length buf >= hdr_len) `Partial >>= fun () ->
   let local_session = Cstruct.BE.get_uint64 buf 0
   and hmac = Cstruct.sub buf 8 hmac_len
@@ -161,6 +160,7 @@ let pp_control ppf (hdr, id, payload) =
     (Cstruct.length payload)
 
 let decode_control buf =
+  let open Result.Infix in
   decode_header buf >>= fun (header, off) ->
   guard (Cstruct.length buf >= off + 4) `Partial >>| fun () ->
   let message_id = Cstruct.BE.get_uint32 buf off
@@ -183,6 +183,7 @@ let to_be_signed_control op (header, packet_id, payload) =
 let encode_data payload = (payload, Cstruct.length payload)
 
 let decode_protocol proto buf =
+  let open Result.Infix in
   match proto with
   | `Tcp ->
       guard (Cstruct.length buf >= 2) `Partial >>= fun () ->
@@ -192,6 +193,7 @@ let decode_protocol proto buf =
   | `Udp -> Ok (buf, Cstruct.empty)
 
 let decode proto buf =
+  let open Result.Infix in
   decode_protocol proto buf >>= fun (buf', rest) ->
   guard (Cstruct.length buf' >= 1) `Partial >>= fun () ->
   let opkey = Cstruct.get_uint8 buf' 0 in
@@ -327,6 +329,7 @@ let maybe_string prefix buf off = function
       else Error (`Malformed (prefix ^ " is not null-terminated"))
 
 let decode_tls_data ?(with_premaster = false) buf =
+  let open Result.Infix in
   let pre_master_start = 5 (* 4 (zero) + 1 (key_method) *) in
   let pre_master_len = if with_premaster then 48 else 0 in
   let random_len = 32 in

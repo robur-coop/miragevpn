@@ -9,5 +9,5 @@ let () =
   AflPersistent.run (fun () ->
       ignore
       @@ Miragevpn.Config.parse_client
-           ~string_of_file:(fun _path -> Rresult.R.error_msg "")
+           ~string_of_file:(fun _path -> Error (`Msg "error"))
            input)

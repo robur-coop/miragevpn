@@ -1,5 +1,6 @@
-open Rresult
 open Miragevpn.Config
+
+let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
 let read_config_file fn =
   let string_of_file ~dir filename =
@@ -12,7 +13,7 @@ let read_config_file fn =
       let content = really_input_string fh (in_channel_length fh) in
       close_in_noerr fh;
       Ok content
-    with _ -> Rresult.R.error_msgf "Error reading file %S" file
+    with _ -> error_msgf "Error reading file %S" file
   in
   let dir, filename = Filename.(dirname fn, basename fn) in
   let string_of_file = string_of_file ~dir in

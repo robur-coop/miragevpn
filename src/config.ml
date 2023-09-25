@@ -162,10 +162,10 @@ module Conf_map = struct
   include Gmap.Make (K)
 
   let is_valid_client_config t =
+    let open Result.Infix in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
-    let open Rresult in
-    R.reword_error
+    Result.map_error
       (fun err -> `Msg ("not a valid client config: " ^ err))
       ( ensure_mem Remote "does not have a remote" >>= fun () ->
         let _todo = ensure_not in
@@ -1274,15 +1274,14 @@ type parser_state =
 
 type parser_effect = [ `File of string * string ] option
 
-let parse_inline str =
-  let open Rresult in
-  function
+let parse_inline str = function
   | `Auth_user_pass ->
       (* TODO openvpn doesn't seem to allow inlining passwords, we do.. *)
       parse_string ~consume:Consume.All a_auth_user_pass_payload str
   | `Tls_auth direction ->
       parse_string ~consume:Consume.All (a_tls_auth_payload direction) str
   | `Connection ->
+      let open Result.Infix in
       (* TODO entries can sometimes be nested, like in <connection> blocks:
          The following OpenVPN options may be used inside of  a  <connection> block:
          bind,  connect-retry,  connect-retry-max,  connect-timeout,
@@ -1376,7 +1375,7 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
           | Some _, None | None, Some _ ->
               Error "Conflicting [bind] directives."
           | Some v, Some v2 ->
-              let open Rresult in
+              let open Result.Infix in
               (match (fst v, fst v2) with
               (* coalesce port binding *)
               | (Some _ as x), None -> Ok x
@@ -1446,7 +1445,7 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
             (Fmt.str "conflicting keys: %a not in %a" pp (singleton k v) pp t))
 
 let resolve_add_conflict t (B (k, v)) =
-  let open Rresult in
+  let open Result.Infix in
   resolve_conflict t k v >>| function Some (k, v) -> add k v t | None -> t
 
 let valid_server_options ~client:_ _server_t =
@@ -1455,7 +1454,7 @@ let valid_server_options ~client:_ _server_t =
 
 let parse_next (effect : parser_effect) initial_state :
     (parser_state, 'err) result =
-  let open Rresult in
+  let open Result.Infix in
   let rec loop (acc : Conf_map.t) : line list -> (parser_state, 'b) result =
     function
     | (hd : line) :: tl -> (
@@ -1480,7 +1479,7 @@ let parse_next (effect : parser_effect) initial_state :
             | Some (`File (effect_name, content))
               when String.equal effect_name wanted_name ->
                 (* TODO ensure returned B matches kind? *)
-                R.reword_error
+                Result.map_error
                   (fun x -> "failed parsing provided file: " ^ x)
                   (parse_inline content kind)
                 >>= retb
@@ -1673,13 +1672,14 @@ let parse_next (effect : parser_effect) initial_state :
   | `Need_file (_fn, (lines, acc)) -> loop acc lines
 
 let parse_begin config_str : (parser_state, 'err) result =
-  let open Rresult in
+  let open Result.Infix in
   parse_internal config_str >>= fun lines ->
   parse_next None (`Partial (lines, empty))
 
-let parse ~string_of_file config_str : (Conf_map.t, [> Rresult.R.msg ]) result =
-  let open Rresult in
-  let to_msg t = R.reword_error (fun s -> `Msg s) t in
+let parse ~string_of_file config_str : (Conf_map.t, [> `Msg of string ]) result
+    =
+  let open Result.Infix in
+  let to_msg t = Result.map_error (fun s -> `Msg s) t in
   let rec loop = function
     | `Done conf -> Ok conf
     | `Partial _ as t -> parse_next None t |> to_msg >>= loop
@@ -1688,10 +1688,12 @@ let parse ~string_of_file config_str : (Conf_map.t, [> Rresult.R.msg ]) result =
         parse_next (Some (`File (fn, contents))) (`Partial t) |> to_msg >>= loop
   in
   parse_begin config_str |> to_msg >>= fun initial ->
-  (loop initial : (_, [< R.msg ]) result :> (_, [> R.msg ]) result)
+  (loop initial
+    : (_, [< `Msg of string ]) result
+    :> (_, [> `Msg of string ]) result)
 
 let parse_client ~string_of_file config_str =
-  let open Rresult in
+  let open Result.Infix in
   parse ~string_of_file config_str >>= fun parsed_conf ->
   (* apply default configuration entries, overriding with the parsed config: *)
   let merged =
@@ -1702,10 +1704,10 @@ let parse_client ~string_of_file config_str =
   is_valid_client_config merged >>| fun () -> merged
 
 let merge_push_reply client (push_config : string) =
-  let open Rresult in
+  let open Result.Infix in
   Astring.String.(concat ~sep:"\n" (cuts ~sep:"," push_config))
   |> parse ~string_of_file:(fun _ ->
-         Rresult.R.error_msgf "string of file is not available")
+         Result.error_msgf "string of file is not available")
   >>= fun push_config ->
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
@@ -1772,7 +1774,7 @@ let client_generate_connect_options t =
   (* Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,\
      keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,\
      key-method 2" *)
-  let open Rresult in
+  let open Result.Infix in
   Conf_map.is_valid_client_config t >>= fun () ->
   let excerpt =
     Conf_map.filter
@@ -1807,14 +1809,13 @@ let client_merge_server_config client server_str =
   (* TODO: Mutate client config,
      for instance choosing [tun-mtu = min (server,client)].
   *)
-  let open Rresult in
   Log.warn (fun m ->
       m "Config.client_merge_server_config @[<v>is not implemented@ %S@]"
         server_str);
   Ok client
 (*let str = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," server_str)) in
   parse ~string_of_file:(fun fn ->
-      Rresult.R.error_msgf "Server requested client to read %S" fn)
+      Result.error_msgf "Server requested client to read %S" fn)
     str >>= valid_server_options ~client >>| fun () -> client*)
 
 include Conf_map
