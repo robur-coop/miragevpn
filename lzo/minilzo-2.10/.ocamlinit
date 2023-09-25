@@ -1,5 +1,0 @@
-#require "alcotest";;
-#require "logs";;
-#require "rresult";;
-#mod_use "../lzo.ml";;
-#mod_use "test_case.ml";;

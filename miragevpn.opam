@@ -32,6 +32,7 @@ depends: [
   "gmap"     { >= "0.3.0" }
   "hex"      { >= "1.4.0" }
   "ipaddr"   { >= "5.0.0" }
+  "decompress" { >= "1.5.3" }
   "logs"
   "cstruct-lwt"
   "lwt" {>= "5.7.0"}
@@ -59,4 +60,5 @@ depends: [
 
   "crowbar" {with-test}
   "alcotest" {with-test}
+  "bigstringaf" {with-test}
 ]
