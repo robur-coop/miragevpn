@@ -14,7 +14,7 @@ let miragevpn_handler =
       package "logs";
       package ~pin ~sublibs:[ "mirage" ] "miragevpn";
       package "mirage-kv";
-      package ~min:"2.1.0" "mirage-nat";
+      package ~min:"3.0.0" "mirage-nat";
       package ~min:"3.8.0" "mirage-runtime";
     ]
   in
