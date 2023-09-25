@@ -47,7 +47,6 @@ depends: [
 
   "tuntap" {>= "1.8.1"}
 
-  "astring"
   "mtime"
   "randomconv"
   # mirage:

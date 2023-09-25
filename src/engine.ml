@@ -398,11 +398,16 @@ let maybe_push_reply config = function
       else
         let str = Cstruct.(to_string (sub data 0 (pred (length data)))) in
         Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
-        match Astring.String.cut ~sep:"PUSH_REPLY" str with
-        | Some ("", opts) -> Config.merge_push_reply config opts
-        | _ ->
-            Error
-              (`Msg (Fmt.str "push request expected push_reply, got %S" str)))
+        let p_r = "PUSH_REPLY" in
+        let p_r_len = String.length p_r in
+        if String.length str >= p_r_len &&
+           String.(equal (sub str 0 p_r_len) p_r)
+        then
+          let opts = String.sub str p_r_len (String.length str - p_r_len) in
+          Config.merge_push_reply config opts
+        else
+          Error
+            (`Msg (Fmt.str "push request expected push_reply, got %S" str)))
   | None -> Error (`Msg "push request expected data, received no data")
 
 let incoming_control_client config rng session channel now op data =
