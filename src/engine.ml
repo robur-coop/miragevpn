@@ -69,6 +69,21 @@ let secret config =
 let client config ts now rng =
   let open Result.Infix in
   let current_ts = ts () in
+  let config =
+    match Config.get Remote_random config with
+    | exception Not_found -> config
+    | () ->
+      let remotes = Config.get Remote config in
+      let remotes = Array.of_list remotes in
+      for i = Array.length remotes - 1 downto 1 do
+        let j = Randomconv.int rng ~bound:(succ i) in
+        let t = remotes.(i) in
+        remotes.(i) <- remotes.(j);
+        remotes.(j) <- t
+      done;
+      let remotes = Array.to_list remotes in
+      Config.add Remote remotes config
+  in
   (match Config.get Remote config with
   | (`Domain (name, ip_version), _port, _proto) :: _ ->
       Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
@@ -662,6 +677,7 @@ let expected_packet session transport data =
 
 type error =
   [ Packet.error
+  | Lzo.error
   | `Non_monotonic_packet_id of transport * Packet.header
   | `Non_monotonic_message_id of transport * int32 option * Packet.header
   | `Mismatch_their_session_id of transport * Packet.header
@@ -676,6 +692,7 @@ type error =
 
 let pp_error ppf = function
   | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
+  | #Lzo.error as e -> Fmt.pf ppf "lzo %a" Lzo.pp_error e
   | `Non_monotonic_packet_id (state, hdr) ->
       Fmt.pf ppf "non monotonic packet id in %a@ (state %a)" Packet.pp_header
         hdr pp_transport state
@@ -907,7 +924,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
      match Cstruct.get_uint8 dec (pred hdr_len) with
      | 0xFA -> Ok data
      | 0x66 ->
-         Lzo.decompress (Cstruct.to_string data) >>| Cstruct.of_string
+         Lzo.uncompress_with_buffer (Cstruct.to_bigarray data) >>| Cstruct.of_string
          >>| fun lz ->
          Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
          lz
