@@ -64,7 +64,7 @@ struct
     in
     B.read block 0L data >|= function
     | Ok () -> Ok data
-    | Error e -> Rresult.R.error_msgf "%a" B.pp_error e
+    | Error e -> Error (`Msg (Fmt.to_to_string B.pp_error e))
 
   let read_config block =
     let open Lwt_result.Infix in

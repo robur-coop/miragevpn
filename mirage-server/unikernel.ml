@@ -12,7 +12,7 @@ struct
 
   let read_config data =
     FS.get data (Mirage_kv.Key.v "openvpn.config") >|= function
-    | Error e -> Rresult.R.error_to_msg ~pp_error:FS.pp_error (Error e)
+    | Error e -> Error (`Msg (Fmt.to_to_string FS.pp_error e))
     | Ok data ->
         let string_of_file _ = Error (`Msg "no string_of_file support") in
         Miragevpn.Config.parse ~string_of_file data

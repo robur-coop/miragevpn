@@ -24,7 +24,7 @@ struct
 
   let read_config data =
     FS.get data (Mirage_kv.Key.v "openvpn.config") >|= function
-    | Error e -> Rresult.R.error_to_msg ~pp_error:FS.pp_error (Error e)
+    | Error e -> Error (`Msg (Fmt.to_to_string FS.pp_error e))
     | Ok data ->
         let string_of_file _ = Error (`Msg "not supported") in
         Miragevpn.Config.parse_client ~string_of_file data
@@ -117,7 +117,7 @@ struct
                 Log.debug (fun m -> m "ignoring ip packet for ourselves");
                 Lwt.return_unit)
               else
-                Mirage_nat_lru.translate table packet >>= function
+                match Mirage_nat_lru.translate table packet with
                 | Ok packet -> output_tunnel packet
                 | Error `Untranslated -> add_rule table packet
                 | Error `TTL_exceeded ->
@@ -125,10 +125,8 @@ struct
                     Log.warn (fun f -> f "TTL exceeded");
                     Lwt.return_unit
             and add_rule table packet =
-              let public_ip = O.get_ip ovpn
-              and port = Randomconv.int16 R.generate in
-              Mirage_nat_lru.add table packet (public_ip, port) `NAT
-              >>= function
+              let public_ip = O.get_ip ovpn in
+              match Mirage_nat_lru.add table packet public_ip (fun () -> Some (Randomconv.int16 R.generate)) `NAT with
               | Error e ->
                   Log.debug (fun m ->
                       m "Failed to add a NAT rule: %a" Mirage_nat.pp_error e);
@@ -146,7 +144,7 @@ struct
                   Lwt.return_unit
               | Ok None -> Lwt.return_unit
               | Ok (Some packet) -> (
-                  Mirage_nat_lru.translate table packet >>= function
+                  match Mirage_nat_lru.translate table packet with
                   | Ok packet -> output_private packet
                   | Error e ->
                       let msg =
@@ -157,8 +155,9 @@ struct
                       Log.warn (fun m -> m "error when translating %s" msg);
                       Lwt.return_unit)
             in
-            Mirage_nat_lru.empty ~tcp_size:1024 ~udp_size:1024 ~icmp_size:20
-            >>= fun table ->
+            let table =
+              Mirage_nat_lru.empty ~tcp_size:1024 ~udp_size:1024 ~icmp_size:20
+            in
             let listen_private =
               let cache = ref (Fragments.Cache.empty (256 * 1024)) in
               let ipv4 p =

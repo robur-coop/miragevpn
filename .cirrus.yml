@@ -1,0 +1,42 @@
+freebsd_instance:
+  image_family: freebsd-12-1
+
+freebsd_client_task:
+  pkg_install_script: pkg install -y ocaml-opam gmake bash
+  ocaml_script: opam init -a --comp=4.13.1
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  configure_script: eval `opam env` && cd mirage-client && mirage configure -t hvt
+  depend_script: eval `opam env` && cd mirage-client && gmake depend
+  build_script: eval `opam env` && cd mirage-client && mirage build
+  client_artifacts:
+    path: mirage-client/dist/ovpn-client.hvt
+
+freebsd_nat_task:
+  pkg_install_script: pkg install -y ocaml-opam gmake bash
+  ocaml_script: opam init -a --comp=4.13.1
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  configure_script: eval `opam env` && cd mirage-nat && mirage configure -t hvt
+  depend_script: eval `opam env` && cd mirage-nat && gmake depend
+  build_script: eval `opam env` && cd mirage-nat && mirage build
+  nat_artifacts:
+    path: mirage-nat/dist/ovpn-nat.hvt
+
+freebsd_router_task:
+  pkg_install_script: pkg install -y ocaml-opam gmake bash
+  ocaml_script: opam init -a --comp=4.13.1
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  configure_script: eval `opam env` && cd mirage-router && mirage configure -t hvt
+  depend_script: eval `opam env` && cd mirage-router && gmake depend
+  build_script: eval `opam env` && cd mirage-router && mirage build
+  router_artifacts:
+    path: mirage-router/dist/ovpn-router.hvt
+
+freebsd_server_task:
+  pkg_install_script: pkg install -y ocaml-opam gmake bash
+  ocaml_script: opam init -a --comp=4.13.1
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  configure_script: eval `opam env` && cd mirage-server && mirage configure -t hvt
+  depend_script: eval `opam env` && cd mirage-server && gmake depend
+  build_script: eval `opam env` && cd mirage-server && mirage build
+  server_artifacts:
+    path: mirage-server/dist/ovpn-server.hvt
