@@ -400,7 +400,7 @@ let maybe_push_reply config = function
         Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
         let p_r = "PUSH_REPLY" in
         let p_r_len = String.length p_r in
-        if String.starts_with str ~prexix:p_r
+        if String.starts_with str ~prefix:p_r
         then
           let opts = String.sub str p_r_len (String.length str - p_r_len) in
           Config.merge_push_reply config opts
