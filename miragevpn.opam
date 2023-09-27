@@ -33,22 +33,21 @@ depends: [
   "ipaddr"   { >= "5.0.0" }
   "decompress" { >= "1.5.3" }
   "logs"
-  "cstruct-lwt"
   "lwt" {>= "5.7.0"}
   "mirage-crypto"
   "mirage-crypto-rng" {>= "0.11.0"}
-  "mirage-crypto-rng-lwt" {>= "0.11.0"}
   "ptime"
   "tls" {>= "0.15.0"}
   "dns-client" {>= "7.0.0"}
-  "dns-client-lwt" {>= "7.0.0"}
   "x509" {>= "0.15.0"}
   "duration"
-
-  "tuntap" {>= "1.8.1"}
-
-  "mtime"
   "randomconv"
+  # app:
+  "cstruct-lwt"
+  "mirage-crypto-rng-lwt" {>= "0.11.0"}
+  "mtime"
+  "dns-client-lwt" {>= "7.0.0"}
+  "tuntap" {>= "1.8.1"}
   # mirage:
   "dns-client-mirage" {>= "7.0.0"}
   "tcpip" {>= "7.0.0"}
