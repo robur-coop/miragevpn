@@ -29,16 +29,16 @@ let a_inline_payload str =
   let rec content acc collect = function
     | [] -> List.rev acc
     | hd :: tl when collect ->
-        if Astring.String.is_prefix ~affix:"-----END" hd then
+        if String.starts_with ~prefix:"-----END" hd then
           content acc false tl
         else content (hd :: acc) true tl
     | hd :: tl ->
-        if Astring.String.is_prefix ~affix:"-----BEGIN" hd then
+        if String.starts_with ~prefix:"-----BEGIN" hd then
           content acc true tl
         else content acc false tl
   in
-  let data = content [] false (Astring.String.cuts ~sep:"\n" str) in
-  let cs = Cstruct.of_hex (Astring.String.concat ~sep:"" data) in
+  let data = content [] false (String.split_on_char '\n' str) in
+  let cs = Cstruct.of_hex (String.concat "" data) in
   if Cstruct.length cs = 256 then
     Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
   else

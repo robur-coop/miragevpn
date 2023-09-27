@@ -1705,7 +1705,8 @@ let parse_client ~string_of_file config_str =
 
 let merge_push_reply client (push_config : string) =
   let open Result.Infix in
-  Astring.String.(concat ~sep:"\n" (cuts ~sep:"," push_config))
+  String.split_on_char ',' push_config
+  |> String.concat "\n"
   |> parse ~string_of_file:(fun _ ->
          Result.error_msgf "string of file is not available")
   >>= fun push_config ->
@@ -1813,9 +1814,10 @@ let client_merge_server_config client server_str =
       m "Config.client_merge_server_config @[<v>is not implemented@ %S@]"
         server_str);
   Ok client
-(*let str = Astring.String.(concat ~sep:"\n" (cuts ~sep:"," server_str)) in
-  parse ~string_of_file:(fun fn ->
-      Result.error_msgf "Server requested client to read %S" fn)
-    str >>= valid_server_options ~client >>| fun () -> client*)
+(* String.split_on_char ',' server_str
+   |> String.concat "\n"
+   |> parse ~string_of_file:(fun fn ->
+        Result.error_msgf "Server requested client to read %S" fn)
+    >>= valid_server_options ~client >>| fun () -> client*)
 
 include Conf_map
