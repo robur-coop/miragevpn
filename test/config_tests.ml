@@ -29,15 +29,11 @@ let a_inline_payload str =
   let rec content acc collect = function
     | [] -> List.rev acc
     | hd :: tl when collect ->
-        let aff = "-----END" in
-        let aff_len = String.length aff in
-        if String.length hd >= aff_len && String.(equal (sub hd 0 aff_len) aff) then
+        if String.starts_with ~prefix:"-----END" hd then
           content acc false tl
         else content (hd :: acc) true tl
     | hd :: tl ->
-        let aff = "-----BEGIN" in
-        let aff_len = String.length aff in
-        if String.length hd >= aff_len && String.(equal (sub hd 0 aff_len) aff) then
+        if String.starts_with ~prefix:"-----BEGIN" hd then
           content acc true tl
         else content acc false tl
   in
