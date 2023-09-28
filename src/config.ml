@@ -572,7 +572,7 @@ let a_dev_type =
      giving a custom name from which the type cannot be inferred *)
   string "dev-type" *> a_whitespace
   *> choice
-       [ (string "tun" >>| fun _ -> `Tun); (string "tap" >>| fun _ -> `Tap) ]
+       [ (string "tun" *> return `Tun); (string "tap" *> return `Tap) ]
   >>| fun typ -> `Dev_type typ
 
 let a_proto =
@@ -1003,8 +1003,8 @@ let a_auth_user_pass_verify =
     (a_whitespace
     *> choice
          [
-           (string "via-env" >>| fun _ -> `Via_env);
-           (string "via-file" >>| fun _ -> `Via_file);
+           (string "via-env" *> return `Via_env);
+           (string "via-file" *> return `Via_file);
          ])
 
 let a_script_security =
@@ -1332,13 +1332,13 @@ let eq : eq =
             let eq = v = v2 in
             Log.debug (fun m ->
                 m "eq self-test: @[<v>%a@, %s @,%a@]" pp (singleton k v)
-                  (if true then "=" else "<>")
+                  (if eq then "=" else "<>")
                   pp (singleton k v2));
             eq);
   }
 
 let resolve_conflict (type a) t (k : a key) (v : a) :
-    ((a key * a) option, 'a) result =
+    ((a key * a) option, _) result =
   (* when called by merge_push_reply, [v] is the server-provided value,
      and [t] is the local configuration *)
   let warn () =
