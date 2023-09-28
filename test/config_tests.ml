@@ -5,19 +5,17 @@ module Infix = struct
   let ( >>| ) x f = Result.map f x
 end
 
-let a_x509_cert_payload ctx constructor str =
-  Logs.debug (fun m -> m "x509 cert: %s" ctx);
-  match X509.Certificate.decode_pem (Cstruct.of_string str) with
-  | Ok cert -> constructor cert
-  | Error (`Msg msg) -> Alcotest.failf "%s: invalid certificate: %s" ctx msg
-
 let a_ca_payload str =
   let open Miragevpn.Config in
-  a_x509_cert_payload "ca" (fun c -> B (Ca, c)) str
+  match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
+  | Ok certs -> B (Ca, certs)
+  | Error (`Msg msg) -> Alcotest.failf "ca: invalid certificate(s): %s" msg
 
 let a_cert_payload str =
   let open Miragevpn.Config in
-  a_x509_cert_payload "cert" (fun c -> B (Tls_cert, c)) str
+  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  | Ok cert -> B (Tls_cert, cert)
+  | Error (`Msg msg) -> Alcotest.failf "cert: invalid certificate: %s" msg
 
 let a_key_payload str =
   let open Miragevpn.Config in
@@ -551,7 +549,7 @@ efabaa5e34619f13adbe58b6c83536d3
        ]
   |> add Bind None |> add Auth_retry `Nointeract
   |> add Auth_user_pass ("foo", "bar")
-  |> add Ca ca |> add Tls_auth tls_auth
+  |> add Ca [ca] |> add Tls_auth tls_auth
   |> add Remote_cert_tls `Server
   |> add Ping_interval (`Seconds 10)
   |> add Ping_timeout (`Restart 30)

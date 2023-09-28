@@ -69,7 +69,7 @@ module Conf_map = struct
           * [ `Domain of [ `host ] Domain_name.t | `Ip of Ipaddr.t ] option)
           option
           k
-    | Ca : X509.Certificate.t k
+    | Ca : X509.Certificate.t list k
     | Cipher : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
@@ -209,17 +209,14 @@ module Conf_map = struct
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
     let p () = Fmt.pf ppf in
     let (B (k, v)) = b in
-    let pp_x509 entry_typ cert =
-      p ()
-        "%s [inline]\n\
-         <%s>\n\
-         # CN: %S\n\
+    let pp_x509 ppf cert =
+      Fmt.pf ppf
+        "# CN: %S\n\
          # Expiry: %a\n\
          # Hosts: %a\n\
          # Cert fingerprint (sha256): %a\n\
          # Key fingerprint (sha256): %a\n\
-         %s</%s>"
-        entry_typ entry_typ
+         %s"
         (match
            X509.(Distinguished_name.common_name (Certificate.subject cert))
          with
@@ -236,7 +233,20 @@ module Conf_map = struct
            (X509.Public_key.fingerprint ~hash:`SHA256
               (X509.Certificate.public_key cert)))
         (X509.Certificate.encode_pem cert |> Cstruct.to_string)
-        entry_typ
+    in
+    let pp_cert cert =
+      p ()
+         "cert [inline]\n\
+-         <cert>\n\
+          %a</cert>"
+         pp_x509 cert
+    in
+    let pp_ca certs =
+      p ()
+        "ca [inline]\n\
+         <ca>\n\
+         %a</ca>"
+        Fmt.(list ~sep:(any "\n") pp_x509) certs
     in
     let pp_x509_private_key key =
       p () "key [inline]\n<key>\n%s</key>"
@@ -264,7 +274,7 @@ module Conf_map = struct
         | None -> ()
         | Some (`Domain n) -> p () "%alocal %a" sep () Domain_name.pp n
         | Some (`Ip ip) -> p () "%alocal %a" sep () Ipaddr.pp ip)
-    | Ca, ca -> pp_x509 "ca" ca
+    | Ca, ca -> pp_ca ca
     | Cipher, cipher -> p () "cipher %s" cipher
     | Comp_lzo, () -> p () "comp-lzo"
     | Connect_retry, (low, high) -> p () "connect-retry %d %d" low high
@@ -373,7 +383,7 @@ module Conf_map = struct
           pp_key (a, b, c, d)
     | Route_metric, `Metric i -> p () "route-metric %d" i
     | Route_metric, `Default -> p () "route-metric default"
-    | Tls_cert, cert -> pp_x509 "cert" cert
+    | Tls_cert, cert -> pp_cert cert
     | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver, or_highest) ->
         p () "tls-version-min %s%s"
@@ -625,11 +635,19 @@ let a_x509_cert_payload ctx constructor str =
   | Error (`Msg msg) -> Error (Fmt.str "%s: invalid certificate: %s" ctx msg)
 
 let a_ca = a_option_with_single_path "ca" `Ca
-let a_ca_payload str = a_x509_cert_payload "CA" (fun c -> B (Ca, c)) str
+let a_ca_payload str =
+  Log.debug (fun m -> m "x509 cert: CA");
+  match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
+  | Ok certs -> Ok (B (Ca, certs))
+  | Error (`Msg msg) -> Error (Fmt.str "ca: invalid certificate(s): %s" msg)
+
 let a_cert = a_option_with_single_path "cert" `Tls_cert
 
 let a_cert_payload str =
-  a_x509_cert_payload "cert" (fun c -> B (Tls_cert, c)) str
+  Log.debug (fun m -> m "x509 cert: cert");
+  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  | Ok cert -> Ok (B (Tls_cert, cert))
+  | Error (`Msg msg) -> Error (Fmt.str "cert: invalid certificate: %s" msg)
 
 let a_key = a_option_with_single_path "key" `Tls_key
 

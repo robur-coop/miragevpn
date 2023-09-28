@@ -419,11 +419,11 @@ let incoming_control_client config rng session channel now op data =
               fun ?ip:_ ~host:_ _ -> Ok None
           | Some ca ->
               Logs.info (fun m ->
-                  m "authenticating with CA %a" X509.Certificate.pp ca);
+                  m "authenticating with CA %a" Fmt.(list ~sep:(any "\n") X509.Certificate.pp) ca);
               X509.Authenticator.chain_of_trust
                 ~allowed_hashes:Mirage_crypto.Hash.hashes
                 ~time:(fun () -> Some now)
-                [ ca ]
+                ca
         in
         let certificates =
           match (Config.find Tls_cert config, Config.find Tls_key config) with
