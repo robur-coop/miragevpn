@@ -266,21 +266,21 @@ module Conf_map = struct
       (match Cstruct.concat [ a; b; c; d ] |> Hex.of_cstruct with
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
 
-  let rec pp_pem_hex ppf cs =
+  let rec pp_pem_b64 ppf cs =
     let len = Cstruct.length cs in
     if len = 0 then
       Fmt.pf ppf ""
     else
-      let len = min len 32 in
-      let () = Fmt.pf ppf "%s\n" (Cstruct.to_hex_string ~len cs) in
-      pp_pem_hex ppf (Cstruct.shift cs len )
+      let len = min len 48 in
+      let () = Fmt.pf ppf "%s\n" (Base64.encode_string (Cstruct.to_string ~len cs)) in
+      pp_pem_b64 ppf (Cstruct.shift cs len )
 
   let pp_tls_crypt_v2_client ppf ((a, b, c, d), wkc) =
     Fmt.pf ppf
       "-----BEGIN OpenVPN tls-crypt-v2 client key-----\n\
-      %a\n\
+      %a\
        -----END OpenVPN tls-crypt-v2 client key-----"
-      pp_pem_hex
+      pp_pem_b64
       (Cstruct.concat [ a; b; c; d; wkc ])
 
 
@@ -769,15 +769,36 @@ let a_tls_crypt_v2 =
   | `Need_inline () -> `Need_inline (`Tls_crypt_v2 force_cookie)
   | `Path (path, ()) -> `Path (path, `Tls_crypt_v2 force_cookie)
 
-let static_key_pem_name = "OpenVPN Static key V1"
 let tls_crypt_v2_client_pem_name = "OpenVPN tls-crypt-v2 client key"
 let tls_crypt_v2_server_pem_name = "OpenVPN tls-crypt-v2 server key"
 
 let inline_pem_payload pem_name element =
-  let abort s = fail ("Invalid " ^ element ^ " PEM: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
   *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline
-     <|> Fmt.kstr abort "Missing %s -----BEGIN mark" pem_name)
+      <|> fail "FIXME")
+  *> many_till
+    ( take_while (function
+          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' -> true
+          | _ -> false)
+      <* (end_of_line <|> fail "Invalid hex character"))
+    (string ("-----END " ^ pem_name ^ "-----") *> a_newline
+     <|> fail "Missing END mark")
+  <* commit
+  <* (skip_many (a_newline <|> a_whitespace) *> end_of_input
+      <|> ( pos >>= fun i ->
+            Fmt.kstr fail "Data after -----END mark at byte offset %d" i))
+  >>= fun lst ->
+  let s = String.concat "" lst in
+  match Base64.decode s with
+  | Ok s -> return (Cstruct.of_string s)
+  | Error `Msg e -> Fmt.kstr fail "Bad base64 in %s pem: %s" element e
+
+
+let inline_payload element =
+  let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
+  Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
+  *> (string "-----BEGIN OpenVPN Static key V1-----" *> a_newline
+     <|> abort "Missing Static key V1 -----BEGIN mark")
   *> many_till
        ( take_while (function
            | 'a' .. 'f' | 'A' .. 'F' | '0' .. '9' -> true
@@ -786,42 +807,36 @@ let inline_pem_payload pem_name element =
        >>= fun hex ->
          try return (Cstruct.of_hex hex)
          with Invalid_argument msg -> abort msg )
-       (string ("-----END " ^ pem_name ^ "-----") *> a_newline
+       (string "-----END OpenVPN Static key V1-----" *> a_newline
        <|> abort "Missing END mark")
   <* commit
   <* (skip_many (a_newline <|> a_whitespace) *> end_of_input
      <|> ( pos >>= fun i ->
            abort (Fmt.str "Data after -----END mark at byte offset %d" i) ))
-
-let inline_static_key_payload element =
-  inline_pem_payload static_key_pem_name element
   >>= (fun lst ->
-      let sz = Cstruct.lenv lst in
-      if 256 = sz then return lst
-      else
-        Fmt.kstr fail "Invalid %s HMAC key: Wrong size (%d); need exactly 256 bytes"
-          element sz)
+        let sz = Cstruct.lenv lst in
+        if 256 = sz then return lst
+        else
+          abort @@ "Wrong size (" ^ string_of_int sz
+          ^ "); need exactly 256 bytes")
   >>| Cstruct.concat
   >>| fun cs ->
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
 let a_tls_crypt_v2_client_payload force_cookie =
   inline_pem_payload tls_crypt_v2_client_pem_name "tls-crypt-v2"
-  >>= (fun lst ->
-      let sz = Cstruct.lenv lst in
-
-      if sz >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
-        return lst
+  >>= (fun cs ->
+      if Cstruct.length cs >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
+        return cs
       else
         fail "bad tls-crypt-v2 client key size")
-  >>| Cstruct.concat
   >>| fun cs ->
-  let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 53) in
+  let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 64) in
   let wkc = Cstruct.shift cs 256 in
   B (Tls_crypt_v2, (key, wkc, force_cookie))
 
 let a_tls_auth_payload direction =
-  inline_static_key_payload "TLS AUTH" >>| fun (a, b, c, d) ->
+  inline_payload "TLS AUTH" >>| fun (a, b, c, d) ->
   B (Tls_auth, (direction, a, b, c, d))
 
 let split_colon s = String.split_on_char ':' s
@@ -838,7 +853,7 @@ let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
 let a_secret str =
-  match parse_string ~consume:Consume.All (inline_static_key_payload "secret") str with
+  match parse_string ~consume:Consume.All (inline_payload "secret") str with
   | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
   | Error e -> Error e
 
