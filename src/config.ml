@@ -189,7 +189,8 @@ module Conf_map = struct
     | Tls_version_min : (Tls.Core.tls_version * bool) k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
-    | Tls_crypt_v2 : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
+    | Tls_crypt_v2_client : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
+    | Tls_crypt_v2_server : ((Cstruct.t * Cstruct.t) * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
@@ -253,9 +254,12 @@ module Conf_map = struct
            Error "currently only supported Cipher is 'AES-256-CBC'"
          else Ok ())
         >>= fun () ->
-        if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
-          Error "remote-cert-tls is not SERVER?!"
-        else Ok () )
+        (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
+           Error "remote-cert-tls is not SERVER?!"
+         else Ok ())
+        >>= fun () ->
+        ensure_not Tls_crypt_v2_server "server tls-crypt-v2 key passed in tls-crypt-v2"
+      )
 
   let pp_key ppf (a, b, c, d) =
     Fmt.pf ppf
@@ -282,6 +286,14 @@ module Conf_map = struct
        -----END OpenVPN tls-crypt-v2 client key-----"
       pp_pem_b64
       (Cstruct.concat [ a; b; c; d; wkc ])
+
+  let pp_tls_crypt_v2_server ppf (a, b) =
+    Fmt.pf ppf
+      "-----BEGIN OpenVPN tls-crypt-v2 server key-----\n\
+      %a\
+       -----END OpenVPN tls-crypt-v2 server key-----"
+      pp_pem_b64
+      (Cstruct.concat [ a; b ])
 
 
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
@@ -476,10 +488,14 @@ module Conf_map = struct
     | Tls_ciphersuite, ciphers ->
       p () "tls-ciphersuite %a" Fmt.(list ~sep:(any ":") string)
         (List.map cs13_to_cipher13 ciphers)
-    | Tls_crypt_v2, (key, wkc, force_cookie) ->
+    | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
       p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
         (if force_cookie then "force-cookie" else "allow-noncookie")
         pp_tls_crypt_v2_client (key, wkc)
+    | Tls_crypt_v2_server, (key, force_cookie) ->
+      p () "tls-crypt-v2 [inline] %s<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
+        (if force_cookie then "force-cookie" else "allow-noncookie")
+        pp_tls_crypt_v2_server key
     | Topology, v ->
         p () "topology %s"
           (match v with
@@ -778,9 +794,9 @@ let inline_pem_payload pem_name element =
       <|> fail "FIXME")
   *> many_till
     ( take_while (function
-          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' -> true
+          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' | '=' -> true
           | _ -> false)
-      <* (end_of_line <|> fail "Invalid hex character"))
+      <* (end_of_line <|> fail "Invalid base64 character"))
     (string ("-----END " ^ pem_name ^ "-----") *> a_newline
      <|> fail "Missing END mark")
   <* commit
@@ -833,7 +849,22 @@ let a_tls_crypt_v2_client_payload force_cookie =
   >>| fun cs ->
   let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 64) in
   let wkc = Cstruct.shift cs 256 in
-  B (Tls_crypt_v2, (key, wkc, force_cookie))
+  B (Tls_crypt_v2_client, (key, wkc, force_cookie))
+
+let a_tls_crypt_v2_server_payload force_cookie =
+  inline_pem_payload tls_crypt_v2_server_pem_name "tls-crypt-v2"
+  >>= (fun cs ->
+      if Cstruct.length cs = 128 then
+        return cs
+      else
+        fail "bad tls-crypt-v2 server key size")
+  >>| fun cs ->
+  let key = Cstruct.(sub cs 0 64, sub cs 64 64) in
+  B (Tls_crypt_v2_server, (key, force_cookie))
+
+let a_tls_crypt_v2_payload force_cookie =
+  a_tls_crypt_v2_client_payload force_cookie
+  <|> a_tls_crypt_v2_server_payload force_cookie
 
 let a_tls_auth_payload direction =
   inline_payload "TLS AUTH" >>| fun (a, b, c, d) ->
@@ -1463,7 +1494,7 @@ let parse_inline str = function
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
   | `Tls_crypt_v2 force_cookie ->
-    parse_string ~consume:Consume.All (a_tls_crypt_v2_client_payload force_cookie) str
+    parse_string ~consume:Consume.All (a_tls_crypt_v2_payload force_cookie) str
   | `Secret -> a_secret str
   | kind ->
       Error
