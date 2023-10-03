@@ -1346,6 +1346,7 @@ let a_config_entry : line A.t =
          a_resolv_retry;
          a_tls_auth;
          a_tls_timeout;
+         a_tls_crypt_v2;
          a_remote_cert_tls;
          a_verb;
          a_hand_window;
