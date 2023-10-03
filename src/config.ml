@@ -1302,7 +1302,7 @@ let a_route_gateway =
   >>| fun x -> `Entry (B (Route_gateway, x))
 
 let a_inline =
-  char '<' *> take_while1 (function 'a' .. 'z' | '-' -> true | _ -> false)
+  char '<' *> take_while1 (function 'a' .. 'z' | '0' .. '9' | '-' -> true | _ -> false)
   <* char '>' <* a_newline
   >>= fun tag ->
   skip_many (a_whitespace_or_comment *> end_of_line)
