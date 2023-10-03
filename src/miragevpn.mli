@@ -189,6 +189,9 @@ module Config : sig
 
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
 
+    | Tls_crypt_v2 : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
+    (** [Tls_crypt_v2 (key, wkc, force_cookie) *)
+
     | Topology : [`Net30 | `P2p | `Subnet] k
 
     | Transition_window : int k

@@ -16,7 +16,8 @@ type inlineable =
   | `Tls_auth of [ `Incoming | `Outgoing ] option
   | `Tls_cert
   | `Tls_key
-  | `Secret ]
+  | `Secret
+  | `Tls_crypt_v2 of bool ]
 
 let string_of_inlineable = function
   | `Auth_user_pass -> "auth-user-pass"
@@ -27,6 +28,7 @@ let string_of_inlineable = function
   | `Tls_cert -> "cert"
   | `Tls_key -> "key"
   | `Secret -> "secret"
+  | `Tls_crypt_v2 _ -> "tls-crypt-v2"
 
 type inline_or_path =
   [ `Need_inline of inlineable | `Path of string * inlineable ]
@@ -187,6 +189,7 @@ module Conf_map = struct
     | Tls_version_min : (Tls.Core.tls_version * bool) k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
+    | Tls_crypt_v2 : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
@@ -262,6 +265,24 @@ module Conf_map = struct
       Fmt.(array ~sep:(any "\n") string)
       (match Cstruct.concat [ a; b; c; d ] |> Hex.of_cstruct with
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
+
+  let rec pp_pem_hex ppf cs =
+    let len = Cstruct.length cs in
+    if len = 0 then
+      Fmt.pf ppf ""
+    else
+      let len = min len 32 in
+      let () = Fmt.pf ppf "%s\n" (Cstruct.to_hex_string ~len cs) in
+      pp_pem_hex ppf (Cstruct.shift cs len )
+
+  let pp_tls_crypt_v2_client ppf ((a, b, c, d), wkc) =
+    Fmt.pf ppf
+      "-----BEGIN OpenVPN tls-crypt-v2 client key-----\n\
+      %a\n\
+       -----END OpenVPN tls-crypt-v2 client key-----"
+      pp_pem_hex
+      (Cstruct.concat [ a; b; c; d; wkc ])
+
 
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
     let p () = Fmt.pf ppf in
@@ -455,6 +476,10 @@ module Conf_map = struct
     | Tls_ciphersuite, ciphers ->
       p () "tls-ciphersuite %a" Fmt.(list ~sep:(any ":") string)
         (List.map cs13_to_cipher13 ciphers)
+    | Tls_crypt_v2, (key, wkc, force_cookie) ->
+      p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
+        (if force_cookie then "force-cookie" else "allow-noncookie")
+        pp_tls_crypt_v2_client (key, wkc)
     | Topology, v ->
         p () "topology %s"
           (match v with
@@ -730,11 +755,29 @@ let a_tls_auth =
   | `Need_inline () -> `Need_inline (`Tls_auth direction)
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
 
-let inline_payload element =
-  let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
+let a_tls_crypt_v2 =
+  string "tls-crypt-v2" *> a_whitespace *> a_filepath ()
+  >>= fun source ->
+  choice
+    [
+      a_whitespace *> string "force-cookie" *> return true;
+      a_whitespace *> string "allow-noncookie" *> return false;
+      return false; (* default is allow-noncookie *)
+    ]
+  >>| fun force_cookie ->
+  match source with
+  | `Need_inline () -> `Need_inline (`Tls_crypt_v2 force_cookie)
+  | `Path (path, ()) -> `Path (path, `Tls_crypt_v2 force_cookie)
+
+let static_key_pem_name = "OpenVPN Static key V1"
+let tls_crypt_v2_client_pem_name = "OpenVPN tls-crypt-v2 client key"
+let tls_crypt_v2_server_pem_name = "OpenVPN tls-crypt-v2 server key"
+
+let inline_pem_payload pem_name element =
+  let abort s = fail ("Invalid " ^ element ^ " PEM: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
-  *> (string "-----BEGIN OpenVPN Static key V1-----" *> a_newline
-     <|> abort "Missing Static key V1 -----BEGIN mark")
+  *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline
+     <|> Fmt.kstr abort "Missing %s -----BEGIN mark" pem_name)
   *> many_till
        ( take_while (function
            | 'a' .. 'f' | 'A' .. 'F' | '0' .. '9' -> true
@@ -743,24 +786,42 @@ let inline_payload element =
        >>= fun hex ->
          try return (Cstruct.of_hex hex)
          with Invalid_argument msg -> abort msg )
-       (string "-----END OpenVPN Static key V1-----" *> a_newline
+       (string ("-----END " ^ pem_name ^ "-----") *> a_newline
        <|> abort "Missing END mark")
   <* commit
   <* (skip_many (a_newline <|> a_whitespace) *> end_of_input
      <|> ( pos >>= fun i ->
            abort (Fmt.str "Data after -----END mark at byte offset %d" i) ))
+
+let inline_static_key_payload element =
+  inline_pem_payload static_key_pem_name element
   >>= (fun lst ->
-        let sz = Cstruct.lenv lst in
-        if 256 = sz then return lst
-        else
-          abort @@ "Wrong size (" ^ string_of_int sz
-          ^ "); need exactly 256 bytes")
+      let sz = Cstruct.lenv lst in
+      if 256 = sz then return lst
+      else
+        Fmt.kstr fail "Invalid %s HMAC key: Wrong size (%d); need exactly 256 bytes"
+          element sz)
   >>| Cstruct.concat
   >>| fun cs ->
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
+let a_tls_crypt_v2_client_payload force_cookie =
+  inline_pem_payload tls_crypt_v2_client_pem_name "tls-crypt-v2"
+  >>= (fun lst ->
+      let sz = Cstruct.lenv lst in
+
+      if sz >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
+        return lst
+      else
+        fail "bad tls-crypt-v2 client key size")
+  >>| Cstruct.concat
+  >>| fun cs ->
+  let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 53) in
+  let wkc = Cstruct.shift cs 256 in
+  B (Tls_crypt_v2, (key, wkc, force_cookie))
+
 let a_tls_auth_payload direction =
-  inline_payload "TLS AUTH" >>| fun (a, b, c, d) ->
+  inline_static_key_payload "TLS AUTH" >>| fun (a, b, c, d) ->
   B (Tls_auth, (direction, a, b, c, d))
 
 let split_colon s = String.split_on_char ':' s
@@ -777,7 +838,7 @@ let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
 let a_secret str =
-  match parse_string ~consume:Consume.All (inline_payload "secret") str with
+  match parse_string ~consume:Consume.All (inline_static_key_payload "secret") str with
   | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
   | Error e -> Error e
 
@@ -1385,6 +1446,8 @@ let parse_inline str = function
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
+  | `Tls_crypt_v2 force_cookie ->
+    parse_string ~consume:Consume.All (a_tls_crypt_v2_client_payload force_cookie) str
   | `Secret -> a_secret str
   | kind ->
       Error
