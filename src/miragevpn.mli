@@ -181,9 +181,13 @@ module Config : sig
     (** Retransmit control channel packet after not receiving an ACK for
         [n] seconds. TODO: presumably does not apply to TCP? *)
 
-    | Tls_version_min : ([`V1_3 | `V1_2 | `V1_1 ] * bool) k
+    | Tls_version_min : (Tls.Core.tls_version * bool) k
     (** [v * or_highest]: if [or_highest] then v = the highest version supported
         by the TLS library. *)
+
+    | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
+
+    | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
 
     | Topology : [`Net30 | `P2p | `Subnet] k
 
