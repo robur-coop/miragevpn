@@ -636,7 +636,6 @@ let a_x509_cert_payload ctx constructor str =
 
 let a_ca = a_option_with_single_path "ca" `Ca
 let a_ca_payload str =
-  Log.debug (fun m -> m "x509 cert: CA");
   match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
   | Ok certs -> Ok (B (Ca, certs))
   | Error (`Msg msg) -> Error (Fmt.str "ca: invalid certificate(s): %s" msg)
@@ -644,7 +643,6 @@ let a_ca_payload str =
 let a_cert = a_option_with_single_path "cert" `Tls_cert
 
 let a_cert_payload str =
-  Log.debug (fun m -> m "x509 cert: cert");
   match X509.Certificate.decode_pem (Cstruct.of_string str) with
   | Ok cert -> Ok (B (Tls_cert, cert))
   | Error (`Msg msg) -> Error (Fmt.str "cert: invalid certificate: %s" msg)
