@@ -1523,6 +1523,10 @@ let eq : eq =
                 | `Ip a, `Ip b -> 0 = Ipaddr.compare a b
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
+        | Tls_crypt_v2_client, ((a, b, c, d), wkc, force_cookie), ((a', b', c', d'), wkc', force_cookie') ->
+          Cstruct.equal a a' && Cstruct.equal b b' && Cstruct.equal c c'
+          && Cstruct.equal d d' && Cstruct.equal wkc wkc' &&
+          force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
