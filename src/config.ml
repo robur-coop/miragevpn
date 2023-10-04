@@ -628,12 +628,6 @@ let a_filepath kind =
 let a_option_with_single_path name kind =
   string name *> a_whitespace *> a_filepath kind
 
-let a_x509_cert_payload ctx constructor str =
-  Log.debug (fun m -> m "x509 cert: %s" ctx);
-  match X509.Certificate.decode_pem (Cstruct.of_string str) with
-  | Ok cert -> Ok (constructor cert)
-  | Error (`Msg msg) -> Error (Fmt.str "%s: invalid certificate: %s" ctx msg)
-
 let a_ca = a_option_with_single_path "ca" `Ca
 let a_ca_payload str =
   match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
