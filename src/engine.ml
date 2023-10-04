@@ -433,8 +433,23 @@ let incoming_control_client config rng session channel now op data =
           match (Config.find Tls_cert config, Config.find Tls_key config) with
           | Some cert, Some key -> `Single ([ cert ], key)
           | _ -> `None
+        and ciphers =
+          match Config.find Tls_cipher config, Config.find Tls_ciphersuite config with
+          | Some c, None -> Some c
+          | None, Some c -> Some (c :> Tls.Ciphersuite.ciphersuite list)
+          | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
+          | None, None -> None
+        and version =
+          match Config.find Tls_version_min config with
+          | None -> None
+          | Some (v, or_highest) ->
+            let highest = `TLS_1_3 in (* update when ocaml-tls supports new versions *)
+            if or_highest then
+              Some (highest, highest)
+            else
+              Some (v, highest)
         in
-        Tls.(Engine.client (Config.client ~certificates ~authenticator ()))
+        Tls.(Engine.client (Config.client ?ciphers ?version ~certificates ~authenticator ()))
       in
       Ok
         ( None,
@@ -522,8 +537,24 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
           Config.get Tls_cert config,
           Config.get Tls_key config )
       in
+      let ciphers =
+        match Config.find Tls_cipher config, Config.find Tls_ciphersuite config with
+          | Some c, None -> Some c
+          | None, Some c -> Some (c :> Tls.Ciphersuite.ciphersuite list)
+          | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
+          | None, None -> None
+      and version =
+        match Config.find Tls_version_min config with
+        | None -> None
+        | Some (v, or_highest) ->
+          let highest = `TLS_1_3 in (* update when ocaml-tls supports new versions *)
+          if or_highest then
+            Some (highest, highest)
+          else
+            Some (v, highest)
+      in
       let tls_config =
-        Tls.Config.server ~certificates:(`Single ([ server ], key)) ()
+        Tls.Config.server ?ciphers ?version ~certificates:(`Single ([ server ], key)) ()
       in
       let tls = Tls.Engine.server tls_config in
       let channel = { channel with channel_st = TLS_handshake tls } in

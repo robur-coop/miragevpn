@@ -39,6 +39,52 @@ let int_of_ping_interval = function
          violated"
   | `Seconds n -> n
 
+let (cipher_to_cs : string -> Tls.Ciphersuite.ciphersuite),
+    (cs_to_cipher : Tls.Ciphersuite.ciphersuite -> string) =
+  let map = [
+    "TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384", `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 ;
+    "TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384", `ECDHE_RSA_WITH_AES_256_GCM_SHA384 ;
+    "TLS-DHE-RSA-WITH-AES-256-GCM-SHA384", `DHE_RSA_WITH_AES_256_GCM_SHA384 ;
+    "TLS-ECDHE-ECDSA-WITH-CHACHA20-POLY1305-SHA256", `ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 ;
+    "TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256", `ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 ;
+    "TLS-DHE-RSA-WITH-CHACHA20-POLY1305-SHA256", `DHE_RSA_WITH_CHACHA20_POLY1305_SHA256 ;
+    "TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256", `ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 ;
+    "TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256", `ECDHE_RSA_WITH_AES_128_GCM_SHA256 ;
+    "TLS-DHE-RSA-WITH-AES-128-GCM-SHA256", `DHE_RSA_WITH_AES_128_GCM_SHA256 ;
+    "TLS-ECDHE-ECDSA-WITH-AES-256-CBC-SHA384", `ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 ;
+    "TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384", `ECDHE_RSA_WITH_AES_256_CBC_SHA384 ;
+    "TLS-DHE-RSA-WITH-AES-256-CBC-SHA256", `DHE_RSA_WITH_AES_256_CBC_SHA256 ;
+    "TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256", `ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 ;
+    "TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256", `ECDHE_RSA_WITH_AES_128_CBC_SHA256 ;
+    "TLS-DHE-RSA-WITH-AES-128-CBC-SHA256", `DHE_RSA_WITH_AES_128_CBC_SHA256 ;
+    "TLS-ECDHE-ECDSA-WITH-AES-256-CBC-SHA", `ECDHE_ECDSA_WITH_AES_256_CBC_SHA ;
+    "TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA", `ECDHE_RSA_WITH_AES_256_CBC_SHA ;
+    "TLS-DHE-RSA-WITH-AES-256-CBC-SHA", `DHE_RSA_WITH_AES_256_CBC_SHA ;
+    "TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA", `ECDHE_ECDSA_WITH_AES_128_CBC_SHA ;
+    "TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA", `ECDHE_RSA_WITH_AES_128_CBC_SHA ;
+    "TLS-DHE-RSA-WITH-AES-128-CBC-SHA", `DHE_RSA_WITH_AES_128_CBC_SHA ;
+  ] in
+  let rev_map = List.map (fun (a, b) -> b, a) map in
+  (fun s ->
+     match List.assoc_opt s map with
+     | None -> failwith ("unsupported tls-cipher " ^ s)
+     | Some c -> c),
+  (fun c -> List.assoc c rev_map)
+
+let (cipher13_to_cs13 : string -> Tls.Ciphersuite.ciphersuite13),
+    (cs13_to_cipher13 : Tls.Ciphersuite.ciphersuite13 -> string) =
+  let map = [
+    "TLS_AES_256_GCM_SHA384", `AES_256_GCM_SHA384 ;
+    "TLS_CHACHA20_POLY1305_SHA256", `CHACHA20_POLY1305_SHA256 ;
+    "TLS_AES_128_GCM_SHA256", `AES_128_GCM_SHA256 ;
+  ] in
+  let rev_map = List.map (fun (a, b) -> b, a) map in
+  (fun s ->
+     match List.assoc_opt s map with
+     | None -> failwith ("unsupported tls-ciphersuite " ^ s)
+     | Some c -> c),
+  (fun c -> List.assoc c rev_map)
+
 module Conf_map = struct
   type flag = unit
 
@@ -138,7 +184,9 @@ module Conf_map = struct
     | Tls_mode : [ `Client | `Server ] k
     | Tls_key : X509.Private_key.t k
     | Tls_timeout : int k
-    | Tls_version_min : ([ `V1_3 | `V1_2 | `V1_1 ] * bool) k
+    | Tls_version_min : (Tls.Core.tls_version * bool) k
+    | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
+    | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
@@ -396,11 +444,17 @@ module Conf_map = struct
     | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver, or_highest) ->
         p () "tls-version-min %s%s"
-          (match ver with `V1_3 -> "1.3" | `V1_2 -> "1.2" | `V1_1 -> "1.1")
+          (match ver with `TLS_1_3 -> "1.3" | `TLS_1_2 -> "1.2" | `TLS_1_1 -> "1.1" | `TLS_1_0 -> "1.0")
           (if or_highest then " or-highest" else "")
     | Tls_mode, `Server -> p () "tls-server"
     | Tls_mode, `Client -> p () "tls-client"
     | Tls_timeout, seconds -> p () "tls-timeout %d" seconds
+    | Tls_cipher, ciphers ->
+      p () "tls-cipher %a" Fmt.(list ~sep:(any ":") string)
+        (List.map cs_to_cipher ciphers)
+    | Tls_ciphersuite, ciphers ->
+      p () "tls-ciphersuite %a" Fmt.(list ~sep:(any ":") string)
+        (List.map cs13_to_cipher13 ciphers)
     | Topology, v ->
         p () "topology %s"
           (match v with
@@ -709,6 +763,16 @@ let a_tls_auth_payload direction =
   inline_payload "TLS AUTH" >>| fun (a, b, c, d) ->
   B (Tls_auth, (direction, a, b, c, d))
 
+let split_colon s = String.split_on_char ':' s
+
+let a_tls_cipher =
+  string "tls-cipher" *> a_whitespace *> a_line not_control_char >>| fun ciphers ->
+  `Entry (B (Tls_cipher, List.map cipher_to_cs (split_colon ciphers)))
+
+let a_tls_ciphersuite =
+  string "tls-ciphersuite" *> a_whitespace *> a_line not_control_char >>| fun ciphers ->
+  `Entry (B (Tls_ciphersuite, List.map cipher13_to_cs13 (split_colon ciphers)))
+
 let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
@@ -845,9 +909,10 @@ let a_tls_version_min =
   string "tls-version-min" *> a_whitespace
   *> choice
        [
-         string "1.3" *> return `V1_3;
-         string "1.2" *> return `V1_2;
-         string "1.1" *> return `V1_1;
+         string "1.3" *> return `TLS_1_3;
+         string "1.2" *> return `TLS_1_2;
+         string "1.1" *> return `TLS_1_1;
+         string "1.0" *> return `TLS_1_0;
        ]
   >>= fun v ->
   choice
@@ -1262,6 +1327,8 @@ let a_config_entry : line A.t =
          a_route;
          a_route_gateway;
          a_topology;
+         a_tls_ciphersuite;
+         a_tls_cipher;
          a_not_implemented;
          a_whitespace *> return (`Ignored "");
        ]

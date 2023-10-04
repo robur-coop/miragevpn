@@ -488,6 +488,12 @@ let tls_home_conf =
   |> add_b (a_key_payload (string_of_file "client.key"))
   |> add Cipher "AES-256-CBC" |> add Verb 3
 
+let tls_home_conf_with_cipher =
+  let open Miragevpn.Config in
+  tls_home_conf
+  |> add Tls_cipher [ `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 ]
+  |> add Tls_ciphersuite [ `CHACHA20_POLY1305_SHA256 ]
+
 let ipredator_conf =
   let ca =
     match
@@ -575,7 +581,7 @@ efabaa5e34619f13adbe58b6c83536d3
   |> add Replay_window (512, 60)
   |> add Mute_replay_warnings ()
   |> add Ifconfig_nowarn ()
-  |> add Tls_version_min (`V1_2, false)
+  |> add Tls_version_min (`TLS_1_2, false)
 
 let parse_multiple_cas () =
   let file = "multi-ca-client.conf" in
@@ -633,7 +639,10 @@ let tests =
       parse_multiple_cas );
     (* "parsing configuration 'wild-client'", `Quick,
        parse_client_configuration "wild-client.conf" ; -- verify-x509-name *)
-    (* "parsing configuration 'windows-riseup-client'", `Quick,
-       parse_client_configuration "windows-riseup-client.conf" ; -- tls-cipher *)
+    (* ( "parsing configuration 'windows-riseup-client'", `Quick,
+       parse_client_configuration "windows-riseup-client.conf" ); --auth *)
+    ( "parsing 'tls-home-with-cipher'",
+      `Quick,
+      parse_client_configuration ~config:tls_home_conf_with_cipher "tls-home-with-cipher.conf" );
     ("crowbar fuzzing", `Slow, crowbar_fuzz_config);
   ]
