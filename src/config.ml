@@ -181,7 +181,16 @@ module Conf_map = struct
             | _, Some _, None -> Error "tls-cert provided, but no tls-key"
             | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
             | Some _, None, None -> Ok ()
-            | _, Some _, Some _ -> Ok ()
+            | _, Some cert, Some key ->
+              let cert_pubkey = X509.Certificate.public_key cert in
+              let key_pubkey = X509.Private_key.public key in
+              if Cstruct.equal
+                  (X509.Public_key.fingerprint cert_pubkey)
+                  (X509.Public_key.fingerprint key_pubkey)
+              then
+                Ok ()
+              else
+                Error "key and cert do not match"
             | None, None, None ->
                 Error
                   "config has neither user/password, nor TLS client certificate"

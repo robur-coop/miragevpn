@@ -318,6 +318,23 @@ testpass
      sample >>| fun sample ->
      Fmt.str "%a" pp (singleton Remote (get Remote sample)))
 
+let cert_key_mismatch () =
+  let sample =
+    "tls-client
+    cipher AES-256-CBC
+    remote 10.0.42.3
+    key server.key
+    cert client.crt"
+  in
+  let string_of_file n = Ok (string_of_file n) in
+  match Miragevpn.Config.parse_client ~string_of_file sample with
+  | Ok conf ->
+    Alcotest.failf "Expected error, but got Ok %a"
+      Miragevpn.Config.pp conf
+  | Error `Msg "not a valid client config: key and cert do not match" -> ()
+  | Error `Msg e ->
+    Alcotest.failf "Got error %S, expected \"key and cert do not match\"" e
+
 let whitespace_after_tls_auth () =
   let expected =
     Miragevpn.Config.add Tls_auth
@@ -579,6 +596,7 @@ let tests =
       `Quick,
       auth_user_pass_trailing_whitespace );
     ("rport precedence", `Quick, rport_precedence);
+    ("cert key mismatch", `Quick, cert_key_mismatch);
     ("trailing whitespace after <tls-auth>", `Quick, whitespace_after_tls_auth);
     ("remote entries are in order", `Quick, remotes_in_order);
     ("remote entries with port are in order", `Quick, remotes_in_order_with_port);
