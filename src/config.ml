@@ -16,7 +16,8 @@ type inlineable =
   | `Tls_auth of [ `Incoming | `Outgoing ] option
   | `Tls_cert
   | `Tls_key
-  | `Secret ]
+  | `Secret
+  | `Tls_crypt_v2 of bool ]
 
 let string_of_inlineable = function
   | `Auth_user_pass -> "auth-user-pass"
@@ -27,6 +28,7 @@ let string_of_inlineable = function
   | `Tls_cert -> "cert"
   | `Tls_key -> "key"
   | `Secret -> "secret"
+  | `Tls_crypt_v2 _ -> "tls-crypt-v2"
 
 type inline_or_path =
   [ `Need_inline of inlineable | `Path of string * inlineable ]
@@ -187,6 +189,8 @@ module Conf_map = struct
     | Tls_version_min : (Tls.Core.tls_version * bool) k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
+    | Tls_crypt_v2_client : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
+    | Tls_crypt_v2_server : ((Cstruct.t * Cstruct.t) * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
@@ -250,9 +254,12 @@ module Conf_map = struct
            Error "currently only supported Cipher is 'AES-256-CBC'"
          else Ok ())
         >>= fun () ->
-        if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
-          Error "remote-cert-tls is not SERVER?!"
-        else Ok () )
+        (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
+           Error "remote-cert-tls is not SERVER?!"
+         else Ok ())
+        >>= fun () ->
+        ensure_not Tls_crypt_v2_server "server tls-crypt-v2 key passed in tls-crypt-v2"
+      )
 
   let pp_key ppf (a, b, c, d) =
     Fmt.pf ppf
@@ -262,6 +269,32 @@ module Conf_map = struct
       Fmt.(array ~sep:(any "\n") string)
       (match Cstruct.concat [ a; b; c; d ] |> Hex.of_cstruct with
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
+
+  let rec pp_pem_b64 ppf cs =
+    let len = Cstruct.length cs in
+    if len = 0 then
+      Fmt.pf ppf ""
+    else
+      let len = min len 48 in
+      let () = Fmt.pf ppf "%s\n" (Base64.encode_string (Cstruct.to_string ~len cs)) in
+      pp_pem_b64 ppf (Cstruct.shift cs len )
+
+  let pp_tls_crypt_v2_client ppf ((a, b, c, d), wkc) =
+    Fmt.pf ppf
+      "-----BEGIN OpenVPN tls-crypt-v2 client key-----\n\
+      %a\
+       -----END OpenVPN tls-crypt-v2 client key-----"
+      pp_pem_b64
+      (Cstruct.concat [ a; b; c; d; wkc ])
+
+  let pp_tls_crypt_v2_server ppf (a, b) =
+    Fmt.pf ppf
+      "-----BEGIN OpenVPN tls-crypt-v2 server key-----\n\
+      %a\
+       -----END OpenVPN tls-crypt-v2 server key-----"
+      pp_pem_b64
+      (Cstruct.concat [ a; b ])
+
 
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
     let p () = Fmt.pf ppf in
@@ -455,6 +488,14 @@ module Conf_map = struct
     | Tls_ciphersuite, ciphers ->
       p () "tls-ciphersuite %a" Fmt.(list ~sep:(any ":") string)
         (List.map cs13_to_cipher13 ciphers)
+    | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
+      p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
+        (if force_cookie then "force-cookie" else "allow-noncookie")
+        pp_tls_crypt_v2_client (key, wkc)
+    | Tls_crypt_v2_server, (key, force_cookie) ->
+      p () "tls-crypt-v2 [inline] %s<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
+        (if force_cookie then "force-cookie" else "allow-noncookie")
+        pp_tls_crypt_v2_server key
     | Topology, v ->
         p () "topology %s"
           (match v with
@@ -730,6 +771,45 @@ let a_tls_auth =
   | `Need_inline () -> `Need_inline (`Tls_auth direction)
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
 
+let a_tls_crypt_v2 =
+  string "tls-crypt-v2" *> a_whitespace *> a_filepath ()
+  >>= fun source ->
+  choice
+    [
+      a_whitespace *> string "force-cookie" *> return true;
+      a_whitespace *> string "allow-noncookie" *> return false;
+      return false; (* default is allow-noncookie *)
+    ]
+  >>| fun force_cookie ->
+  match source with
+  | `Need_inline () -> `Need_inline (`Tls_crypt_v2 force_cookie)
+  | `Path (path, ()) -> `Path (path, `Tls_crypt_v2 force_cookie)
+
+let tls_crypt_v2_client_pem_name = "OpenVPN tls-crypt-v2 client key"
+let tls_crypt_v2_server_pem_name = "OpenVPN tls-crypt-v2 server key"
+
+let inline_pem_payload pem_name element =
+  Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
+  *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline
+      <|> fail "FIXME")
+  *> many_till
+    ( take_while (function
+          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' | '=' -> true
+          | _ -> false)
+      <* (end_of_line <|> fail "Invalid base64 character"))
+    (string ("-----END " ^ pem_name ^ "-----") *> a_newline
+     <|> fail "Missing END mark")
+  <* commit
+  <* (skip_many (a_newline <|> a_whitespace) *> end_of_input
+      <|> ( pos >>= fun i ->
+            Fmt.kstr fail "Data after -----END mark at byte offset %d" i))
+  >>= fun lst ->
+  let s = String.concat "" lst in
+  match Base64.decode s with
+  | Ok s -> return (Cstruct.of_string s)
+  | Error `Msg e -> Fmt.kstr fail "Bad base64 in %s pem: %s" element e
+
+
 let inline_payload element =
   let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
@@ -758,6 +838,33 @@ let inline_payload element =
   >>| Cstruct.concat
   >>| fun cs ->
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
+
+let a_tls_crypt_v2_client_payload force_cookie =
+  inline_pem_payload tls_crypt_v2_client_pem_name "tls-crypt-v2"
+  >>= (fun cs ->
+      if Cstruct.length cs >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
+        return cs
+      else
+        fail "bad tls-crypt-v2 client key size")
+  >>| fun cs ->
+  let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 64) in
+  let wkc = Cstruct.shift cs 256 in
+  B (Tls_crypt_v2_client, (key, wkc, force_cookie))
+
+let a_tls_crypt_v2_server_payload force_cookie =
+  inline_pem_payload tls_crypt_v2_server_pem_name "tls-crypt-v2"
+  >>= (fun cs ->
+      if Cstruct.length cs = 128 then
+        return cs
+      else
+        fail "bad tls-crypt-v2 server key size")
+  >>| fun cs ->
+  let key = Cstruct.(sub cs 0 64, sub cs 64 64) in
+  B (Tls_crypt_v2_server, (key, force_cookie))
+
+let a_tls_crypt_v2_payload force_cookie =
+  a_tls_crypt_v2_client_payload force_cookie
+  <|> a_tls_crypt_v2_server_payload force_cookie
 
 let a_tls_auth_payload direction =
   inline_payload "TLS AUTH" >>| fun (a, b, c, d) ->
@@ -1226,7 +1333,7 @@ let a_route_gateway =
   >>| fun x -> `Entry (B (Route_gateway, x))
 
 let a_inline =
-  char '<' *> take_while1 (function 'a' .. 'z' | '-' -> true | _ -> false)
+  char '<' *> take_while1 (function 'a' .. 'z' | '0' .. '9' | '-' -> true | _ -> false)
   <* char '>' <* a_newline
   >>= fun tag ->
   skip_many (a_whitespace_or_comment *> end_of_line)
@@ -1285,6 +1392,7 @@ let a_config_entry : line A.t =
          a_resolv_retry;
          a_tls_auth;
          a_tls_timeout;
+         a_tls_crypt_v2;
          a_remote_cert_tls;
          a_verb;
          a_hand_window;
@@ -1385,6 +1493,8 @@ let parse_inline str = function
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
+  | `Tls_crypt_v2 force_cookie ->
+    parse_string ~consume:Consume.All (a_tls_crypt_v2_payload force_cookie) str
   | `Secret -> a_secret str
   | kind ->
       Error
@@ -1413,6 +1523,10 @@ let eq : eq =
                 | `Ip a, `Ip b -> 0 = Ipaddr.compare a b
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
+        | Tls_crypt_v2_client, ((a, b, c, d), wkc, force_cookie), ((a', b', c', d'), wkc', force_cookie') ->
+          Cstruct.equal a a' && Cstruct.equal b b' && Cstruct.equal c c'
+          && Cstruct.equal d d' && Cstruct.equal wkc wkc' &&
+          force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
