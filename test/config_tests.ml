@@ -5,19 +5,17 @@ module Infix = struct
   let ( >>| ) x f = Result.map f x
 end
 
-let a_x509_cert_payload ctx constructor str =
-  Logs.debug (fun m -> m "x509 cert: %s" ctx);
-  match X509.Certificate.decode_pem (Cstruct.of_string str) with
-  | Ok cert -> constructor cert
-  | Error (`Msg msg) -> Alcotest.failf "%s: invalid certificate: %s" ctx msg
-
 let a_ca_payload str =
   let open Miragevpn.Config in
-  a_x509_cert_payload "ca" (fun c -> B (Ca, c)) str
+  match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
+  | Ok certs -> B (Ca, certs)
+  | Error (`Msg msg) -> Alcotest.failf "ca: invalid certificate(s): %s" msg
 
 let a_cert_payload str =
   let open Miragevpn.Config in
-  a_x509_cert_payload "cert" (fun c -> B (Tls_cert, c)) str
+  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  | Ok cert -> B (Tls_cert, cert)
+  | Error (`Msg msg) -> Alcotest.failf "cert: invalid certificate: %s" msg
 
 let a_key_payload str =
   let open Miragevpn.Config in
@@ -568,7 +566,7 @@ efabaa5e34619f13adbe58b6c83536d3
        ]
   |> add Bind None |> add Auth_retry `Nointeract
   |> add Auth_user_pass ("foo", "bar")
-  |> add Ca ca |> add Tls_auth tls_auth
+  |> add Ca [ca] |> add Tls_auth tls_auth
   |> add Remote_cert_tls `Server
   |> add Ping_interval (`Seconds 10)
   |> add Ping_timeout (`Restart 30)
@@ -578,6 +576,18 @@ efabaa5e34619f13adbe58b6c83536d3
   |> add Mute_replay_warnings ()
   |> add Ifconfig_nowarn ()
   |> add Tls_version_min (`V1_2, false)
+
+let parse_multiple_cas () =
+  let file = "multi-ca-client.conf" in
+  let data = string_of_file file in
+  match
+    Miragevpn.Config.parse_client data
+      ~string_of_file:(fun s -> Ok (string_of_file s))
+  with
+  | Error `Msg e -> Alcotest.failf "Error parsing %S: %s" file e
+  | Ok conf ->
+    let cas = Miragevpn.Config.(get Ca) conf in
+    Alcotest.(check int) "Exactly two CA certificates" 2 (List.length cas)
 
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
@@ -619,6 +629,8 @@ let tests =
       `Quick,
       parse_client_configuration ~config:ipredator_conf
         "IPredator-CLI-Password.conf" );
+    ( "parsing configuration with multiple CAs", `Quick,
+      parse_multiple_cas );
     (* "parsing configuration 'wild-client'", `Quick,
        parse_client_configuration "wild-client.conf" ; -- verify-x509-name *)
     (* "parsing configuration 'windows-riseup-client'", `Quick,

@@ -38,7 +38,7 @@ module Config : sig
     *)
 
 
-    | Ca       : X509.Certificate.t k
+    | Ca       : X509.Certificate.t list k
     | Cipher   : string k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
