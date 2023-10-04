@@ -133,6 +133,32 @@ dev tun
     (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tun, None)))
     explicit_dynamic_tun;
 
+  (* issue 43 *)
+  let tun_is_tunnel =
+    (* here [dev-type] is implied *)
+    Fmt.str {|%a
+dev tunnel
+|} Miragevpn.Config.pp minimal_config
+    |> parse_noextern_client
+  in
+  Alcotest.(check (result conf_map pmsg))
+    "explicit dev tunnel implicitly specifying tun"
+    (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tun, Some "tunnel")))
+    tun_is_tunnel;
+
+  (* issue 85 *)
+  let tun_is_tunmir =
+    (* here [dev-type] is implied *)
+    Fmt.str {|%a
+dev tunmir
+|} Miragevpn.Config.pp minimal_config
+    |> parse_noextern_client
+  in
+  Alcotest.(check (result conf_map pmsg))
+    "explicit dev tunmir implicitly specifying tun"
+    (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tun, Some "tunmir")))
+    tun_is_tunmir;
+
   let explicit_tun_str =
     (* this is interesting because it results in multiple
        dev-type stanzas since [dev tun0] implie [dev-type tun] *)
