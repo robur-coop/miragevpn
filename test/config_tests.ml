@@ -684,8 +684,10 @@ let tests =
     ( "parsing configuration 'client'",
       `Quick,
       parse_client_configuration ~config:client_conf "client.conf" );
-    (* "parsing configuration 'static-home'", `Quick,
-       parse_client_configuration "static-home.conf" ; -- secret static.key *)
+    ( "parsing configuration 'static-home'", `Quick,
+       parse_client_configuration "static-home.conf" ) ;
+    ( "parsing configuration 'static-home-inline-secret'", `Quick,
+       parse_client_configuration "static-home-inline-secret.conf" ) ;
     ( "parsing configuration 'tls-home'",
       `Quick,
       parse_client_configuration ~config:tls_home_conf "tls-home.conf" );

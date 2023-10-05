@@ -887,10 +887,16 @@ let a_tls_ciphersuite =
 let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
-let a_secret str =
+let a_secret_payload str =
   match parse_string ~consume:Consume.All (inline_payload "secret") str with
   | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
   | Error e -> Error e
+
+let a_secret =
+  a_option_with_single_path "secret" () >>| fun source ->
+  match source with
+  | `Need_inline () -> `Need_inline `Secret
+  | `Path (path, ()) -> `Path (path, `Secret)
 
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
@@ -1441,6 +1447,7 @@ let a_config_entry : line A.t =
          a_topology;
          a_tls_ciphersuite;
          a_tls_cipher;
+         a_secret;
          a_not_implemented;
          a_whitespace *> return (`Ignored "");
        ]
@@ -1499,7 +1506,7 @@ let parse_inline str = function
   | `Tls_key -> a_key_payload str
   | `Tls_crypt_v2 force_cookie ->
     parse_string ~consume:Consume.All (a_tls_crypt_v2_payload force_cookie) str
-  | `Secret -> a_secret str
+  | `Secret -> a_secret_payload str
   | kind ->
       Error
         ("config-parser: not sure how to parse inline "
