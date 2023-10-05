@@ -1951,8 +1951,8 @@ let merge_push_reply client (push_config : string) =
     | Dhcp_dns, _ -> true
     | Dhcp_ntp, _ -> true
     | Ifconfig, _ -> true
-    | Route, _ -> true
-    | Route_gateway, _ -> true
+    | Route, _ -> not (Conf_map.mem Route_nopull client)
+    | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | _ -> false
   in
   (* let naughty_server = in *)
