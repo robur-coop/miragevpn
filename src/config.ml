@@ -662,14 +662,18 @@ let a_dev =
   let a_device_name =
     choice
       [
-        ( string "tun"
-        *> option None
-             (a_number_range 0 128 >>| fun x -> Some ("tun" ^ string_of_int x))
-        >>| fun name -> (Some `Tun, name) );
-        ( string "tap"
-        *> option None
-             (a_number_range 0 128 >>| fun x -> Some ("tap" ^ string_of_int x))
-        >>| fun name -> (Some `Tap, name) );
+        ( string "tun" *> a_line not_control_char >>| fun x ->
+          let name =
+            let x = String.trim x in
+            if x = "" then None else Some ("tun" ^ x)
+          in
+          (Some `Tun, name) );
+        ( string "tap" *> a_line not_control_char >>| fun x ->
+          let name =
+            let x = String.trim x in
+            if x = "" then None else Some ("tap" ^ x)
+          in
+          (Some `Tap, name) );
         (a_single_param >>| fun name -> (None, Some name));
       ]
   in
