@@ -1397,7 +1397,7 @@ let a_not_implemented =
     ]
   <* a_whitespace
   >>= fun key ->
-  a_line not_control_chars >>| fun rest ->
+  a_line not_control_char >>| fun rest ->
   Log.warn (fun m -> m "IGNORING %S %S" key rest);
   `Ignored (key ^ " " ^ rest)
 
