@@ -1427,7 +1427,7 @@ let handle_server ?is_not_taken t s ev =
           let t', outs = timer t in
           Ok (t', outs, None))
   | Server_handshaking, `Tick ->
-      Log.warn (fun m -> m "ignorig tick in handshaking");
+      Log.warn (fun m -> m "ignoring tick in handshaking");
       Ok (t, [], None)
   | s, ev ->
       Result.error_msgf "handle_server: unexpected event %a in state %a"
