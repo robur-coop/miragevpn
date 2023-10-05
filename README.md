@@ -71,6 +71,13 @@ A notable difference from OpenVPN configuration parser is that we treat relative
  location, and not relative to the current working directory. OpenVPN supports
  a `--cd` argument, which we do not.
 
+## Discrepancies between MirageVPN and OpenVPN
+
+The "verify-x509-name <host> name" in OpenVPN checks by default only the
+commonName of the subject in the X.509 certificate. MirageVPN validates the
+provided host against the set of hostnames in the certificate, namely the union
+of the commonName and the DNS entries in the SubjectAlternativeName extension.
+
 ## Supported config directives
 
 Here is a list of configuration directives supported by this parser.
