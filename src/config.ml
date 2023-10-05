@@ -1388,6 +1388,7 @@ let a_not_implemented =
       string "ifconfig-pool-persist";
       string "status";
       string "log-append";
+      string "log";
       (* TODO: *)
       string "redirect-gateway";
       string "up";
@@ -1396,7 +1397,7 @@ let a_not_implemented =
     ]
   <* a_whitespace
   >>= fun key ->
-  take_while (function '\n' -> false | _ -> true) >>| fun rest ->
+  a_line not_control_chars >>| fun rest ->
   Log.warn (fun m -> m "IGNORING %S %S" key rest);
   `Ignored (key ^ " " ^ rest)
 

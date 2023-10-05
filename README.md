@@ -14,7 +14,7 @@ Our goal is not to implement the complete protocol, but rather a small useful su
 
 Since OpenVPN is not detailed in a protocol specificaton specified, apart from comments in the header files, we have written a specification document in Markdown, still work in progress:
 
-  - [spec.md](https://git.robur.io/robur/openvpn-spec/src/branch/master/spec.md)
+  - [spec.md](https://git.robur.coop/robur/openvpn-spec/src/branch/master/spec.md)
 
 Our OpenVPN configuration parser can be tested with an OpenVPN configuration file:
 
@@ -96,11 +96,14 @@ cert FILE-PATH
 connection FILE-PATH
 key FILE-PATH
 pkcs12 FILE-PATH
+secret FILE-PATH
 
 tls-auth FILE-PATH
 tls-auth FILE-PATH 0
 tls-auth FILE-PATH 1
 # the 0/1 here is the keydirection: 0 for CN_OUTGOING; 1 for CN_INCOMING
+
+tls-crypt-v2 FILE-PATH [force-cookie|allow-noncookie]
 ```
 
 Other supported directives:
@@ -118,8 +121,8 @@ comp-lzo
 dev null
 dev tun
 dev tap
-dev tunNUMBER
-dev tapNUMBER
+dev tunNAME
+dev tapNAME
 
 dhcp-option disable-nbt
 dhcp-option domain DOMAIN
@@ -167,7 +170,6 @@ client
 tls-client
 tls-server
 
-
 remote-cert-tls server
 remote-cert-tls client
 
@@ -204,27 +206,26 @@ route NETWORK [NETMASK [GATEWAY [METRIC]]]
 # GATEWAY: "default" or an IP address.
 # METRIC:  may be "default" or an integer between 0 and 255, inclusively.
 
-route-gateway default
-route-gateway dhcp
-route-gateway IP
+route-gateway [default|dhcp|IP]
 
 route-metric METRIC
 # METRIC: may be "default" or an integer between 0 and 255, inclusively.
+
+route-nopull
+# this is still ignored
 
 tls-timeout SECONDS
 # resend control data packets after not receivin an ACK for SECONDS
 # TODO should this only apply to UDP?
 
-tls-version-min 1.1
-tls-version-min 1.2
-tls-version-min 1.3
-tls-version-min 1.1 or-highest
-tls-version-min 1.2 or-highest
-tls-version-min 1.3 or-highest
+tls-version-min [1.0|1.1|1.2|1.3] [or-highest]
 
-topology net30
-topology p2p
-topology subnet
+tls-cipher <TLS 1.0, 1.1, 1.2 cipher-names>
+tls-ciphersuite <TLS 1.3 ciphersuite-names>
+
+verify-x509-name [hostname] name
+
+topology [net30|p2p|subnet]
 
 verb LEVEL
 ```
@@ -237,6 +238,7 @@ The following directives are ignored. Either because they were not deemed
 ```
 inactive
 ip-win32
+log
 rcvbuf
 redirect-gateway
 remote-cert-ku
@@ -269,7 +271,4 @@ engine ENGINE-NAME
 allow-recursive-routing
 
 ping-timer-rem
-
-secret FILE
-# static key
 ```
