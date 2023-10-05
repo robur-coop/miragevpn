@@ -428,8 +428,7 @@ let incoming_control_client config rng session channel now op data =
                 ~allowed_hashes:Mirage_crypto.Hash.hashes
                 ~time:(fun () -> Some now)
                 ca
-        in
-        let certificates =
+        and certificates =
           match (Config.find Tls_cert config, Config.find Tls_key config) with
           | Some cert, Some key -> `Single ([ cert ], key)
           | _ -> `None
@@ -448,8 +447,9 @@ let incoming_control_client config rng session channel now op data =
               Some (highest, highest)
             else
               Some (v, highest)
+        and peer_name = Config.find Verify_x509_name config
         in
-        Tls.(Engine.client (Config.client ?ciphers ?version ~certificates ~authenticator ()))
+        Tls.(Engine.client (Config.client ?ciphers ?version ?peer_name ~certificates ~authenticator ()))
       in
       Ok
         ( None,
