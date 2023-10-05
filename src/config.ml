@@ -515,7 +515,7 @@ module Conf_map = struct
   let pp_with_sep ?(sep = Fmt.any "@.") ppf t =
     let minimized_t =
       if find Tls_mode t = Some `Client && mem Pull t then (
-        Fmt.pf ppf "client\n";
+        Fmt.pf ppf "client%a" sep ();
         remove Tls_mode t |> remove Pull)
       else t
     in
