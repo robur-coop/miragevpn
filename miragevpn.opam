@@ -16,7 +16,7 @@ build: [
 ]
 
 depends: [
-  "dune"
+  "dune" {>= "2.9"}
   "ocaml" {>= "4.13.0"}
   "odoc" {with-doc}
 
