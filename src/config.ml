@@ -338,9 +338,7 @@ module Conf_map = struct
               (X509.Certificate.public_key cert)))
         (X509.Certificate.encode_pem cert |> Cstruct.to_string)
     in
-    let pp_cert cert =
-      p () "cert [inline]\n<cert>\n%a</cert>" pp_x509 cert
-    in
+    let pp_cert cert = p () "cert [inline]\n<cert>\n%a</cert>" pp_x509 cert in
     let pp_ca certs =
       p () "ca [inline]\n<ca>\n%a</ca>" Fmt.(list ~sep:(any "\n") pp_x509) certs
     in
