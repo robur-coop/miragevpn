@@ -162,6 +162,7 @@ module Config : sig
     | Tls_version_min : (Tls.Core.tls_version * bool) k
         (** [v * or_highest]: if [or_highest] then v = the highest version supported
         by the TLS library. *)
+    | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
     | Tls_crypt_v2_client

@@ -203,6 +203,7 @@ module Conf_map = struct
     | Tls_key : X509.Private_key.t k
     | Tls_timeout : int k
     | Tls_version_min : (Tls.Core.tls_version * bool) k
+    | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
     | Tls_crypt_v2_client
@@ -347,6 +348,14 @@ module Conf_map = struct
       p () "key [inline]\n<key>\n%s</key>"
         (X509.Private_key.encode_pem key |> Cstruct.to_string)
     in
+    let pp_tls_version ppf v =
+      Fmt.string ppf
+        (match v with
+        | `TLS_1_3 -> "1.3"
+        | `TLS_1_2 -> "1.2"
+        | `TLS_1_1 -> "1.1"
+        | `TLS_1_0 -> "1.0")
+    in
     match (k, v) with
     | Auth_nocache, () -> p () "auth-nocache"
     | Auth_retry, `None -> p () "auth-retry none"
@@ -482,13 +491,9 @@ module Conf_map = struct
     | Tls_cert, cert -> pp_cert cert
     | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver, or_highest) ->
-        p () "tls-version-min %s%s"
-          (match ver with
-          | `TLS_1_3 -> "1.3"
-          | `TLS_1_2 -> "1.2"
-          | `TLS_1_1 -> "1.1"
-          | `TLS_1_0 -> "1.0")
+        p () "tls-version-min %a%s" pp_tls_version ver
           (if or_highest then " or-highest" else "")
+    | Tls_version_max, ver -> p () "tls-version-max %a" pp_tls_version ver
     | Tls_mode, `Server -> p () "tls-server"
     | Tls_mode, `Client -> p () "tls-client"
     | Tls_timeout, seconds -> p () "tls-timeout %d" seconds
@@ -1032,22 +1037,27 @@ let a_hex =
   | i -> return i
   | exception _ -> fail (Fmt.str "Invalid number: %S" str)
 
+let a_tls_version =
+  choice
+    [
+      string "1.3" *> return `TLS_1_3;
+      string "1.2" *> return `TLS_1_2;
+      string "1.1" *> return `TLS_1_1;
+      string "1.0" *> return `TLS_1_0;
+    ]
+
 let a_tls_version_min =
-  string "tls-version-min" *> a_whitespace
-  *> choice
-       [
-         string "1.3" *> return `TLS_1_3;
-         string "1.2" *> return `TLS_1_2;
-         string "1.1" *> return `TLS_1_1;
-         string "1.0" *> return `TLS_1_0;
-       ]
-  >>= fun v ->
+  string "tls-version-min" *> a_whitespace *> a_tls_version >>= fun v ->
   choice
     [
       a_whitespace *> string "or-highest" *> return true;
       a_ign_whitespace *> end_of_line *> return false;
     ]
   >>| fun or_h -> `Entry (B (Tls_version_min, (v, or_h)))
+
+let a_tls_version_max =
+  string "tls-version-max" *> a_whitespace *> a_tls_version >>| fun v ->
+  `Entry (B (Tls_version_max, v))
 
 let a_entry_one_number name =
   let fail off reason =

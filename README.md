@@ -219,6 +219,7 @@ tls-timeout SECONDS
 # TODO should this only apply to UDP?
 
 tls-version-min [1.0|1.1|1.2|1.3] [or-highest]
+tls-version-max [1.0|1.1|1.2|1.3]
 
 tls-cipher <TLS 1.0, 1.1, 1.2 cipher-names>
 tls-ciphersuite <TLS 1.3 ciphersuite-names>
