@@ -1586,6 +1586,12 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
       | Persist_tun -> warn ()
       | Pull -> warn ()
       | Remote_random -> warn ()
+      (* last one wins *)
+      | Verb ->
+        Log.debug (fun m ->
+            m "Configuration flag 'verb' appears twice: %u vs %u, the former is used"
+              v2 v);
+        Ok (Some (k, v2))
       (* can be pushed, but can't change: *)
       | Auth_retry ->
           Log.warn (fun m ->

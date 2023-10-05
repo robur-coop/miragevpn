@@ -708,7 +708,7 @@ let tests =
     ( "parsing configuration 'wild-client-no-auth'", `Quick,
        parse_client_configuration "wild-client-no-auth.conf" ) ;
     (* ( "parsing configuration 'wild-client'", `Quick,
-       parse_client_configuration "wild-client.conf" ) ; -- auth --log multiple --verb *)
+       parse_client_configuration "wild-client.conf" ) ; -- auth *)
     (* ( "parsing configuration 'windows-riseup-client'", `Quick,
        parse_client_configuration "windows-riseup-client.conf" ); --auth *)
     ( "parsing 'tls-home-with-cipher'",
