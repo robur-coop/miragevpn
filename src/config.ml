@@ -1937,8 +1937,8 @@ let merge_push_reply client (push_config : string) =
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
     (* whitelist keys we are willing to accept from server: *)
-    | Dhcp_disable_nbt, _ -> true
-    | Dhcp_domain, _ -> true
+    | Dhcp_disable_nbt, _ -> not (Conf_map.mem Route_nopull client)
+    | Dhcp_domain, _ -> not (Conf_map.mem Route_nopull client)
     | Mssfix, _ -> true
     | Tls_mode, `Client -> true
     | Tun_mtu, _ -> true
@@ -1948,8 +1948,8 @@ let merge_push_reply client (push_config : string) =
     | Ping_timeout, `Restart n when n >= 0 ->
         true (* TODO | Redirect_gateway, _ -> true *)
     (* TODO should verify IPs: *)
-    | Dhcp_dns, _ -> true
-    | Dhcp_ntp, _ -> true
+    | Dhcp_dns, _ -> not (Conf_map.mem Route_nopull client)
+    | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
     | Route, _ -> not (Conf_map.mem Route_nopull client)
     | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
