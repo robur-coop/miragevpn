@@ -892,6 +892,12 @@ let a_secret str =
   | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
   | Error e -> Error e
 
+let a_secret_maybe_inline =
+  a_option_with_single_path "secret" () >>| fun source ->
+  match source with
+  | `Need_inline () -> `Need_inline `Secret
+  | `Path (path, ()) -> `Path (path, `Secret)
+
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
 let a_auth_user_pass_payload =
@@ -1441,6 +1447,7 @@ let a_config_entry : line A.t =
          a_topology;
          a_tls_ciphersuite;
          a_tls_cipher;
+         a_secret_maybe_inline;
          a_not_implemented;
          a_whitespace *> return (`Ignored "");
        ]
