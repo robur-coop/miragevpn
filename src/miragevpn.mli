@@ -163,6 +163,8 @@ module Config : sig
     | Route_metric : [`Default | `Metric of int] k
     (** Default metric for [Route _] directives *)
 
+    | Route_nopull : flag k
+
     | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Server : Ipaddr.V4.Prefix.t k
@@ -190,10 +192,10 @@ module Config : sig
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
 
     | Tls_crypt_v2_client : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
-    (** [Tls_crypt_v2_client (key, wkc, force_cookie) *)
+    (** [Tls_crypt_v2_client (key, wkc, force_cookie)] *)
 
     | Tls_crypt_v2_server : ((Cstruct.t * Cstruct.t) * bool) k
-    (** [Tls_crypt_v2_server (key, force_cookie) *)
+    (** [Tls_crypt_v2_server (key, force_cookie)] *)
 
     | Topology : [`Net30 | `P2p | `Subnet] k
 
@@ -213,6 +215,8 @@ module Config : sig
     | Verb : int k
 
     | Verify_client_cert : [ `None | `Optional | `Required ] k
+
+    | Verify_x509_name : [`host] Domain_name.t k
 
   include Gmap.S with type 'a key = 'a k
 

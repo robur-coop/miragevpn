@@ -172,6 +172,7 @@ module Conf_map = struct
     | Route_delay : (int * int) k
     | Route_gateway : [ `Ip of Ipaddr.t | `Default | `Dhcp ] k
     | Route_metric : [ `Default | `Metric of int ] k
+    | Route_nopull : flag k
     | Script_security : int k
     | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Server : Ipaddr.V4.Prefix.t k
@@ -196,6 +197,7 @@ module Conf_map = struct
     | Tun_mtu : int k
     | Verb : int k
     | Verify_client_cert : [ `None | `Optional | `Required ] k
+    | Verify_x509_name : [`host] Domain_name.t k
 
   module K = struct
     type 'a t = 'a k
@@ -457,6 +459,7 @@ module Conf_map = struct
     | Route_gateway, `Default -> p () "route-gateway default"
     | Route_gateway, `Dhcp -> p () "route-gateway dhcp"
     | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.pp ip
+    | Route_nopull, () -> p () "route-nopull"
     | Script_security, d -> p () "script-security %u" d
     | Secret, (a, b, c, d) -> p () "<secret>\n%a\n</secret>" pp_key (a, b, c, d)
     | Server, cidr ->
@@ -511,6 +514,8 @@ module Conf_map = struct
           | `None -> "none"
           | `Optional -> "optional"
           | `Required -> "require")
+    | Verify_x509_name, host ->
+      p () "verify-x509-name %a name" Domain_name.pp host
 
   let pp_with_sep ?(sep = Fmt.any "@.") ppf t =
     let minimized_t =
@@ -983,7 +988,7 @@ let a_socks_proxy =
   >>| fun x -> `Socks_proxy x
 
 let a_flag =
-  let r k v = return (B (k, v)) in
+  let r k v = return (`Entry (B (k, v))) in
   choice
     [
       string "auth-nocache" *> r Auth_nocache ();
@@ -995,14 +1000,16 @@ let a_flag =
       string "tls-server" *> r Tls_mode `Server;
       string "persist-key" *> r Persist_key ();
       string "persist-tun" *> r Persist_tun ();
+      string "comp-lzo no" *> return (`Ignored "LZO compression disabled by default");
+      string "comp-lzo yes" *> r Comp_lzo ();
       string "comp-lzo" *> r Comp_lzo ();
       (* TODO warn! *)
       string "passtos" *> r Passtos ();
       string "mute-replay-warnings" *> r Mute_replay_warnings ();
       string "ifconfig-nowarn" *> r Ifconfig_nowarn ();
       string "pull" *> r Pull ();
+      string "route-nopull" *> r Route_nopull ();
     ]
-  >>| fun b -> `Entry b
 
 let a_remote_cert_tls =
   string "remote-cert-tls" *> a_whitespace
@@ -1019,8 +1026,6 @@ let a_hex =
   match int_of_string ("0x" ^ str) with
   | i -> return i
   | exception _ -> fail (Fmt.str "Invalid number: %S" str)
-
-let _TODO = a_hex
 
 let a_tls_version_min =
   string "tls-version-min" *> a_whitespace
@@ -1113,6 +1118,13 @@ let a_domain_or_ip =
   |> function
   | Ok x -> return x
   | Error s -> fail s
+
+let a_verify_x509_name =
+  string "verify-x509-name" *> a_whitespace *> a_domain_name >>= fun v ->
+  (option "subject" (a_whitespace *> a_single_param)) >>| fun t ->
+  match t with
+  | "name" -> `Entry (B (Verify_x509_name, v))
+  | _ -> failwith ("verify-x509-name: only type = name supported, not: " ^ t)
 
 let a_local =
   string "local" *> a_whitespace *> a_domain_or_ip >>| fun dom ->
@@ -1448,6 +1460,7 @@ let a_config_entry : line A.t =
          a_tls_ciphersuite;
          a_tls_cipher;
          a_secret;
+         a_verify_x509_name;
          a_not_implemented;
          a_whitespace *> return (`Ignored "");
        ]
@@ -1924,8 +1937,8 @@ let merge_push_reply client (push_config : string) =
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
     (* whitelist keys we are willing to accept from server: *)
-    | Dhcp_disable_nbt, _ -> true
-    | Dhcp_domain, _ -> true
+    | Dhcp_disable_nbt, _ -> not (Conf_map.mem Route_nopull client)
+    | Dhcp_domain, _ -> not (Conf_map.mem Route_nopull client)
     | Mssfix, _ -> true
     | Tls_mode, `Client -> true
     | Tun_mtu, _ -> true
@@ -1935,11 +1948,11 @@ let merge_push_reply client (push_config : string) =
     | Ping_timeout, `Restart n when n >= 0 ->
         true (* TODO | Redirect_gateway, _ -> true *)
     (* TODO should verify IPs: *)
-    | Dhcp_dns, _ -> true
-    | Dhcp_ntp, _ -> true
+    | Dhcp_dns, _ -> not (Conf_map.mem Route_nopull client)
+    | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
-    | Route, _ -> true
-    | Route_gateway, _ -> true
+    | Route, _ -> not (Conf_map.mem Route_nopull client)
+    | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | _ -> false
   in
   (* let naughty_server = in *)

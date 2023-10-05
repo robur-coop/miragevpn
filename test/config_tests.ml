@@ -705,8 +705,10 @@ let tests =
         "tls-crypt-v2-client.conf" );
     ( "parsing server tls-crypt-v2 keys", `Quick,
       server_tls_crypt_v2 );
-    (* "parsing configuration 'wild-client'", `Quick,
-       parse_client_configuration "wild-client.conf" ; -- verify-x509-name *)
+    ( "parsing configuration 'wild-client-no-auth'", `Quick,
+       parse_client_configuration "wild-client-no-auth.conf" ) ;
+    (* ( "parsing configuration 'wild-client'", `Quick,
+       parse_client_configuration "wild-client.conf" ) ; -- auth --log multiple --verb *)
     (* ( "parsing configuration 'windows-riseup-client'", `Quick,
        parse_client_configuration "windows-riseup-client.conf" ); --auth *)
     ( "parsing 'tls-home-with-cipher'",
