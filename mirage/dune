@@ -1,7 +1,18 @@
 (library
  (name miragevpn_mirage)
  (public_name miragevpn.mirage)
- (libraries miragevpn logs ipaddr cstruct
-            tcpip tcpip.icmpv4 tcpip.tcp tcpip.udp tcpip.ipv4
-            mirage-random mirage-clock dns-client dns-client-mirage)
+ (libraries
+  miragevpn
+  logs
+  ipaddr
+  cstruct
+  tcpip
+  tcpip.icmpv4
+  tcpip.tcp
+  tcpip.udp
+  tcpip.ipv4
+  mirage-random
+  mirage-clock
+  dns-client
+  dns-client-mirage)
  (wrapped false))

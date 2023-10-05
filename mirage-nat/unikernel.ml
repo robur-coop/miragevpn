@@ -126,7 +126,11 @@ struct
                     Lwt.return_unit
             and add_rule table packet =
               let public_ip = O.get_ip ovpn in
-              match Mirage_nat_lru.add table packet public_ip (fun () -> Some (Randomconv.int16 R.generate)) `NAT with
+              match
+                Mirage_nat_lru.add table packet public_ip
+                  (fun () -> Some (Randomconv.int16 R.generate))
+                  `NAT
+              with
               | Error e ->
                   Log.debug (fun m ->
                       m "Failed to add a NAT rule: %a" Mirage_nat.pp_error e);

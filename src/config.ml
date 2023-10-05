@@ -41,51 +41,66 @@ let int_of_ping_interval = function
          violated"
   | `Seconds n -> n
 
-let (cipher_to_cs : string -> Tls.Ciphersuite.ciphersuite),
-    (cs_to_cipher : Tls.Ciphersuite.ciphersuite -> string) =
-  let map = [
-    "TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384", `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 ;
-    "TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384", `ECDHE_RSA_WITH_AES_256_GCM_SHA384 ;
-    "TLS-DHE-RSA-WITH-AES-256-GCM-SHA384", `DHE_RSA_WITH_AES_256_GCM_SHA384 ;
-    "TLS-ECDHE-ECDSA-WITH-CHACHA20-POLY1305-SHA256", `ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 ;
-    "TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256", `ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 ;
-    "TLS-DHE-RSA-WITH-CHACHA20-POLY1305-SHA256", `DHE_RSA_WITH_CHACHA20_POLY1305_SHA256 ;
-    "TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256", `ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 ;
-    "TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256", `ECDHE_RSA_WITH_AES_128_GCM_SHA256 ;
-    "TLS-DHE-RSA-WITH-AES-128-GCM-SHA256", `DHE_RSA_WITH_AES_128_GCM_SHA256 ;
-    "TLS-ECDHE-ECDSA-WITH-AES-256-CBC-SHA384", `ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 ;
-    "TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384", `ECDHE_RSA_WITH_AES_256_CBC_SHA384 ;
-    "TLS-DHE-RSA-WITH-AES-256-CBC-SHA256", `DHE_RSA_WITH_AES_256_CBC_SHA256 ;
-    "TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256", `ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 ;
-    "TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256", `ECDHE_RSA_WITH_AES_128_CBC_SHA256 ;
-    "TLS-DHE-RSA-WITH-AES-128-CBC-SHA256", `DHE_RSA_WITH_AES_128_CBC_SHA256 ;
-    "TLS-ECDHE-ECDSA-WITH-AES-256-CBC-SHA", `ECDHE_ECDSA_WITH_AES_256_CBC_SHA ;
-    "TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA", `ECDHE_RSA_WITH_AES_256_CBC_SHA ;
-    "TLS-DHE-RSA-WITH-AES-256-CBC-SHA", `DHE_RSA_WITH_AES_256_CBC_SHA ;
-    "TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA", `ECDHE_ECDSA_WITH_AES_128_CBC_SHA ;
-    "TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA", `ECDHE_RSA_WITH_AES_128_CBC_SHA ;
-    "TLS-DHE-RSA-WITH-AES-128-CBC-SHA", `DHE_RSA_WITH_AES_128_CBC_SHA ;
-  ] in
-  let rev_map = List.map (fun (a, b) -> b, a) map in
-  (fun s ->
-     match List.assoc_opt s map with
-     | None -> failwith ("unsupported tls-cipher " ^ s)
-     | Some c -> c),
-  (fun c -> List.assoc c rev_map)
+let ( (cipher_to_cs : string -> Tls.Ciphersuite.ciphersuite),
+      (cs_to_cipher : Tls.Ciphersuite.ciphersuite -> string) ) =
+  let map =
+    [
+      ( "TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384",
+        `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 );
+      ( "TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384",
+        `ECDHE_RSA_WITH_AES_256_GCM_SHA384 );
+      ("TLS-DHE-RSA-WITH-AES-256-GCM-SHA384", `DHE_RSA_WITH_AES_256_GCM_SHA384);
+      ( "TLS-ECDHE-ECDSA-WITH-CHACHA20-POLY1305-SHA256",
+        `ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 );
+      ( "TLS-ECDHE-RSA-WITH-CHACHA20-POLY1305-SHA256",
+        `ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 );
+      ( "TLS-DHE-RSA-WITH-CHACHA20-POLY1305-SHA256",
+        `DHE_RSA_WITH_CHACHA20_POLY1305_SHA256 );
+      ( "TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256",
+        `ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 );
+      ( "TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256",
+        `ECDHE_RSA_WITH_AES_128_GCM_SHA256 );
+      ("TLS-DHE-RSA-WITH-AES-128-GCM-SHA256", `DHE_RSA_WITH_AES_128_GCM_SHA256);
+      ( "TLS-ECDHE-ECDSA-WITH-AES-256-CBC-SHA384",
+        `ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 );
+      ( "TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA384",
+        `ECDHE_RSA_WITH_AES_256_CBC_SHA384 );
+      ("TLS-DHE-RSA-WITH-AES-256-CBC-SHA256", `DHE_RSA_WITH_AES_256_CBC_SHA256);
+      ( "TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA256",
+        `ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 );
+      ( "TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA256",
+        `ECDHE_RSA_WITH_AES_128_CBC_SHA256 );
+      ("TLS-DHE-RSA-WITH-AES-128-CBC-SHA256", `DHE_RSA_WITH_AES_128_CBC_SHA256);
+      ("TLS-ECDHE-ECDSA-WITH-AES-256-CBC-SHA", `ECDHE_ECDSA_WITH_AES_256_CBC_SHA);
+      ("TLS-ECDHE-RSA-WITH-AES-256-CBC-SHA", `ECDHE_RSA_WITH_AES_256_CBC_SHA);
+      ("TLS-DHE-RSA-WITH-AES-256-CBC-SHA", `DHE_RSA_WITH_AES_256_CBC_SHA);
+      ("TLS-ECDHE-ECDSA-WITH-AES-128-CBC-SHA", `ECDHE_ECDSA_WITH_AES_128_CBC_SHA);
+      ("TLS-ECDHE-RSA-WITH-AES-128-CBC-SHA", `ECDHE_RSA_WITH_AES_128_CBC_SHA);
+      ("TLS-DHE-RSA-WITH-AES-128-CBC-SHA", `DHE_RSA_WITH_AES_128_CBC_SHA);
+    ]
+  in
+  let rev_map = List.map (fun (a, b) -> (b, a)) map in
+  ( (fun s ->
+      match List.assoc_opt s map with
+      | None -> failwith ("unsupported tls-cipher " ^ s)
+      | Some c -> c),
+    fun c -> List.assoc c rev_map )
 
-let (cipher13_to_cs13 : string -> Tls.Ciphersuite.ciphersuite13),
-    (cs13_to_cipher13 : Tls.Ciphersuite.ciphersuite13 -> string) =
-  let map = [
-    "TLS_AES_256_GCM_SHA384", `AES_256_GCM_SHA384 ;
-    "TLS_CHACHA20_POLY1305_SHA256", `CHACHA20_POLY1305_SHA256 ;
-    "TLS_AES_128_GCM_SHA256", `AES_128_GCM_SHA256 ;
-  ] in
-  let rev_map = List.map (fun (a, b) -> b, a) map in
-  (fun s ->
-     match List.assoc_opt s map with
-     | None -> failwith ("unsupported tls-ciphersuite " ^ s)
-     | Some c -> c),
-  (fun c -> List.assoc c rev_map)
+let ( (cipher13_to_cs13 : string -> Tls.Ciphersuite.ciphersuite13),
+      (cs13_to_cipher13 : Tls.Ciphersuite.ciphersuite13 -> string) ) =
+  let map =
+    [
+      ("TLS_AES_256_GCM_SHA384", `AES_256_GCM_SHA384);
+      ("TLS_CHACHA20_POLY1305_SHA256", `CHACHA20_POLY1305_SHA256);
+      ("TLS_AES_128_GCM_SHA256", `AES_128_GCM_SHA256);
+    ]
+  in
+  let rev_map = List.map (fun (a, b) -> (b, a)) map in
+  ( (fun s ->
+      match List.assoc_opt s map with
+      | None -> failwith ("unsupported tls-ciphersuite " ^ s)
+      | Some c -> c),
+    fun c -> List.assoc c rev_map )
 
 module Conf_map = struct
   type flag = unit
@@ -188,16 +203,18 @@ module Conf_map = struct
     | Tls_key : X509.Private_key.t k
     | Tls_timeout : int k
     | Tls_version_min : (Tls.Core.tls_version * bool) k
+    | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
-    | Tls_crypt_v2_client : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
+    | Tls_crypt_v2_client
+        : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
     | Tls_crypt_v2_server : ((Cstruct.t * Cstruct.t) * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
     | Verb : int k
     | Verify_client_cert : [ `None | `Optional | `Required ] k
-    | Verify_x509_name : [`host] Domain_name.t k
+    | Verify_x509_name : [ `host ] Domain_name.t k
 
   module K = struct
     type 'a t = 'a k
@@ -236,15 +253,14 @@ module Conf_map = struct
             | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
             | Some _, None, None -> Ok ()
             | _, Some cert, Some key ->
-              let cert_pubkey = X509.Certificate.public_key cert in
-              let key_pubkey = X509.Private_key.public key in
-              if Cstruct.equal
-                  (X509.Public_key.fingerprint cert_pubkey)
-                  (X509.Public_key.fingerprint key_pubkey)
-              then
-                Ok ()
-              else
-                Error "key and cert do not match"
+                let cert_pubkey = X509.Certificate.public_key cert in
+                let key_pubkey = X509.Private_key.public key in
+                if
+                  Cstruct.equal
+                    (X509.Public_key.fingerprint cert_pubkey)
+                    (X509.Public_key.fingerprint key_pubkey)
+                then Ok ()
+                else Error "key and cert do not match"
             | None, None, None ->
                 Error
                   "config has neither user/password, nor TLS client certificate"
@@ -260,8 +276,8 @@ module Conf_map = struct
            Error "remote-cert-tls is not SERVER?!"
          else Ok ())
         >>= fun () ->
-        ensure_not Tls_crypt_v2_server "server tls-crypt-v2 key passed in tls-crypt-v2"
-      )
+        ensure_not Tls_crypt_v2_server
+          "server tls-crypt-v2 key passed in tls-crypt-v2" )
 
   let pp_key ppf (a, b, c, d) =
     Fmt.pf ppf
@@ -274,29 +290,25 @@ module Conf_map = struct
 
   let rec pp_pem_b64 ppf cs =
     let len = Cstruct.length cs in
-    if len = 0 then
-      Fmt.pf ppf ""
+    if len = 0 then Fmt.pf ppf ""
     else
       let len = min len 48 in
-      let () = Fmt.pf ppf "%s\n" (Base64.encode_string (Cstruct.to_string ~len cs)) in
-      pp_pem_b64 ppf (Cstruct.shift cs len )
+      let () =
+        Fmt.pf ppf "%s\n" (Base64.encode_string (Cstruct.to_string ~len cs))
+      in
+      pp_pem_b64 ppf (Cstruct.shift cs len)
 
   let pp_tls_crypt_v2_client ppf ((a, b, c, d), wkc) =
     Fmt.pf ppf
       "-----BEGIN OpenVPN tls-crypt-v2 client key-----\n\
-      %a\
-       -----END OpenVPN tls-crypt-v2 client key-----"
-      pp_pem_b64
+       %a-----END OpenVPN tls-crypt-v2 client key-----" pp_pem_b64
       (Cstruct.concat [ a; b; c; d; wkc ])
 
   let pp_tls_crypt_v2_server ppf (a, b) =
     Fmt.pf ppf
       "-----BEGIN OpenVPN tls-crypt-v2 server key-----\n\
-      %a\
-       -----END OpenVPN tls-crypt-v2 server key-----"
-      pp_pem_b64
+       %a-----END OpenVPN tls-crypt-v2 server key-----" pp_pem_b64
       (Cstruct.concat [ a; b ])
-
 
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
     let p () = Fmt.pf ppf in
@@ -327,22 +339,22 @@ module Conf_map = struct
         (X509.Certificate.encode_pem cert |> Cstruct.to_string)
     in
     let pp_cert cert =
-      p ()
-         "cert [inline]\n\
--         <cert>\n\
-          %a</cert>"
-         pp_x509 cert
+      p () "cert [inline]\n<cert>\n%a</cert>" pp_x509 cert
     in
     let pp_ca certs =
-      p ()
-        "ca [inline]\n\
-         <ca>\n\
-         %a</ca>"
-        Fmt.(list ~sep:(any "\n") pp_x509) certs
+      p () "ca [inline]\n<ca>\n%a</ca>" Fmt.(list ~sep:(any "\n") pp_x509) certs
     in
     let pp_x509_private_key key =
       p () "key [inline]\n<key>\n%s</key>"
         (X509.Private_key.encode_pem key |> Cstruct.to_string)
+    in
+    let pp_tls_version ppf v =
+      Fmt.string ppf
+        (match v with
+        | `TLS_1_3 -> "1.3"
+        | `TLS_1_2 -> "1.2"
+        | `TLS_1_1 -> "1.1"
+        | `TLS_1_0 -> "1.0")
     in
     match (k, v) with
     | Auth_nocache, () -> p () "auth-nocache"
@@ -479,26 +491,28 @@ module Conf_map = struct
     | Tls_cert, cert -> pp_cert cert
     | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver, or_highest) ->
-        p () "tls-version-min %s%s"
-          (match ver with `TLS_1_3 -> "1.3" | `TLS_1_2 -> "1.2" | `TLS_1_1 -> "1.1" | `TLS_1_0 -> "1.0")
+        p () "tls-version-min %a%s" pp_tls_version ver
           (if or_highest then " or-highest" else "")
+    | Tls_version_max, ver -> p () "tls-version-max %a" pp_tls_version ver
     | Tls_mode, `Server -> p () "tls-server"
     | Tls_mode, `Client -> p () "tls-client"
     | Tls_timeout, seconds -> p () "tls-timeout %d" seconds
     | Tls_cipher, ciphers ->
-      p () "tls-cipher %a" Fmt.(list ~sep:(any ":") string)
-        (List.map cs_to_cipher ciphers)
+        p () "tls-cipher %a"
+          Fmt.(list ~sep:(any ":") string)
+          (List.map cs_to_cipher ciphers)
     | Tls_ciphersuite, ciphers ->
-      p () "tls-ciphersuite %a" Fmt.(list ~sep:(any ":") string)
-        (List.map cs13_to_cipher13 ciphers)
+        p () "tls-ciphersuite %a"
+          Fmt.(list ~sep:(any ":") string)
+          (List.map cs13_to_cipher13 ciphers)
     | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
-      p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
-        (if force_cookie then "force-cookie" else "allow-noncookie")
-        pp_tls_crypt_v2_client (key, wkc)
+        p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
+          (if force_cookie then "force-cookie" else "allow-noncookie")
+          pp_tls_crypt_v2_client (key, wkc)
     | Tls_crypt_v2_server, (key, force_cookie) ->
-      p () "tls-crypt-v2 [inline] %s<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
-        (if force_cookie then "force-cookie" else "allow-noncookie")
-        pp_tls_crypt_v2_server key
+        p () "tls-crypt-v2 [inline] %s<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
+          (if force_cookie then "force-cookie" else "allow-noncookie")
+          pp_tls_crypt_v2_server key
     | Topology, v ->
         p () "topology %s"
           (match v with
@@ -515,7 +529,7 @@ module Conf_map = struct
           | `Optional -> "optional"
           | `Required -> "require")
     | Verify_x509_name, host ->
-      p () "verify-x509-name %a name" Domain_name.pp host
+        p () "verify-x509-name %a name" Domain_name.pp host
 
   let pp_with_sep ?(sep = Fmt.any "@.") ppf t =
     let minimized_t =
@@ -694,8 +708,7 @@ let a_dev_type =
   (* this is used to specify the type of a [dev] stanza
      giving a custom name from which the type cannot be inferred *)
   string "dev-type" *> a_whitespace
-  *> choice
-       [ (string "tun" *> return `Tun); (string "tap" *> return `Tap) ]
+  *> choice [ string "tun" *> return `Tun; string "tap" *> return `Tap ]
   >>| fun typ -> `Dev_type typ
 
 let a_proto =
@@ -742,6 +755,7 @@ let a_option_with_single_path name kind =
   string name *> a_whitespace *> a_filepath kind
 
 let a_ca = a_option_with_single_path "ca" `Ca
+
 let a_ca_payload str =
   match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
   | Ok certs -> Ok (B (Ca, certs))
@@ -781,13 +795,13 @@ let a_tls_auth =
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
 
 let a_tls_crypt_v2 =
-  string "tls-crypt-v2" *> a_whitespace *> a_filepath ()
-  >>= fun source ->
+  string "tls-crypt-v2" *> a_whitespace *> a_filepath () >>= fun source ->
   choice
     [
       a_whitespace *> string "force-cookie" *> return true;
       a_whitespace *> string "allow-noncookie" *> return false;
-      return false; (* default is allow-noncookie *)
+      return false;
+      (* default is allow-noncookie *)
     ]
   >>| fun force_cookie ->
   match source with
@@ -799,25 +813,23 @@ let tls_crypt_v2_server_pem_name = "OpenVPN tls-crypt-v2 server key"
 
 let inline_pem_payload pem_name element =
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
-  *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline
-      <|> fail "FIXME")
+  *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline <|> fail "FIXME")
   *> many_till
-    ( take_while (function
+       (take_while (function
           | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' | '=' -> true
           | _ -> false)
-      <* (end_of_line <|> fail "Invalid base64 character"))
-    (string ("-----END " ^ pem_name ^ "-----") *> a_newline
-     <|> fail "Missing END mark")
+       <* (end_of_line <|> fail "Invalid base64 character"))
+       (string ("-----END " ^ pem_name ^ "-----") *> a_newline
+       <|> fail "Missing END mark")
   <* commit
   <* (skip_many (a_newline <|> a_whitespace) *> end_of_input
-      <|> ( pos >>= fun i ->
-            Fmt.kstr fail "Data after -----END mark at byte offset %d" i))
+     <|> ( pos >>= fun i ->
+           Fmt.kstr fail "Data after -----END mark at byte offset %d" i ))
   >>= fun lst ->
   let s = String.concat "" lst in
   match Base64.decode s with
   | Ok s -> return (Cstruct.of_string s)
-  | Error `Msg e -> Fmt.kstr fail "Bad base64 in %s pem: %s" element e
-
+  | Error (`Msg e) -> Fmt.kstr fail "Bad base64 in %s pem: %s" element e
 
 let inline_payload element =
   let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
@@ -849,24 +861,19 @@ let inline_payload element =
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
 let a_tls_crypt_v2_client_payload force_cookie =
-  inline_pem_payload tls_crypt_v2_client_pem_name "tls-crypt-v2"
-  >>= (fun cs ->
-      if Cstruct.length cs >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
-        return cs
-      else
-        fail "bad tls-crypt-v2 client key size")
+  ( inline_pem_payload tls_crypt_v2_client_pem_name "tls-crypt-v2" >>= fun cs ->
+    if Cstruct.length cs >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
+      return cs
+    else fail "bad tls-crypt-v2 client key size" )
   >>| fun cs ->
   let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 64) in
   let wkc = Cstruct.shift cs 256 in
   B (Tls_crypt_v2_client, (key, wkc, force_cookie))
 
 let a_tls_crypt_v2_server_payload force_cookie =
-  inline_pem_payload tls_crypt_v2_server_pem_name "tls-crypt-v2"
-  >>= (fun cs ->
-      if Cstruct.length cs = 128 then
-        return cs
-      else
-        fail "bad tls-crypt-v2 server key size")
+  ( inline_pem_payload tls_crypt_v2_server_pem_name "tls-crypt-v2" >>= fun cs ->
+    if Cstruct.length cs = 128 then return cs
+    else fail "bad tls-crypt-v2 server key size" )
   >>| fun cs ->
   let key = Cstruct.(sub cs 0 64, sub cs 64 64) in
   B (Tls_crypt_v2_server, (key, force_cookie))
@@ -882,11 +889,13 @@ let a_tls_auth_payload direction =
 let split_colon s = String.split_on_char ':' s
 
 let a_tls_cipher =
-  string "tls-cipher" *> a_whitespace *> a_line not_control_char >>| fun ciphers ->
+  string "tls-cipher" *> a_whitespace *> a_line not_control_char
+  >>| fun ciphers ->
   `Entry (B (Tls_cipher, List.map cipher_to_cs (split_colon ciphers)))
 
 let a_tls_ciphersuite =
-  string "tls-ciphersuite" *> a_whitespace *> a_line not_control_char >>| fun ciphers ->
+  string "tls-ciphersuite" *> a_whitespace *> a_line not_control_char
+  >>| fun ciphers ->
   `Entry (B (Tls_ciphersuite, List.map cipher13_to_cs13 (split_colon ciphers)))
 
 let a_auth_user_pass =
@@ -1000,7 +1009,8 @@ let a_flag =
       string "tls-server" *> r Tls_mode `Server;
       string "persist-key" *> r Persist_key ();
       string "persist-tun" *> r Persist_tun ();
-      string "comp-lzo no" *> return (`Ignored "LZO compression disabled by default");
+      string "comp-lzo no"
+      *> return (`Ignored "LZO compression disabled by default");
       string "comp-lzo yes" *> r Comp_lzo ();
       string "comp-lzo" *> r Comp_lzo ();
       (* TODO warn! *)
@@ -1027,22 +1037,27 @@ let a_hex =
   | i -> return i
   | exception _ -> fail (Fmt.str "Invalid number: %S" str)
 
+let a_tls_version =
+  choice
+    [
+      string "1.3" *> return `TLS_1_3;
+      string "1.2" *> return `TLS_1_2;
+      string "1.1" *> return `TLS_1_1;
+      string "1.0" *> return `TLS_1_0;
+    ]
+
 let a_tls_version_min =
-  string "tls-version-min" *> a_whitespace
-  *> choice
-       [
-         string "1.3" *> return `TLS_1_3;
-         string "1.2" *> return `TLS_1_2;
-         string "1.1" *> return `TLS_1_1;
-         string "1.0" *> return `TLS_1_0;
-       ]
-  >>= fun v ->
+  string "tls-version-min" *> a_whitespace *> a_tls_version >>= fun v ->
   choice
     [
       a_whitespace *> string "or-highest" *> return true;
       a_ign_whitespace *> end_of_line *> return false;
     ]
   >>| fun or_h -> `Entry (B (Tls_version_min, (v, or_h)))
+
+let a_tls_version_max =
+  string "tls-version-max" *> a_whitespace *> a_tls_version >>| fun v ->
+  `Entry (B (Tls_version_max, v))
 
 let a_entry_one_number name =
   let fail off reason =
@@ -1121,7 +1136,7 @@ let a_domain_or_ip =
 
 let a_verify_x509_name =
   string "verify-x509-name" *> a_whitespace *> a_domain_name >>= fun v ->
-  (option "subject" (a_whitespace *> a_single_param)) >>| fun t ->
+  option "subject" (a_whitespace *> a_single_param) >>| fun t ->
   match t with
   | "name" -> `Entry (B (Verify_x509_name, v))
   | _ -> failwith ("verify-x509-name: only type = name supported, not: " ^ t)
@@ -1216,8 +1231,8 @@ let a_auth_user_pass_verify =
     (a_whitespace
     *> choice
          [
-           (string "via-env" *> return `Via_env);
-           (string "via-file" *> return `Via_file);
+           string "via-env" *> return `Via_env;
+           string "via-file" *> return `Via_file;
          ])
 
 let a_script_security =
@@ -1355,7 +1370,8 @@ let a_route_gateway =
   >>| fun x -> `Entry (B (Route_gateway, x))
 
 let a_inline =
-  char '<' *> take_while1 (function 'a' .. 'z' | '0' .. '9' | '-' -> true | _ -> false)
+  char '<'
+  *> take_while1 (function 'a' .. 'z' | '0' .. '9' | '-' -> true | _ -> false)
   <* char '>' <* a_newline
   >>= fun tag ->
   skip_many (a_whitespace_or_comment *> end_of_line)
@@ -1519,7 +1535,9 @@ let parse_inline str = function
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
   | `Tls_crypt_v2 force_cookie ->
-    parse_string ~consume:Consume.All (a_tls_crypt_v2_payload force_cookie) str
+      parse_string ~consume:Consume.All
+        (a_tls_crypt_v2_payload force_cookie)
+        str
   | `Secret -> a_secret_payload str
   | kind ->
       Error
@@ -1548,10 +1566,12 @@ let eq : eq =
                 | `Ip a, `Ip b -> 0 = Ipaddr.compare a b
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
-        | Tls_crypt_v2_client, ((a, b, c, d), wkc, force_cookie), ((a', b', c', d'), wkc', force_cookie') ->
-          Cstruct.equal a a' && Cstruct.equal b b' && Cstruct.equal c c'
-          && Cstruct.equal d d' && Cstruct.equal wkc wkc' &&
-          force_cookie = force_cookie'
+        | ( Tls_crypt_v2_client,
+            ((a, b, c, d), wkc, force_cookie),
+            ((a', b', c', d'), wkc', force_cookie') ) ->
+            Cstruct.equal a a' && Cstruct.equal b b' && Cstruct.equal c c'
+            && Cstruct.equal d d' && Cstruct.equal wkc wkc'
+            && force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
@@ -1586,6 +1606,14 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
       | Persist_tun -> warn ()
       | Pull -> warn ()
       | Remote_random -> warn ()
+      (* last one wins *)
+      | Verb ->
+          Log.debug (fun m ->
+              m
+                "Configuration flag 'verb' appears twice: %u vs %u, the former \
+                 is used"
+                v2 v);
+          Ok (Some (k, v2))
       (* can be pushed, but can't change: *)
       | Auth_retry ->
           Log.warn (fun m ->

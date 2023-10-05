@@ -1,6 +1,20 @@
 (library
-  (name miragevpn)
-  (public_name miragevpn)
-  (libraries fmt logs cstruct ptime decompress.lzo mirage-crypto tls x509
-             duration angstrom hex domain-name ipaddr gmap randomconv)
-  (wrapped true))
+ (name miragevpn)
+ (public_name miragevpn)
+ (libraries
+  fmt
+  logs
+  cstruct
+  ptime
+  decompress.lzo
+  mirage-crypto
+  tls
+  x509
+  duration
+  angstrom
+  hex
+  domain-name
+  ipaddr
+  gmap
+  randomconv)
+ (wrapped true))

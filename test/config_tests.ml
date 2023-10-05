@@ -27,12 +27,10 @@ let a_inline_payload str =
   let rec content acc collect = function
     | [] -> List.rev acc
     | hd :: tl when collect ->
-        if String.starts_with ~prefix:"-----END" hd then
-          content acc false tl
+        if String.starts_with ~prefix:"-----END" hd then content acc false tl
         else content (hd :: acc) true tl
     | hd :: tl ->
-        if String.starts_with ~prefix:"-----BEGIN" hd then
-          content acc true tl
+        if String.starts_with ~prefix:"-----BEGIN" hd then content acc true tl
         else content acc false tl
   in
   let data = content [] false (String.split_on_char '\n' str) in
@@ -344,20 +342,19 @@ testpass
 
 let cert_key_mismatch () =
   let sample =
-    "tls-client
-    cipher AES-256-CBC
-    remote 10.0.42.3
-    key server.key
-    cert client.crt"
+    "tls-client\n\
+    \    cipher AES-256-CBC\n\
+    \    remote 10.0.42.3\n\
+    \    key server.key\n\
+    \    cert client.crt"
   in
   let string_of_file n = Ok (string_of_file n) in
   match Miragevpn.Config.parse_client ~string_of_file sample with
   | Ok conf ->
-    Alcotest.failf "Expected error, but got Ok %a"
-      Miragevpn.Config.pp conf
-  | Error `Msg "not a valid client config: key and cert do not match" -> ()
-  | Error `Msg e ->
-    Alcotest.failf "Got error %S, expected \"key and cert do not match\"" e
+      Alcotest.failf "Expected error, but got Ok %a" Miragevpn.Config.pp conf
+  | Error (`Msg "not a valid client config: key and cert do not match") -> ()
+  | Error (`Msg e) ->
+      Alcotest.failf "Got error %S, expected \"key and cert do not match\"" e
 
 let whitespace_after_tls_auth () =
   let expected =
@@ -598,7 +595,7 @@ efabaa5e34619f13adbe58b6c83536d3
        ]
   |> add Bind None |> add Auth_retry `Nointeract
   |> add Auth_user_pass ("foo", "bar")
-  |> add Ca [ca] |> add Tls_auth tls_auth
+  |> add Ca [ ca ] |> add Tls_auth tls_auth
   |> add Remote_cert_tls `Server
   |> add Ping_interval (`Seconds 10)
   |> add Ping_timeout (`Restart 30)
@@ -613,13 +610,13 @@ let parse_multiple_cas () =
   let file = "multi-ca-client.conf" in
   let data = string_of_file file in
   match
-    Miragevpn.Config.parse_client data
-      ~string_of_file:(fun s -> Ok (string_of_file s))
+    Miragevpn.Config.parse_client data ~string_of_file:(fun s ->
+        Ok (string_of_file s))
   with
-  | Error `Msg e -> Alcotest.failf "Error parsing %S: %s" file e
+  | Error (`Msg e) -> Alcotest.failf "Error parsing %S: %s" file e
   | Ok conf ->
-    let cas = Miragevpn.Config.(get Ca) conf in
-    Alcotest.(check int) "Exactly two CA certificates" 2 (List.length cas)
+      let cas = Miragevpn.Config.(get Ca) conf in
+      Alcotest.(check int) "Exactly two CA certificates" 2 (List.length cas)
 
 let client_tls_crypt_v2_conf =
   let open Miragevpn.Config in
@@ -636,25 +633,35 @@ let client_tls_crypt_v2_conf =
     and wkc =
       "\x3f\xd3\x14\x26\x8b\x69\xd6\x8f\xfe\xd9\x5f\xf4\x03\xc0\x0c\xc4\x07\x29\x0a\x0f\x29\xfe\x77\x92\xa5\xa0\x7a\xaa\xe1\x30\x02\xaf\x0d\x6e\x32\x58\x1f\xa9\x38\x84\x84\x87\x65\xf7\xe2\xfc\x9f\x5c\xe0\x30\x2a\xb5\xa5\xd0\x04\x24\x80\x66\x8c\x8b\xf3\xda\xce\x5a\x74\x37\x2a\xcd\x42\xec\xf2\x44\x4b\x32\xf0\x52\x72\x25\xda\x37\xc7\xd9\xf5\x2b\xd0\xe2\x5e\xa1\xf9\x78\xb9\xc4\x0a\x06\xf2\xa4\xa9\x39\xc1\x1c\x40\x4c\x7a\x10\xb6\x45\x9f\x90\x35\xd1\x1c\x2e\xf7\x8d\x12\x6f\x49\x17\x2d\x2b\x1a\x09\x46\xec\x35\xe1\x96\x22\x6a\x5d\x06\x33\x89\x7b\xfe\xae\xbb\x85\xef\xd3\xa1\xc2\x4b\xbb\xb0\xfb\x28\x4e\x0f\xc6\x86\x7f\x95\x6e\x54\x9e\x52\x27\x21\xa2\x65\x73\x89\x29\x00\x97\x98\x5e\xdf\x2e\x5a\x8c\x6c\xe5\xa8\x62\x20\x9a\x4f\x79\xab\x34\x0d\x04\xce\x69\x5f\x58\x20\x0a\x47\x29\xcf\x56\xab\x91\xee\x54\x60\xc0\xe7\x44\xea\x15\xcc\x2d\xe1\x91\x15\x73\xb1\xab\x43\xc9\x13\x8b\xd3\x9b\xd4\x49\xbb\x8b\xcb\xbe\x28\xc1\x9e\x0e\xec\x65\x7b\xbb\x19\xe4\x72\x53\xb0\xa2\xf5\x12\xc2\xaa\x0d\xe3\x09\x4f\xe7\xc6\x85\x73\x58\xef\x16\x15\x89\x98\xe9\xa0\xcb\xeb\x93\xfd\x6e\x7b\x67\xbd\x79\xb8\x80\x8b\x2d\x1f\x85\xa9\x80\x98\x6e\xc8\x37\xf7\xed\x09\x40\x93\x25\xed\xfc\xce\x2a\x87\x89\x23\x01\xe8\xb3\x54\x14\x01\x2b"
     in
-    ((Cstruct.of_string a, Cstruct.of_string b, Cstruct.of_string c, Cstruct.of_string d), Cstruct.of_string wkc, false)
+    ( ( Cstruct.of_string a,
+        Cstruct.of_string b,
+        Cstruct.of_string c,
+        Cstruct.of_string d ),
+      Cstruct.of_string wkc,
+      false )
   in
-  client_conf |> remove Tls_auth
-  |> add Tls_crypt_v2_client tls_crypt_v2_client
+  client_conf |> remove Tls_auth |> add Tls_crypt_v2_client tls_crypt_v2_client
 
 let server_tls_crypt_v2 () =
-  let a = "\xe1\x30\xb6\x5c\x7a\xde\xbe\xdd\x7d\xed\x3b\xc1\xe6\xb1\x27\x06\xd8\x4e\xdb\x87\x88\xaf\xaa\x5d\xc7\x78\x5b\xba\xf3\xcf\xb8\xbc\x04\x00\x96\xb8\x5b\x25\xfb\x5b\x8e\xf3\xf9\xf4\x35\xa5\xc1\x98\x31\xfe\xa9\x9e\xfa\x58\xf6\xf4\xd5\x69\x15\x52\x1b\x92\xaa\xc7"
-  and b = "\x63\xbf\x48\x32\xc2\x7f\x78\xcb\x88\xe0\xad\x2e\xa5\xa6\xac\xae\x28\xac\x0d\xa1\xde\x3c\xb4\x95\xa6\xf0\x01\xe3\xa1\xe1\x0c\x6a\x82\x99\xad\xd1\x3a\xe7\xa4\x5b\x41\x91\x6c\xea\xf2\x37\x7f\x7c\x46\x98\xab\x9a\xc5\x56\xea\x98\xe8\xff\x2d\xed\x4b\x59\x27\xf7"
+  let a =
+    "\xe1\x30\xb6\x5c\x7a\xde\xbe\xdd\x7d\xed\x3b\xc1\xe6\xb1\x27\x06\xd8\x4e\xdb\x87\x88\xaf\xaa\x5d\xc7\x78\x5b\xba\xf3\xcf\xb8\xbc\x04\x00\x96\xb8\x5b\x25\xfb\x5b\x8e\xf3\xf9\xf4\x35\xa5\xc1\x98\x31\xfe\xa9\x9e\xfa\x58\xf6\xf4\xd5\x69\x15\x52\x1b\x92\xaa\xc7"
+  and b =
+    "\x63\xbf\x48\x32\xc2\x7f\x78\xcb\x88\xe0\xad\x2e\xa5\xa6\xac\xae\x28\xac\x0d\xa1\xde\x3c\xb4\x95\xa6\xf0\x01\xe3\xa1\xe1\x0c\x6a\x82\x99\xad\xd1\x3a\xe7\xa4\x5b\x41\x91\x6c\xea\xf2\x37\x7f\x7c\x46\x98\xab\x9a\xc5\x56\xea\x98\xe8\xff\x2d\xed\x4b\x59\x27\xf7"
   in
   let data = string_of_file "tls-crypt-v2-server.conf" in
   let string_of_file n = Ok (string_of_file n) in
   match Miragevpn.Config.parse ~string_of_file data with
-  | Error `Msg e -> Alcotest.failf "Error parsing tls-crypt-v2-server.conf: %s" e
+  | Error (`Msg e) ->
+      Alcotest.failf "Error parsing tls-crypt-v2-server.conf: %s" e
   | Ok conf ->
-    let ((a', b'), force_cookie) = Miragevpn.Config.(get Tls_crypt_v2_server) conf in
-    Alcotest.(check string) "first part of server key" a (Cstruct.to_string a');
-    Alcotest.(check string) "second part of server key" b (Cstruct.to_string b');
-    Alcotest.(check bool) "force-cookie" true force_cookie
-
+      let (a', b'), force_cookie =
+        Miragevpn.Config.(get Tls_crypt_v2_server) conf
+      in
+      Alcotest.(check string)
+        "first part of server key" a (Cstruct.to_string a');
+      Alcotest.(check string)
+        "second part of server key" b (Cstruct.to_string b');
+      Alcotest.(check bool) "force-cookie" true force_cookie
 
 let crowbar_fuzz_config () =
   Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
@@ -684,10 +691,12 @@ let tests =
     ( "parsing configuration 'client'",
       `Quick,
       parse_client_configuration ~config:client_conf "client.conf" );
-    ( "parsing configuration 'static-home'", `Quick,
-       parse_client_configuration "static-home.conf" ) ;
-    ( "parsing configuration 'static-home-inline-secret'", `Quick,
-       parse_client_configuration "static-home-inline-secret.conf" ) ;
+    ( "parsing configuration 'static-home'",
+      `Quick,
+      parse_client_configuration "static-home.conf" );
+    ( "parsing configuration 'static-home-inline-secret'",
+      `Quick,
+      parse_client_configuration "static-home-inline-secret.conf" );
     ( "parsing configuration 'tls-home'",
       `Quick,
       parse_client_configuration ~config:tls_home_conf "tls-home.conf" );
@@ -698,21 +707,22 @@ let tests =
       `Quick,
       parse_client_configuration ~config:ipredator_conf
         "IPredator-CLI-Password.conf" );
-    ( "parsing configuration with multiple CAs", `Quick,
-      parse_multiple_cas );
-    ( "parsing configuration 'tls-crypt-v2-client.conf'", `Quick,
+    ("parsing configuration with multiple CAs", `Quick, parse_multiple_cas);
+    ( "parsing configuration 'tls-crypt-v2-client.conf'",
+      `Quick,
       parse_client_configuration ~config:client_tls_crypt_v2_conf
         "tls-crypt-v2-client.conf" );
-    ( "parsing server tls-crypt-v2 keys", `Quick,
-      server_tls_crypt_v2 );
-    ( "parsing configuration 'wild-client-no-auth'", `Quick,
-       parse_client_configuration "wild-client-no-auth.conf" ) ;
+    ("parsing server tls-crypt-v2 keys", `Quick, server_tls_crypt_v2);
+    ( "parsing configuration 'wild-client-no-auth'",
+      `Quick,
+      parse_client_configuration "wild-client-no-auth.conf" );
     (* ( "parsing configuration 'wild-client'", `Quick,
-       parse_client_configuration "wild-client.conf" ) ; -- auth --log multiple --verb *)
+       parse_client_configuration "wild-client.conf" ) ; -- auth *)
     (* ( "parsing configuration 'windows-riseup-client'", `Quick,
        parse_client_configuration "windows-riseup-client.conf" ); --auth *)
     ( "parsing 'tls-home-with-cipher'",
       `Quick,
-      parse_client_configuration ~config:tls_home_conf_with_cipher "tls-home-with-cipher.conf" );
+      parse_client_configuration ~config:tls_home_conf_with_cipher
+        "tls-home-with-cipher.conf" );
     ("crowbar fuzzing", `Slow, crowbar_fuzz_config);
   ]

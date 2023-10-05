@@ -7,4 +7,5 @@ let () =
     let len = Unix.read fd buf 0 len in
     Bigstringaf.substring (Bytes.unsafe_to_string b) ~off:0 ~len
   in
-  AflPersistent.run (fun () -> match Lzo.uncompress_with_buffer input with _ -> exit 0)
+  AflPersistent.run (fun () ->
+      match Lzo.uncompress_with_buffer input with _ -> exit 0)
