@@ -84,14 +84,10 @@ let decode_header buf =
     (Cstruct.length buf >= hdr_len + (packet_id_len * arr_len) + rs)
     `Partial
   >>| fun () ->
-  let rec ack_message_id = function
-    | 0 -> []
-    | n ->
-        let idx = pred n in
-        let id = Cstruct.BE.get_uint32 buf (hdr_len + (packet_id_len * idx)) in
-        id :: ack_message_id idx
+  let ack_message_id idx =
+    Cstruct.BE.get_uint32 buf (hdr_len + (packet_id_len * idx))
   in
-  let ack_message_ids = ack_message_id arr_len in
+  let ack_message_ids = List.init arr_len ack_message_id in
   let remote_session =
     if arr_len > 0 then
       Some (Cstruct.BE.get_uint64 buf (hdr_len + (packet_id_len * arr_len)))
