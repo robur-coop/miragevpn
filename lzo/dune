@@ -1,8 +1,7 @@
 (test
-  (name tests)
-  (modules tests)
-  (libraries alcotest crowbar fmt bigstringaf decompress.lzo logs.fmt)
-)
+ (name tests)
+ (modules tests)
+ (libraries alcotest crowbar fmt bigstringaf decompress.lzo logs.fmt))
 
 ;(executable;
 ;  (public_name lzo-fuzzable)

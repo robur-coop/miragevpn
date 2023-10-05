@@ -73,16 +73,16 @@ let client config ts now rng =
     match Config.get Remote_random config with
     | exception Not_found -> config
     | () ->
-      let remotes = Config.get Remote config in
-      let remotes = Array.of_list remotes in
-      for i = Array.length remotes - 1 downto 1 do
-        let j = Randomconv.int rng ~bound:(succ i) in
-        let t = remotes.(i) in
-        remotes.(i) <- remotes.(j);
-        remotes.(j) <- t
-      done;
-      let remotes = Array.to_list remotes in
-      Config.add Remote remotes config
+        let remotes = Config.get Remote config in
+        let remotes = Array.of_list remotes in
+        for i = Array.length remotes - 1 downto 1 do
+          let j = Randomconv.int rng ~bound:(succ i) in
+          let t = remotes.(i) in
+          remotes.(i) <- remotes.(j);
+          remotes.(j) <- t
+        done;
+        let remotes = Array.to_list remotes in
+        Config.add Remote remotes config
   in
   (match Config.get Remote config with
   | (`Domain (name, ip_version), _port, _proto) :: _ ->
@@ -392,7 +392,7 @@ let push_reply tls data =
   | Some (tls', payload) -> Ok (tls', payload)
 
 let maybe_push_reply config = function
-  | Some data -> (
+  | Some data ->
       if Cstruct.(equal empty data) then
         Error (`Msg "push request sent: empty TLS reply")
       else
@@ -400,13 +400,11 @@ let maybe_push_reply config = function
         Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
         let p_r = "PUSH_REPLY" in
         let p_r_len = String.length p_r in
-        if String.starts_with str ~prefix:p_r
-        then
+        if String.starts_with str ~prefix:p_r then
           let opts = String.sub str p_r_len (String.length str - p_r_len) in
           Config.merge_push_reply config opts
         else
-          Error
-            (`Msg (Fmt.str "push request expected push_reply, got %S" str)))
+          Error (`Msg (Fmt.str "push request expected push_reply, got %S" str))
   | None -> Error (`Msg "push request expected data, received no data")
 
 let incoming_control_client config rng session channel now op data =
@@ -423,7 +421,9 @@ let incoming_control_client config rng session channel now op data =
               fun ?ip:_ ~host:_ _ -> Ok None
           | Some ca ->
               Logs.info (fun m ->
-                  m "authenticating with CA %a" Fmt.(list ~sep:(any "\n") X509.Certificate.pp) ca);
+                  m "authenticating with CA %a"
+                    Fmt.(list ~sep:(any "\n") X509.Certificate.pp)
+                    ca);
               X509.Authenticator.chain_of_trust
                 ~allowed_hashes:Mirage_crypto.Hash.hashes
                 ~time:(fun () -> Some now)
@@ -433,23 +433,26 @@ let incoming_control_client config rng session channel now op data =
           | Some cert, Some key -> `Single ([ cert ], key)
           | _ -> `None
         and ciphers =
-          match Config.find Tls_cipher config, Config.find Tls_ciphersuite config with
+          match
+            (Config.find Tls_cipher config, Config.find Tls_ciphersuite config)
+          with
           | Some c, None -> Some c
           | None, Some c -> Some (c :> Tls.Ciphersuite.ciphersuite list)
-          | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
+          | Some c, Some c' ->
+              Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
           | None, None -> None
         and version =
           match Config.find Tls_version_min config with
           | None -> None
           | Some (v, or_highest) ->
-            let highest = `TLS_1_3 in (* update when ocaml-tls supports new versions *)
-            if or_highest then
-              Some (highest, highest)
-            else
-              Some (v, highest)
-        and peer_name = Config.find Verify_x509_name config
-        in
-        Tls.(Engine.client (Config.client ?ciphers ?version ?peer_name ~certificates ~authenticator ()))
+              let highest = `TLS_1_3 in
+              (* update when ocaml-tls supports new versions *)
+              if or_highest then Some (highest, highest) else Some (v, highest)
+        and peer_name = Config.find Verify_x509_name config in
+        Tls.(
+          Engine.client
+            (Config.client ?ciphers ?version ?peer_name ~certificates
+               ~authenticator ()))
       in
       Ok
         ( None,
@@ -538,23 +541,25 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
           Config.get Tls_key config )
       in
       let ciphers =
-        match Config.find Tls_cipher config, Config.find Tls_ciphersuite config with
-          | Some c, None -> Some c
-          | None, Some c -> Some (c :> Tls.Ciphersuite.ciphersuite list)
-          | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
-          | None, None -> None
+        match
+          (Config.find Tls_cipher config, Config.find Tls_ciphersuite config)
+        with
+        | Some c, None -> Some c
+        | None, Some c -> Some (c :> Tls.Ciphersuite.ciphersuite list)
+        | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
+        | None, None -> None
       and version =
         match Config.find Tls_version_min config with
         | None -> None
         | Some (v, or_highest) ->
-          let highest = `TLS_1_3 in (* update when ocaml-tls supports new versions *)
-          if or_highest then
-            Some (highest, highest)
-          else
-            Some (v, highest)
+            let highest = `TLS_1_3 in
+            (* update when ocaml-tls supports new versions *)
+            if or_highest then Some (highest, highest) else Some (v, highest)
       in
       let tls_config =
-        Tls.Config.server ?ciphers ?version ~certificates:(`Single ([ server ], key)) ()
+        Tls.Config.server ?ciphers ?version
+          ~certificates:(`Single ([ server ], key))
+          ()
       in
       let tls = Tls.Engine.server tls_config in
       let channel = { channel with channel_st = TLS_handshake tls } in
@@ -597,10 +602,11 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         { channel with channel_st },
         [ (`Control, out) ] )
   | Push_request_sent (tls, keys), Packet.Control -> (
+      let
       (* TODO naming: this is actually server_stuff sent, awaiting push request *)
-      let open Result.Infix in
-      incoming_tls_without_reply tls data
-      >>= fun (tls', d) ->
+      open
+        Result.Infix in
+      incoming_tls_without_reply tls data >>= fun (tls', d) ->
       match d with
       | None -> Error (`Msg "expected push request")
       | Some data ->
@@ -959,7 +965,8 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
      match Cstruct.get_uint8 dec (pred hdr_len) with
      | 0xFA -> Ok data
      | 0x66 ->
-         Lzo.uncompress_with_buffer (Cstruct.to_bigarray data) >>| Cstruct.of_string
+         Lzo.uncompress_with_buffer (Cstruct.to_bigarray data)
+         >>| Cstruct.of_string
          >>| fun lz ->
          Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
          lz

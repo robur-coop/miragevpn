@@ -1,15 +1,30 @@
 (executable
-  (name miragevpn_client_lwt)
-  (public_name miragevpn-client-lwt)
-  (package miragevpn)
-  (modules miragevpn_client_lwt)
-  (libraries miragevpn lwt lwt.unix cmdliner fmt.tty logs logs.fmt logs.cli fmt.cli
-             ipaddr ipaddr.unix ptime.clock.os dns-client-lwt
-             mirage-crypto-rng-lwt mtime.clock.os tuntap cstruct-lwt))
+ (name miragevpn_client_lwt)
+ (public_name miragevpn-client-lwt)
+ (package miragevpn)
+ (modules miragevpn_client_lwt)
+ (libraries
+  miragevpn
+  lwt
+  lwt.unix
+  cmdliner
+  fmt.tty
+  logs
+  logs.fmt
+  logs.cli
+  fmt.cli
+  ipaddr
+  ipaddr.unix
+  ptime.clock.os
+  dns-client-lwt
+  mirage-crypto-rng-lwt
+  mtime.clock.os
+  tuntap
+  cstruct-lwt))
 
 (executable
-  (name openvpn_config_parser)
-  (public_name openvpn-config-parser)
-  (package miragevpn)
-  (modules openvpn_config_parser)
-  (libraries miragevpn logs logs.fmt fmt.tty))
+ (name openvpn_config_parser)
+ (public_name openvpn-config-parser)
+ (package miragevpn)
+ (modules openvpn_config_parser)
+ (libraries miragevpn logs logs.fmt fmt.tty))
