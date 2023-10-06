@@ -1,5 +1,11 @@
 open State
 
+module Log =
+  (val Logs.(
+         src_log
+         @@ Src.create ~doc:"Miragevpn library's engine module" "ovpn.engine")
+      : Logs.LOG)
+
 let tls_ciphers config =
   (* update when ocaml-tls changes default ciphers *)
   let tls_default_ciphers13 =
@@ -317,7 +323,7 @@ let incoming_tls tls data =
   | Ok (r, `Response out, `Data d) -> (
       match r with
       | (`Eof | `Alert _) as e ->
-          Logs.err (fun m ->
+          Log.err (fun m ->
               m "response %a, TLS payload %a"
                 Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
                 out
@@ -353,7 +359,7 @@ let merge_server_config_into_client config tls_data =
   match Config.client_merge_server_config config tls_data.Packet.options with
   | Ok config -> config
   | Error (`Msg msg) ->
-      Logs.err (fun m ->
+      Log.err (fun m ->
           m "server options (%S) failure: %s" tls_data.options msg);
       config
 
@@ -361,7 +367,7 @@ let maybe_kdf ?with_premaster session key = function
   | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
       let open Result.Infix in
-      Logs.debug (fun m ->
+      Log.debug (fun m ->
           m "received tls payload %d bytes" (Cstruct.length data));
       Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
       let keys = derive_keys session key tls_data in
@@ -443,7 +449,7 @@ let maybe_push_reply config = function
         Error (`Msg "push request sent: empty TLS reply")
       else
         let str = Cstruct.(to_string (sub data 0 (pred (length data)))) in
-        Logs.info (fun m -> m "push request sent, received TLS payload %S" str);
+        Log.info (fun m -> m "push request sent, received TLS payload %S" str);
         let p_r = "PUSH_REPLY" in
         let p_r_len = String.length p_r in
         if String.starts_with str ~prefix:p_r then
@@ -462,11 +468,11 @@ let incoming_control_client config rng session channel now op data =
         let authenticator =
           match Config.find Ca config with
           | None ->
-              Logs.warn (fun m ->
+              Log.warn (fun m ->
                   m "not authenticating certificate (missing CA)");
               fun ?ip:_ ~host:_ _ -> Ok None
           | Some ca ->
-              Logs.info (fun m ->
+              Log.info (fun m ->
                   m "authenticating with CA %a"
                     Fmt.(list ~sep:(any "\n") X509.Certificate.pp)
                     ca);
@@ -495,7 +501,7 @@ let incoming_control_client config rng session channel now op data =
       (* we reply with ACK + maybe TLS response *)
       let open Result.Infix in
       incoming_tls tls data >>= fun (tls', tls_response, d) ->
-      Logs.debug (fun m ->
+      Log.debug (fun m ->
           m "TLS payload is %a"
             Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
             d);
@@ -508,7 +514,7 @@ let incoming_control_client config rng session channel now op data =
         | None, Some data -> [ (`Control, data) ]
         | Some res, None -> [ (`Control, res) ]
         | Some res, Some data ->
-            Logs.warn (fun m -> m "tls handshake response and application data");
+            Log.warn (fun m -> m "tls handshake response and application data");
             [ (`Control, res); (`Control, data) ]
       in
       (None, config, { channel with channel_st }, out)
@@ -542,11 +548,11 @@ let incoming_control_client config rng session channel now op data =
             tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] ))
   | Push_request_sent (tls, keys), Packet.Control ->
       let open Result.Infix in
-      Logs.debug (fun m -> m "in push request sent");
+      Log.debug (fun m -> m "in push request sent");
       incoming_tls_without_reply tls data >>= fun (_tls', d) ->
       maybe_push_reply config d >>| fun config' ->
       let channel_st = Established keys in
-      Logs.info (fun m -> m "channel %d is established now!!!" channel.keyid);
+      Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
       (Some ip_config, config', { channel with channel_st }, [])
   | _ -> Error (`No_transition (channel, op, data))
@@ -590,7 +596,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       (* we reply with ACK + maybe TLS response *)
       let open Result.Infix in
       incoming_tls tls data >>| fun (tls', tls_response, d) ->
-      Logs.debug (fun m ->
+      Log.debug (fun m ->
           m "TLS handshake payload is %a"
             Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
             d);
@@ -673,7 +679,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
 
 let incoming_control is_not_taken config rng state session channel now ts key op
     data =
-  Logs.info (fun m ->
+  Log.info (fun m ->
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
   match state with
@@ -834,7 +840,7 @@ let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
   let ctx, payload = out ?add_timestamp ctx compress rng data in
   let out = Packet.encode protocol (key, `Data payload) in
-  Logs.debug (fun m ->
+  Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length out) ctx.my_packet_id);
   (ctx, out)
@@ -876,7 +882,7 @@ let maybe_ping state =
   | `Not_configured -> (state, [])
   | `Seconds threshold when s_since_sent < threshold -> (state, [])
   | `Seconds _ -> (
-      Logs.debug (fun m ->
+      Log.debug (fun m ->
           m "sending a ping after %d seconds of inactivity" s_since_sent);
       match outgoing state ping with
       | Error _ -> (state, [])
@@ -901,7 +907,7 @@ let maybe_init_rekey s =
       ({ s with state; session }, [ out ])
   | Client_static _ -> (s, [] (* there's no rekey mechanism in static mode *))
   | _ ->
-      Logs.warn (fun m ->
+      Log.warn (fun m ->
           m "maybe init rekey, but not in client or server ready %a" pp_state
             s.state);
       (s, [])
@@ -973,7 +979,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
        Cstruct.hexdump_pp dec)
   >>= fun () ->
   (* TODO validate packet id and ordering -- do i need to ack it as well? *)
-  Logs.debug (fun m ->
+  Log.debug (fun m ->
       m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
   (* TODO validate ts if provided (avoid replay) *)
   unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len) >>= fun data ->
@@ -985,7 +991,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
          Lzo.uncompress_with_buffer (Cstruct.to_bigarray data)
          >>| Cstruct.of_string
          >>| fun lz ->
-         Logs.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
+         Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
          lz
      | comp ->
          Result.error_msgf "unknown compression %#X in packet:@.%a" comp
@@ -993,7 +999,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) compress data =
    else Ok data)
   >>| fun data' ->
   if Cstruct.equal data' ping then (
-    Logs.warn (fun m -> m "received ping!");
+    Log.warn (fun m -> m "received ping!");
     None)
   else Some data'
 
@@ -1003,7 +1009,7 @@ let check_control_integrity err key p hmac_key =
     (compute_hmac key p hmac_key, Packet.((header p).hmac))
   in
   guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
-  Logs.info (fun m -> m "mac good")
+  Log.info (fun m -> m "mac good")
 
 let wrap_hmac_control now ts mtu session key transport outs =
   let now_ts = ptime_to_ts_exn now in
@@ -1074,7 +1080,7 @@ let merge_payload a b =
   | None, Some b -> Some (`Payload [ b ])
   | Some (`Payload a), Some b -> Some (`Payload (b :: a))
   | Some a, Some b ->
-      Logs.warn (fun m ->
+      Log.warn (fun m ->
           m "merging %a with payload %a (ignoring payload)" pp_action a
             Cstruct.hexdump_pp b);
       Some a
@@ -1083,7 +1089,7 @@ let find_channel state key p =
   match channel_of_keyid key state with
   | Some (ch, set_ch) -> Some (ch, set_ch)
   | None -> (
-      Logs.warn (fun m -> m "no channel found! %d" key);
+      Log.warn (fun m -> m "no channel found! %d" key);
       match (state.state, p) with
       | Client Ready, `Control (Packet.Soft_reset, _) ->
           let channel = new_channel key (state.ts ()) in
@@ -1093,7 +1099,7 @@ let find_channel state key p =
           Some
             (channel, fun s ch -> { s with state = Server (Server_rekeying ch) })
       | _ ->
-          Logs.warn (fun m ->
+          Log.warn (fun m ->
               m "ignoring unexpected packet %a in %a" Packet.pp (key, p) pp
                 state);
           None)
@@ -1110,14 +1116,14 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
         match find_channel state key p with
         | None -> Ok (state, out, act)
         | Some (ch, set_ch) ->
-            Logs.debug (fun m ->
+            Log.debug (fun m ->
                 m "channel %a - received %a" pp_channel ch Packet.pp (key, p));
             let bad_mac hmac = `Bad_mac (state, hmac, (key, p)) in
             (match p with
             | `Data data -> (
                 match keys_opt ch with
                 | None ->
-                    Logs.warn (fun m -> m "received data, but no keys yet");
+                    Log.warn (fun m -> m "received data, but no keys yet");
                     Ok (state, out, None)
                 | Some keys ->
                     let ch = received_packet ch data in
@@ -1134,7 +1140,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                 with
                 | Error e ->
                     (* only in udp mode? *)
-                    Logs.warn (fun m -> m "ignoring bad packet %a" pp_error e);
+                    Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
                     Ok (state, out, None)
                 | Ok (session, transport) -> (
                     let state = { state with session }
@@ -1142,14 +1148,14 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     match d with
                     | `Ack _ ->
                         (* effect already handled in expected_packet (removed acked ids from out_packets) *)
-                        Logs.debug (fun m -> m "ignoring acknowledgement");
+                        Log.debug (fun m -> m "ignoring acknowledgement");
                         Ok (set_ch state ch, out, act)
                     | `Control (typ, (_, _, data)) -> (
                         incoming_control is_not_taken state.config state.rng
                           state.state state.session ch (state.now ())
                           (state.ts ()) key typ data
                         >>| fun (est, config, session, ch, outs) ->
-                        Logs.debug (fun m ->
+                        Log.debug (fun m ->
                             m "out channel %a, pkts %d" pp_channel ch
                               (List.length outs));
                         let state = { state with session } in
@@ -1246,11 +1252,10 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
   let act' =
     match act with Some (`Payload a) -> Some (`Payload (List.rev a)) | y -> y
   in
-  Logs.debug (fun m -> m "out state is %a" State.pp s');
-  Logs.debug (fun m ->
+  Log.debug (fun m -> m "out state is %a" State.pp s');
+  Log.debug (fun m ->
       m "%d outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
-  Logs.debug (fun m ->
-      m "action %a" Fmt.(option ~none:(any "no") pp_action) act);
+  Log.debug (fun m -> m "action %a" Fmt.(option ~none:(any "no") pp_action) act);
   (s', out, act')
 
 let maybe_ping_timeout state =
@@ -1264,7 +1269,7 @@ let maybe_ping_timeout state =
     | `Exit x -> (x, `Exit)
   in
   if s_since_rcvd > timeout then (
-    Logs.warn (fun m -> m "timeout!");
+    Log.warn (fun m -> m "timeout!");
     Some action)
   else None
 
@@ -1333,7 +1338,7 @@ let resolve_connect_client config ts s ev =
          try the next [Remote]. *)
       let conn_timeout = Duration.of_sec Config.(get Connect_timeout config) in
       if Int64.sub ts initial_ts >= conn_timeout then (
-        Logs.err (fun m -> m "Connecting to remote #%d timed out" idx);
+        Log.err (fun m -> m "Connecting to remote #%d timed out" idx);
         next_or_fail idx retry >>| fun (state, action) -> (state, Some action))
       else Ok (s, None)
   | _, `Connection_failed ->
@@ -1422,7 +1427,7 @@ let handle_server ?is_not_taken t s ev =
           let t', outs = timer t in
           Ok (t', outs, None))
   | Server_handshaking, `Tick ->
-      Logs.warn (fun m -> m "ignorig tick in handshaking");
+      Log.warn (fun m -> m "ignoring tick in handshaking");
       Ok (t, [], None)
   | s, ev ->
       Result.error_msgf "handle_server: unexpected event %a in state %a"

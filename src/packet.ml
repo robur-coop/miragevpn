@@ -2,6 +2,12 @@
 
    no support for key method v1! *)
 
+module Log =
+  (val Logs.(
+         src_log
+         @@ Src.create ~doc:"Miragevpn library's packet module" "ovpn.packet")
+      : Logs.LOG)
+
 type error = [ `Partial | `Unknown_operation of int | `Malformed of string ]
 
 let pp_error ppf = function
@@ -369,7 +375,7 @@ let decode_tls_data ?(with_premaster = false) buf =
      (* for some reason there may be some slack here... *)
      if Cstruct.length buf > end_of_data then
        let data = Cstruct.shift buf end_of_data in
-       Logs.warn (fun m ->
+       Log.warn (fun m ->
            m "slack at end of tls_data %s (p is %s)@.%a"
              (Cstruct.to_string data) p Cstruct.hexdump_pp data)
      else ();
