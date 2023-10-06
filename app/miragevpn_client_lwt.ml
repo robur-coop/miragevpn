@@ -82,11 +82,11 @@ let write_multiple_to_fd fd bufs =
       else Lwt.return r)
     true bufs
 
-let write_udp sa fd data =
+let write_udp fd data =
   Lwt.catch
     (fun () ->
       let len = Cstruct.length data in
-      Lwt_unix.sendto fd (Cstruct.to_bytes data) 0 len [] sa >|= fun sent ->
+      Lwt_unix.send fd (Cstruct.to_bytes data) 0 len [] >|= fun sent ->
       if sent <> len then
         Logs.warn (fun m ->
             m "UDP short write (length %d, written %d)" len sent);
@@ -94,11 +94,11 @@ let write_udp sa fd data =
     (fun e ->
       Lwt_result.lift (error_msgf "UDP write error %s" (Printexc.to_string e)))
 
-let write_multiple_udp sa fd bufs =
+let write_multiple_udp fd bufs =
   Lwt_list.fold_left_s
     (fun r buf ->
       if r then (
-        write_udp sa fd buf >|= function
+        write_udp fd buf >|= function
         | Ok () -> true
         | Error (`Msg msg) ->
             Logs.err (fun m -> m "error %s while writing" msg);
@@ -108,7 +108,7 @@ let write_multiple_udp sa fd bufs =
 
 let transmit data = function
   | Some (`Tcp fd) -> write_multiple_to_fd fd data
-  | Some (`Udp (sa, fd)) -> write_multiple_udp sa fd data
+  | Some (`Udp fd) -> write_multiple_udp fd data
   | None -> Lwt.return false
 
 let read_from_fd fd =
@@ -133,23 +133,12 @@ let rec reader_tcp mvar fd =
 let read_udp =
   let bufsize = 65535 in
   let buf = Bytes.create bufsize in
-  fun (sa, fd) ->
+  fun fd ->
     Lwt_result.catch (fun () ->
-        Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, sa') ->
-        if sa = sa' then (
+        Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, _sa) ->
           let cs = Cstruct.of_bytes ~len:count buf in
           Logs.debug (fun m -> m "read %d bytes" count);
           Lwt.return (Some cs))
-        else
-          let pp_sockaddr ppf = function
-            | Unix.ADDR_UNIX s -> Fmt.pf ppf "unix %s" s
-            | Unix.ADDR_INET (ip, port) ->
-                Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr ip) port
-          in
-          Logs.warn (fun m ->
-              m "ignoring unsolicited data from %a (expected %a)" pp_sockaddr
-                sa' pp_sockaddr sa);
-          Lwt.return None)
     |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
@@ -223,20 +212,15 @@ let connect_tcp ip port =
 let connect_udp ip port =
   let dom =
     Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
-  and unix_ip = Ipaddr_unix.to_inet_addr ip
-  and src_port = Randomconv.int16 Mirage_crypto_rng.generate in
+  and unix_ip = Ipaddr_unix.to_inet_addr ip in
   let fd = Lwt_unix.(socket dom SOCK_DGRAM 0) in
-  let any =
-    Ipaddr.(
-      Unix.(match ip with V4 _ -> inet_addr_any | V6 _ -> inet6_addr_any))
-  in
-  Lwt_unix.(bind fd (ADDR_INET (any, src_port))) >|= fun () ->
-  (Unix.ADDR_INET (unix_ip, port), fd)
+  Lwt_unix.(connect fd (ADDR_INET (unix_ip, port))) >|= fun () ->
+  fd
 
 type conn = {
   mutable o_client : Miragevpn.t;
   mutable peer :
-    [ `Udp of Lwt_unix.sockaddr * Lwt_unix.file_descr
+    [ `Udp of Lwt_unix.file_descr
     | `Tcp of Lwt_unix.file_descr ]
     option;
   mutable est_switch : Lwt_switch.t;
@@ -258,9 +242,9 @@ let handle_action conn = function
       Lwt_switch.turn_off conn.est_switch >>= fun () ->
       conn.est_switch <- Lwt_switch.create ();
       Logs.app (fun m -> m "connecting udp %a" Ipaddr.pp ip);
-      connect_udp ip port >>= fun r ->
-      conn.peer <- Some (`Udp r);
-      Lwt.async (fun () -> reader_udp conn.event_mvar r);
+      connect_udp ip port >>= fun fd ->
+      conn.peer <- Some (`Udp fd);
+      Lwt.async (fun () -> reader_udp conn.event_mvar fd);
       Lwt_mvar.put conn.event_mvar `Connected
   | `Connect (ip, port, `Tcp) ->
       Lwt_switch.turn_off conn.est_switch >>= fun () ->
@@ -286,7 +270,7 @@ let handle_action conn = function
       | None ->
           Logs.err (fun m -> m "cannot disconnect: no open connection");
           Lwt.return_unit
-      | Some (`Tcp fd) | Some (`Udp (_, fd)) ->
+      | Some (`Tcp fd) | Some (`Udp fd) ->
           Logs.warn (fun m -> m "disconnecting!");
           conn.peer <- None;
           safe_close fd)
