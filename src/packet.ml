@@ -22,6 +22,7 @@ type operation =
   | Data_v1
   | Hard_reset_client_v2 (* HARD_RESET_CLIENT_V2 *)
   | Hard_reset_server_v2 (* HARD_RESET_SERVER_V2 *)
+  | Hard_reset_client_v3
 
 let operation_to_int, int_to_operation =
   let ops =
@@ -32,6 +33,7 @@ let operation_to_int, int_to_operation =
       (Data_v1, 6);
       (Hard_reset_client_v2, 7);
       (Hard_reset_server_v2, 8);
+      (Hard_reset_client_v3, 10);
     ]
   in
   let rev_ops = List.map (fun (a, b) -> (b, a)) ops in
@@ -48,14 +50,15 @@ let pp_operation ppf op =
     | Control -> "control"
     | Ack -> "ack"
     | Data_v1 -> "data v1"
-    | Hard_reset_client_v2 -> "hard reset client"
-    | Hard_reset_server_v2 -> "hard reset server")
+    | Hard_reset_client_v2 -> "hard reset client v2"
+    | Hard_reset_server_v2 -> "hard reset server v2"
+    | Hard_reset_client_v3 -> "hard reset client v3")
 
 type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
 let packet_id_len = 4
 let cipher_block_size = 16
-let hdr_len hmac_len = 8 + hmac_len + packet_id_len + 4 + 1
+let hdr_len hmac_len = 8 + hmac_len + packet_id_len + 4 + 1 (* packet_id_len + 4 + 1 *)
 let guard f e = if f then Ok () else Error e
 
 type header = {
@@ -115,10 +118,10 @@ let encode_header hdr =
   let rsid = if id_arr_len = 0 then 0 else 8 in
   let hmac_len = Cstruct.length hdr.hmac in
   let buf = Cstruct.create (hdr_len hmac_len + rsid + id_arr_len) in
-  Cstruct.BE.set_uint64 buf 0 hdr.local_session;
-  Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
-  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id;
-  Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp;
+  Cstruct.BE.set_uint64 buf 0 hdr.local_session; (* not encrypted *)
+  Cstruct.blit hdr.hmac 0 buf 8 hmac_len; (* not encrypted, not part of hmac *)
+  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id; (* not encrypted *)
+  Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp; (* not encrypted *)
   Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_message_ids);
   List.iteri
     (fun i v ->
@@ -171,12 +174,33 @@ let decode_control ~hmac_len buf =
   and payload = Cstruct.shift buf (off + 4) in
   (header, message_id, payload)
 
-let encode_control (header, packet_id, payload) =
+let tls_crypt_encrypt ~hmac ~key ?(off= 0) ?len buf =
+  let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
+  let len = match len with
+    | Some len -> len
+    | None -> Cstruct.length buf - off in
+  let iv = Cstruct.sub hmac 0 (128 / 8) in
+  let ctr = AES_CTR.ctr_of_cstruct iv in
+  let key = AES_CTR.of_secret key in
+  AES_CTR.encrypt ~key ~ctr (Cstruct.sub buf off len)
+
+
+(* TODO: be able to parametize the hash algorithm used to calculate the HMAC. *)
+
+let encode_control ?tls_crypt (header, packet_id, payload) =
   let hdr_buf, len = encode_header header in
   let packet_id_buf = Cstruct.create 4 in
   Cstruct.BE.set_uint32 packet_id_buf 0 packet_id;
-  ( Cstruct.concat [ hdr_buf; packet_id_buf; payload ],
-    len + Cstruct.length payload + 4 )
+  let buf, len = ( Cstruct.concat [ hdr_buf; packet_id_buf; payload ],
+    len + Cstruct.length payload + 4 ) in
+  match tls_crypt with
+  | Some key -> 
+      (* here, we encrypt only the payload part which includes ACKs. Only the first part of the header:
+         [opcode + session_id + hmac + packed_id + timestamp] is not encrypted. *)
+      let encrypted = tls_crypt_encrypt ~hmac:header.hmac ~key buf ~off:(17 + Mirage_crypto.Hash.SHA256.digest_size) in
+      let buf = Cstruct.concat [ Cstruct.sub buf 0 (17 + Mirage_crypto.Hash.SHA256.digest_size); encrypted ] in
+      buf, Cstruct.length buf
+  | None -> buf, len
 
 let to_be_signed_control op (header, packet_id, payload) =
   (* rly? not length!? *)
@@ -226,17 +250,17 @@ let encode_protocol proto len =
       buf
   | `Udp -> Cstruct.empty
 
-let encode proto (key, p) =
+let encode ?tls_crypt proto (key, p) =
   let payload, len =
     match p with
     | `Ack ack -> encode_header ack
-    | `Control (_, control) -> encode_control control
+    | `Control (_, control) -> encode_control ?tls_crypt control
     | `Data d -> (d, Cstruct.length d)
   in
   let op_buf =
     let b = Cstruct.create 1 in
     let op = op_key (operation p) key in
-    Cstruct.set_uint8 b 0 op;
+    Cstruct.set_uint8 b 0 op; (* + 1 byte *)
     b
   in
   let prefix = encode_protocol proto (succ len) in
