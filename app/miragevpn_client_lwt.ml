@@ -136,9 +136,9 @@ let read_udp =
   fun fd ->
     Lwt_result.catch (fun () ->
         Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, _sa) ->
-          let cs = Cstruct.of_bytes ~len:count buf in
-          Logs.debug (fun m -> m "read %d bytes" count);
-          Lwt.return (Some cs))
+        let cs = Cstruct.of_bytes ~len:count buf in
+        Logs.debug (fun m -> m "read %d bytes" count);
+        Lwt.return (Some cs))
     |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
@@ -214,15 +214,12 @@ let connect_udp ip port =
     Ipaddr.(Lwt_unix.(match ip with V4 _ -> PF_INET | V6 _ -> PF_INET6))
   and unix_ip = Ipaddr_unix.to_inet_addr ip in
   let fd = Lwt_unix.(socket dom SOCK_DGRAM 0) in
-  Lwt_unix.(connect fd (ADDR_INET (unix_ip, port))) >|= fun () ->
-  fd
+  Lwt_unix.(connect fd (ADDR_INET (unix_ip, port))) >|= fun () -> fd
 
 type conn = {
   mutable o_client : Miragevpn.t;
   mutable peer :
-    [ `Udp of Lwt_unix.file_descr
-    | `Tcp of Lwt_unix.file_descr ]
-    option;
+    [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
   data_mvar : Cstruct.t list Lwt_mvar.t;
   est_mvar : (Miragevpn.ip_config * int) Lwt_mvar.t;
