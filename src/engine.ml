@@ -478,7 +478,7 @@ let maybe_push_reply config = function
 
 let incoming_control_client config rng session channel now op data =
   match (channel.channel_st, op) with
-  | Expect_reset, (Packet.Hard_reset_server | Packet.Soft_reset) ->
+  | Expect_reset, (Packet.Hard_reset_server_v2 | Packet.Soft_reset_v2) ->
       (* for rekey we receive a soft_reset -- a bit alien that we don't send soft_reset *)
       (* we reply with ACK + TLS client hello! *)
       let tls, ch =
@@ -598,7 +598,7 @@ let init_channel how session hmac_algorithm keyid now ts =
 let incoming_control_server is_not_taken config rng session channel _now _ts
     _key op data =
   match (channel.channel_st, op) with
-  | Expect_reset, (Packet.Hard_reset_client | Packet.Soft_reset) ->
+  | Expect_reset, (Packet.Hard_reset_client_v2 | Packet.Soft_reset_v2) ->
       (* TODO may need to do client certificate authentication here! *)
       let _ca, server, key =
         ( Config.get Ca config,
@@ -935,7 +935,7 @@ let maybe_init_rekey s =
   in
   let hmac_algorithm = Config.get Auth s.config in
   let session, channel, out =
-    init_channel Packet.Soft_reset s.session hmac_algorithm keyid (s.now ())
+    init_channel Packet.Soft_reset_v2 s.session hmac_algorithm keyid (s.now ())
       (s.ts ())
   in
   match s.state with
@@ -1089,7 +1089,7 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
               let transport, m_id = next_message_id transport in
               ( session,
                 transport,
-                [ `Control (Packet.Hard_reset_server, (header, m_id, out)) ] )
+                [ `Control (Packet.Hard_reset_server_v2, (header, m_id, out)) ] )
           | `Reset ->
               let session, transport, header =
                 header session hmac_algorithm transport now_ts
@@ -1097,7 +1097,7 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
               let transport, m_id = next_message_id transport in
               ( session,
                 transport,
-                [ `Control (Packet.Soft_reset, (header, m_id, out)) ] )
+                [ `Control (Packet.Soft_reset_v2, (header, m_id, out)) ] )
         in
         (* hmac each outgoing frame and encode *)
         let out =
@@ -1136,10 +1136,10 @@ let find_channel state key p =
   | None -> (
       Log.warn (fun m -> m "no channel found! %d" key);
       match (state.state, p) with
-      | Client Ready, `Control (Packet.Soft_reset, _) ->
+      | Client Ready, `Control (Packet.Soft_reset_v2, _) ->
           let channel = new_channel key (state.ts ()) in
           Some (channel, fun s ch -> { s with state = Client (Rekeying ch) })
-      | Server Server_ready, `Control (Packet.Soft_reset, _) ->
+      | Server Server_ready, `Control (Packet.Soft_reset_v2, _) ->
           let channel = new_channel key (state.ts ()) in
           Some
             (channel, fun s ch -> { s with state = Server (Server_rekeying ch) })
@@ -1414,7 +1414,7 @@ let handle_client t s ev =
             init_session ~my_session_id ~protocol ~my_hmac ~their_hmac ()
           in
           let session, channel, out =
-            init_channel Packet.Hard_reset_client session hmac_algorithm 0 now
+            init_channel Packet.Hard_reset_client_v2 session hmac_algorithm 0 now
               ts
           in
           let state = client (Handshaking (idx, ts)) in
