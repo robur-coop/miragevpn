@@ -16,22 +16,24 @@ let pp_error ppf = function
   | `Malformed msg -> Fmt.pf ppf "malformed %s" msg
 
 type operation =
-  | Soft_reset
+  | Soft_reset_v2
   | Control
   | Ack
   | Data_v1
-  | Hard_reset_client
-  | Hard_reset_server
+  | Hard_reset_client_v2
+  | Hard_reset_server_v2
+  | Hard_reset_client_v3
 
 let operation_to_int, int_to_operation =
   let ops =
     [
-      (Soft_reset, 3);
+      (Soft_reset_v2, 3);
       (Control, 4);
       (Ack, 5);
       (Data_v1, 6);
-      (Hard_reset_client, 7);
-      (Hard_reset_server, 8);
+      (Hard_reset_client_v2, 7);
+      (Hard_reset_server_v2, 8);
+      (Hard_reset_client_v3, 10);
     ]
   in
   let rev_ops = List.map (fun (a, b) -> (b, a)) ops in
@@ -44,12 +46,13 @@ let operation_to_int, int_to_operation =
 let pp_operation ppf op =
   Fmt.string ppf
     (match op with
-    | Soft_reset -> "soft reset"
+    | Soft_reset_v2 -> "soft reset v2"
     | Control -> "control"
     | Ack -> "ack"
     | Data_v1 -> "data v1"
-    | Hard_reset_client -> "hard reset client"
-    | Hard_reset_server -> "hard reset server")
+    | Hard_reset_client_v2 -> "hard reset client v2"
+    | Hard_reset_server_v2 -> "hard reset server v2"
+    | Hard_reset_client_v3 -> "hard reset client v3")
 
 type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
