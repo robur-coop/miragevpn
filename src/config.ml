@@ -2135,7 +2135,7 @@ let client_generate_connect_options t =
       t
   in
   let serialized =
-    Fmt.str "V4,tls-client,%s%a"
+    Fmt.str "V4,tls-client,auth SHA1,keysize 256,%s%a"
       (match Conf_map.find Dev t with
       | Some (`Tun, _) -> "dev-type tun,"
       | Some (`Tap, _) -> "dev-type tap,"

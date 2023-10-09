@@ -357,7 +357,8 @@ let maybe_kex_client rng config tls =
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
     Config.client_generate_connect_options config >>= fun options ->
     let user_pass = Config.find Auth_user_pass config in
-    let td = { Packet.pre_master; random1; random2; options; user_pass }
+    let peer_info = Some "IV_PLAT=mirage" in
+    let td = { Packet.pre_master; random1; random2; options; user_pass; peer_info }
     and key_source = { State.pre_master; random1; random2 } in
     match
       Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ]
@@ -383,6 +384,7 @@ let maybe_kdf ?with_premaster session cipher hmac_algorithm key = function
       Log.debug (fun m ->
           m "received tls payload %d bytes" (Cstruct.length data));
       Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
+      Log.debug (fun m -> m "Received tls-data %a" Packet.pp_tls_data tls_data);
       let keys = derive_keys session key tls_data in
       let maybe_swap (a, b, c, d) =
         if Cstruct.(equal empty key.State.pre_master) then (c, d, a, b)
@@ -464,6 +466,7 @@ let kex_server config session (keys : key_source) tls data =
       random2 = keys.random2;
       options;
       user_pass = None;
+      peer_info = None;
     }
   in
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
@@ -1203,6 +1206,7 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
               in
               one session transport 0 []
           | `Reset_server ->
+              Printf.printf "Reset_server case!!!!\n";
               let session, transport, header =
                 header session hmac_algorithm transport now_ts
               in
