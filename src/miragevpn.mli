@@ -4,6 +4,7 @@ module Config : sig
   type flag = unit
 
   type 'a k =
+    | Auth : Mirage_crypto.Hash.hash k
     | Auth_nocache : flag k
       (* Erase user-provided credentials ([Askpass] and [Auth_user_pass]) from
          program memory after their user.
