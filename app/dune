@@ -34,4 +34,4 @@
  (public_name tls-crypt-v2.tools)
  (package miragevpn)
  (modules tls_crypt_v2)
- (libraries ptime.clock.os ptime hxd.core hxd.string fmt base64 mirage-crypto))
+ (libraries mirage-crypto-rng.unix ptime.clock.os ptime hxd.core hxd.string fmt base64 mirage-crypto))

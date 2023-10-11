@@ -4,11 +4,14 @@ module Tls_crypt_v2_key : sig
   type t
 
   val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
+  val to_cstruct : t -> Cstruct.t
   val to_string : t -> string
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
   val hmac : t -> Cstruct.t
   val equal : t -> t -> bool
   val pp_hum : t Fmt.t
+  val generate : ?g:Mirage_crypto_rng.g -> unit -> t
+  val to_base64 : t -> string
 end = struct
   type t = Cstruct.t (* cipher (64 bytes) + hmac (64 bytes) *)
 
@@ -22,6 +25,7 @@ end = struct
         let _ = Mirage_crypto.Cipher_block.AES.CTR.of_secret secret in Ok cs
       with exn -> error_msgf "Invalid AES-CTR secret key: %S" (Printexc.to_string exn)
 
+  let to_cstruct x = x
   let to_string t = Cstruct.to_string t
 
   let cipher_key cs =
@@ -30,12 +34,17 @@ end = struct
 
   let hmac cs = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
   let equal a b = Eqaf_cstruct.equal a b
+  let generate ?g () = Mirage_crypto_rng.generate ?g 128
 
   let pp_hum ppf cs =
     let cipher_key = Cstruct.(to_string (sub cs 0 64)) in
     let hmac = Cstruct.(to_string (sub cs 64 64)) in
     Fmt.pf ppf "Cipher Key: @[<hov>%a@]\n%!" (Hxd_string.pp Hxd.default) cipher_key;
     Fmt.pf ppf "HMAC Key:   @[<hov>%a@]\n%!" (Hxd_string.pp Hxd.default) hmac
+
+  let to_base64 cs =
+    let str = Cstruct.to_string cs in
+    Base64.encode_string ~pad:true str
 end
 
 let _TLS_CRYPT_V2_CLIENT_KEY_LEN = 2048 / 8
@@ -62,6 +71,19 @@ module List = struct
     List.fold_left (fun acc -> function
       | "" -> acc
       | str -> str :: acc) [] lst |> List.rev
+end
+
+module String = struct
+  include String
+
+  let split_at n str =
+    let rec go acc str off len =
+      if len = 0 then List.rev acc
+      else
+        let len' = min n len in
+        let str' = String.sub str off len' in
+        go (str' :: acc) str (off + len') (len - len') in
+    go [] str 0 (String.length str)
 end
 
 module Metadata = struct
@@ -110,6 +132,9 @@ module Metadata = struct
     | Timestamp ptime -> Fmt.pf ppf "Timestamp:  %a\n%!" (Ptime.pp_rfc3339 ()) ptime
 end
 
+type tls_crypt_v2_server_key = Tls_crypt_v2_key.t
+type tls_crypt_v2_client_key = Tls_crypt_v2_key.t * Tls_crypt_v2_key.t * Metadata.t
+
 let load_pem ~name filename =
   let ic = open_in filename in
   let ln = in_channel_length ic in
@@ -132,6 +157,65 @@ let load_tls_crypt_v2_server_key filename =
   let ( let* ) = Result.bind in
   let* key = load_pem ~name:"OpenVPN tls-crypt-v2 server key" filename in
   Tls_crypt_v2_key.of_cstruct (Cstruct.of_string key)
+
+let line oc str =
+  output_string oc str;
+  output_byte oc (Char.code '\n')
+
+let generate_tls_crypt_v2_server_key ?g () = Tls_crypt_v2_key.generate ?g ()
+
+let save_tls_crypt_v2_server_key server_key filename =
+  let oc = open_out filename in
+  line oc "-----BEGIN OpenVPN tls-crypt-v2 server key-----";
+  let b64 = Tls_crypt_v2_key.to_base64 server_key in
+  let lines = String.split_at 65 b64 in
+  List.iter (line oc) lines;
+  line oc "-----END OpenVPN tls-crypt-v2 server key-----";
+  close_out oc
+
+let generate_tls_crypt_v2_client_key ?g metadata =
+  let metadata = match metadata with
+    | None -> Metadata.now ()
+    | Some metadata -> metadata in
+  let a = Tls_crypt_v2_key.generate ?g () in
+  let b = Tls_crypt_v2_key.generate ?g () in
+  (a, b, metadata)
+
+let tls_crypt_v2_wrap_client server_key (a, b, metadata) =
+  let a = Tls_crypt_v2_key.to_cstruct a in
+  let b = Tls_crypt_v2_key.to_cstruct b in
+  let cs = Cstruct.concat [ a; b ] in
+  let metadata = Metadata.to_cstruct metadata in
+  let net_len = (128 * 2) + (Cstruct.length metadata) + _TLS_CRYPT_V2_TAG_SIZE + 2 in
+  let net_len =
+    let cs = Cstruct.create 2 in
+    Cstruct.BE.set_uint16 cs 0 net_len; cs in
+  let ctx = Mirage_crypto.Hash.SHA256.hmac_empty ~key:(Tls_crypt_v2_key.hmac server_key) in
+  let ctx = Mirage_crypto.Hash.SHA256.hmac_feed ctx net_len in
+  let ctx = Mirage_crypto.Hash.SHA256.hmac_feed ctx cs in
+  let ctx = Mirage_crypto.Hash.SHA256.hmac_feed ctx metadata in
+  let tag = Mirage_crypto.Hash.SHA256.hmac_get ctx in
+  let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
+  let ctr = AES_CTR.ctr_of_cstruct tag in
+  let wkc =
+    AES_CTR.encrypt ~key:(Tls_crypt_v2_key.cipher_key server_key) ~ctr
+      (Cstruct.concat [ cs; metadata; ]) in
+  Cstruct.concat [ tag; wkc; net_len ]
+
+let save_tls_crypt_v2_client_key server_key client_key filename =
+  let kc =
+    let (a, b, _) = client_key in
+    Cstruct.concat [ Tls_crypt_v2_key.to_cstruct a; Tls_crypt_v2_key.to_cstruct b ] in
+  let wkc = tls_crypt_v2_wrap_client server_key client_key in
+  let payload = Cstruct.concat [ kc; wkc ] in
+  let payload = Cstruct.to_string payload in
+  let b64 = Base64.encode_string ~pad:true payload in
+  let oc = open_out filename in
+  line oc "-----BEGIN OpenVPN tls-crypt-v2 client key-----";
+  let lines = String.split_at 65 b64 in
+  List.iter (line oc) lines;
+  line oc "-----END OpenVPN tls-crypt-v2 client key-----";
+  close_out oc
 
 let guard ~msg test =
   if test () then Ok () else Error (`Msg msg)
@@ -183,6 +267,8 @@ let load_tls_crypt_v2_client_key server_key filename =
     Tls_crypt_v2_key.equal b b' in
   Ok (a, b, metadata)
 
+let () = Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
+
 let () =
   match Sys.argv with
   | [| _; "tls-crypt-v2"; "server"; filename |] when Sys.file_exists filename ->
@@ -206,4 +292,18 @@ let () =
         Fmt.pr "Metadata:\n%!";
         Fmt.pr "%a%!" Metadata.pp_hum metadata
     | Error (`Msg msg) -> Fmt.epr "%s: %s\n%!" Sys.executable_name msg end
+  | [| _; "tls-crypt-v2"; "server"; "genkey"; filename |] ->
+      let server_key = generate_tls_crypt_v2_server_key () in
+      save_tls_crypt_v2_server_key server_key filename
+  | [| _; "tls-crypt-v2"; "client"; "genkey"; filename; server |] when
+    Sys.file_exists server ->
+      let result =
+        let ( let* ) = Result.bind in
+        let* server_key = load_tls_crypt_v2_server_key server in
+        let client_key = generate_tls_crypt_v2_client_key None in
+        save_tls_crypt_v2_client_key server_key client_key filename;
+        Ok () in
+      begin match result with
+      | Ok () -> ()
+      | Error (`Msg msg) -> Fmt.epr "%s: %s\n%!" Sys.executable_name msg end
   | _ -> assert false
