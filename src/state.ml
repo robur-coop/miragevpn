@@ -180,6 +180,7 @@ let next_free_ip config is_not_taken =
   isit (Ipaddr.V4.Prefix.first cidr)
 
 type session = {
+  hmac_algorithm : Mirage_crypto.Hash.hash;
   my_session_id : int64;
   my_packet_id : int32; (* this starts from 1l, indicates the next to-be-send *)
   my_hmac : Cstruct.t;
@@ -192,8 +193,9 @@ type session = {
 }
 
 let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
-    ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
+    ?(protocol = `Tcp) ?(hmac_algorithm = `SHA1) ~my_hmac ~their_hmac () =
   {
+    hmac_algorithm;
     my_session_id;
     my_packet_id = 1l;
     my_hmac;
@@ -206,9 +208,13 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B protocol %a my session %Lu packet %lu@.their session %Lu \
+    "compression %B protocol %a hmac %s my session %Lu packet %lu@.their session %Lu \
      packet %lu"
-    t.compress pp_proto t.protocol t.my_session_id t.my_packet_id
+    t.compress pp_proto t.protocol
+    (match t.hmac_algorithm with
+     | `MD5 -> "MD5" | `SHA1 -> "SHA1" | `SHA224 -> "SHA224"
+     | `SHA256 -> "SHA256" | `SHA384 -> "SHA384" | `SHA512 -> "SHA512")
+    t.my_session_id t.my_packet_id
     t.their_session_id t.their_packet_id
 
 type client_state =
@@ -281,6 +287,11 @@ let mtu config compress =
     | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
     | Some x -> x
   in
+  let hmac_len =
+    Option.value ~default:`SHA1
+      (Config.find Auth config)
+    |> Mirage_crypto.Hash.digest_size
+  in
   (* padding, done on packet_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
@@ -298,7 +309,7 @@ let mtu config compress =
     + (* 1 byte op + key *)
     Packet.cipher_block_size
     + (* IV *)
-    Packet.hmac_len
+    hmac_len
   in
   (* now we know: tun_mtu - hdrs is space we have for data *)
   let data = tun_mtu - hdrs in
