@@ -823,7 +823,7 @@ let unpad block_size cs =
   if len >= 0 && amount <= block_size then Ok (Cstruct.sub cs 0 len)
   else Error (`Msg "bad padding")
 
-let out ?add_timestamp (ctx : keys) compress rng data =
+let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
   (* the wire format of data packets is:
      hmac (IV enc(packet_id [timestamp] [compression] data pad))
      where:
@@ -851,22 +851,22 @@ let out ?add_timestamp (ctx : keys) compress rng data =
   let open Mirage_crypto in
   let enc = Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
   let payload = Cstruct.append iv enc in
-  let hmac = Hash.SHA1.hmac ~key:ctx.my_hmac payload in
+  let hmac = Hash.mac hmac_algorithm ~key:ctx.my_hmac payload in
   let packet = Cstruct.append hmac payload in
   let ctx = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
   (ctx, packet)
 
-let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
+let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng key data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
-  let ctx, payload = out ?add_timestamp ctx compress rng data in
+  let ctx, payload = out ?add_timestamp ctx hmac_algorithm compress rng data in
   let out = Packet.encode protocol (key, `Data payload) in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length out) ctx.my_packet_id);
   (ctx, out)
 
-let static_out ~add_timestamp ctx compress protocol rng data =
-  let ctx, payload = out ~add_timestamp ctx compress rng data in
+let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
+  let ctx, payload = out ~add_timestamp ctx hmac_algorithm compress rng data in
   let prefix = Packet.encode_protocol protocol (Cstruct.length payload) in
   let out = Cstruct.append prefix payload in
   Log.debug (fun m ->
@@ -882,7 +882,7 @@ let outgoing s data =
   | Client_static (ctx, c), _ ->
       let add_timestamp = ptime_to_ts_exn (s.now ()) in
       let ctx, out =
-        static_out ~add_timestamp ctx s.session.compress s.session.protocol
+        static_out ~add_timestamp ctx s.session.hmac_algorithm s.session.compress s.session.protocol
           s.rng data
       in
       let channel = incr s.channel out in
@@ -892,7 +892,7 @@ let outgoing s data =
   | _, Some ctx ->
       let sess = s.session in
       let ctx, out =
-        data_out ctx sess.compress sess.protocol s.rng s.channel.keyid data
+        data_out ctx sess.hmac_algorithm sess.compress sess.protocol s.rng s.channel.keyid data
       in
       let channel = incr (set_keys s.channel ctx) out in
       Ok ({ s with channel; last_sent = s.ts () }, out)
@@ -1482,7 +1482,7 @@ let handle_static_client t s keys ev =
               let session = { t.session with protocol } in
               let keys, payload =
                 let add_timestamp = ptime_to_ts_exn (t.now ()) in
-                static_out ~add_timestamp keys t.session.compress protocol t.rng
+                static_out ~add_timestamp keys t.session.hmac_algorithm t.session.compress protocol t.rng
                   ping
               in
               let state = Client_static (keys, Ready) in
