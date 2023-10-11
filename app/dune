@@ -28,3 +28,10 @@
  (package miragevpn)
  (modules openvpn_config_parser)
  (libraries miragevpn logs logs.fmt fmt.tty))
+
+(executable
+ (name tls_crypt_v2)
+ (public_name tls-crypt-v2.tools)
+ (package miragevpn)
+ (modules tls_crypt_v2)
+ (libraries ptime.clock.os ptime hxd.core hxd.string fmt base64 mirage-crypto))
