@@ -15,7 +15,7 @@ struct
     | Error e -> Error (`Msg (Fmt.to_to_string FS.pp_error e))
     | Ok data ->
         let string_of_file _ = Error (`Msg "no string_of_file support") in
-        Miragevpn.Config.parse ~string_of_file data
+        Miragevpn.Config.parse_server ~string_of_file data
 
   let start _ _ _ _ s data =
     read_config data >>= function
