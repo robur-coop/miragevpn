@@ -28,7 +28,7 @@ end = struct
     let len = Array.fold_left max 0 Mirage_crypto.Cipher_block.AES.CTR.key_sizes in
     Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 len)
 
-  let hmac cs = Cstruct.sub cs 64 32
+  let hmac cs = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
   let equal a b = Eqaf_cstruct.equal a b
 
   let pp_hum ppf cs =
