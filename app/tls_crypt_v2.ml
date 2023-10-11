@@ -143,7 +143,7 @@ let tls_crypt_V2_unwrap_client server_key cs =
   let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
   let ctr = AES_CTR.ctr_of_cstruct tag in
   let* key_and_metadata =
-    try let payload = Cstruct.sub cs _TLS_CRYPT_V2_TAG_SIZE (net_len - _TLS_CRYPT_V2_TAG_SIZE) in
+    try let payload = Cstruct.sub cs _TLS_CRYPT_V2_TAG_SIZE (net_len - _TLS_CRYPT_V2_TAG_SIZE - 2) in
         Ok (AES_CTR.decrypt ~key:(Tls_crypt_v2_key.cipher_key server_key) ~ctr payload)
     with _ -> error_msgf "Could not decrypt client key" in
   let ctx = Mirage_crypto.Hash.SHA256.hmac_empty ~key:(Tls_crypt_v2_key.hmac server_key) in
