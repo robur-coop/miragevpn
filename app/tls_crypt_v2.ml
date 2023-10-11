@@ -93,12 +93,15 @@ module Metadata = struct
         else error_msgf "Invalid user metadata"
     | 1 ->
         begin
-          try let n = Cstruct.BE.get_uint64 cs 1 in
+          if Cstruct.length cs <> 1 + 8 then
+            error_msgf "Invalid timestamp: invalid length"
+          else
+            try let n = Cstruct.BE.get_uint64 cs 1 in
               let n = Int64.to_float n in
               ( match Ptime.of_float_s n with
-              | Some ptime -> Ok (Timestamp ptime)
-              | None -> error_msgf "Invalid timestamp" )
-          with _ -> error_msgf "Invalid timestamp metadata" end
+                | Some ptime -> Ok (Timestamp ptime)
+                | None -> error_msgf "Invalid timestamp" )
+            with _ -> error_msgf "Invalid timestamp metadata" end
     | _ -> error_msgf "Invalid metadata"
     | exception _ -> error_msgf "Invalid metadata"
 
