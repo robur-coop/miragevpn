@@ -28,7 +28,7 @@ end = struct
     let len = Array.fold_left max 0 Mirage_crypto.Cipher_block.AES.CTR.key_sizes in
     Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 len)
 
-  let hmac cs = Cstruct.sub cs 64 64
+  let hmac cs = Cstruct.sub cs 64 32
   let equal a b = Eqaf_cstruct.equal a b
 
   let pp_hum ppf cs =
@@ -150,7 +150,7 @@ let tls_crypt_V2_unwrap_client server_key cs =
   let ctx = Mirage_crypto.Hash.SHA256.hmac_feed ctx (Cstruct.sub cs (Cstruct.length cs - 2) 2) in
   let ctx = Mirage_crypto.Hash.SHA256.hmac_feed ctx key_and_metadata in
   let tag' = Mirage_crypto.Hash.SHA256.hmac_get ctx in
-  let* () = guard ~msg:"Client key authentication error" @@ fun () -> Eqaf_cstruct.equal tag tag' = false in
+  let* () = guard ~msg:"Client key authentication error" @@ fun () -> Eqaf_cstruct.equal tag tag' in
   let* () = guard ~msg:"Failed to read the client key" @@ fun () -> Cstruct.length key_and_metadata >= (128 * 2) in
     let* a = Tls_crypt_v2_key.of_cstruct (Cstruct.sub key_and_metadata 0 128) in
     let* b = Tls_crypt_v2_key.of_cstruct (Cstruct.sub key_and_metadata 128 128) in
