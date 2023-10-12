@@ -867,7 +867,7 @@ let outgoing s data =
         data_out ctx sess.compress sess.protocol s.rng s.channel.keyid data
       in
       let channel = incr (set_keys s.channel ctx) out in
-      Ok ({ s with channel; last_sent = s.ts () }, data)
+      Ok ({ s with channel; last_sent = s.ts () }, out)
 
 let ping =
   (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
