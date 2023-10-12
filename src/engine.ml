@@ -106,8 +106,7 @@ let hmacs config =
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (direction, _, hmac1, _, hmac2) ->
       let hmac_len =
-        Option.value ~default:`SHA1
-          (Config.find Auth config)
+        Option.value ~default:`SHA1 (Config.find Auth config)
         |> Mirage_crypto.Hash.digest_size
       in
       let a, b =
@@ -124,8 +123,7 @@ let secret config =
   | None -> Error (`Msg "no pre-shared secret found")
   | Some (key1, hmac1, _key2, _hmac2) ->
       let hmac_len =
-        Option.value ~default:`SHA1
-          (Config.find Auth config)
+        Option.value ~default:`SHA1 (Config.find Auth config)
         |> Mirage_crypto.Hash.digest_size
       in
       let hm cs = Cstruct.sub cs 0 hmac_len
@@ -583,7 +581,10 @@ let init_channel how session keyid now ts =
   let session, transport, header = header session channel.transport timestamp in
   let transport, m_id = next_message_id transport in
   let p = `Control (how, (header, m_id, Cstruct.empty)) in
-  let out = hmac_and_out session.protocol channel.keyid session.hmac_algorithm session.my_hmac p in
+  let out =
+    hmac_and_out session.protocol channel.keyid session.hmac_algorithm
+      session.my_hmac p
+  in
   let out_packets = IM.add m_id (ts, out) transport.out_packets in
   let transport = { transport with out_packets } in
   (session, { channel with transport }, out)
@@ -856,7 +857,8 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
   let ctx = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
   (ctx, packet)
 
-let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng key data =
+let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
+    key data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
   let ctx, payload = out ?add_timestamp ctx hmac_algorithm compress rng data in
   let out = Packet.encode protocol (key, `Data payload) in
@@ -882,8 +884,8 @@ let outgoing s data =
   | Client_static (ctx, c), _ ->
       let add_timestamp = ptime_to_ts_exn (s.now ()) in
       let ctx, out =
-        static_out ~add_timestamp ctx s.session.hmac_algorithm s.session.compress s.session.protocol
-          s.rng data
+        static_out ~add_timestamp ctx s.session.hmac_algorithm
+          s.session.compress s.session.protocol s.rng data
       in
       let channel = incr s.channel out in
       let state = Client_static (ctx, c) in
@@ -892,7 +894,8 @@ let outgoing s data =
   | _, Some ctx ->
       let sess = s.session in
       let ctx, out =
-        data_out ctx sess.hmac_algorithm sess.compress sess.protocol s.rng s.channel.keyid data
+        data_out ctx sess.hmac_algorithm sess.compress sess.protocol s.rng
+          s.channel.keyid data
       in
       let channel = incr (set_keys s.channel ctx) out in
       Ok ({ s with channel; last_sent = s.ts () }, out)
@@ -981,7 +984,8 @@ let timer state =
   let s''' = maybe_drop_lame_duck s'' in
   (s''', out @ out')
 
-let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm compress data =
+let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
+    compress data =
   (* spec described the layout as:
      hmac <+> payload
      where payload consists of IV <+> encrypted data
@@ -1087,7 +1091,10 @@ let wrap_hmac_control now ts mtu session key transport outs =
         in
         (* hmac each outgoing frame and encode *)
         let out =
-          List.map (hmac_and_out session.protocol key session.hmac_algorithm session.my_hmac) p
+          List.map
+            (hmac_and_out session.protocol key session.hmac_algorithm
+               session.my_hmac)
+            p
         in
         let out_packets =
           List.fold_left2
@@ -1157,13 +1164,15 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     Ok (state, out, None)
                 | Some keys ->
                     let ch = received_packet ch data in
-                    incoming_data bad_mac keys state.session.hmac_algorithm state.session.compress data
+                    incoming_data bad_mac keys state.session.hmac_algorithm
+                      state.session.compress data
                     >>| fun payload ->
                     let act = merge_payload act payload in
                     (set_ch state ch, out, act))
             | (`Ack _ | `Control _) as d -> (
                 match
-                  check_control_integrity bad_mac key p state.session.hmac_algorithm state.session.their_hmac
+                  check_control_integrity bad_mac key p
+                    state.session.hmac_algorithm state.session.their_hmac
                   >>= fun () ->
                   (* _first_ update state with most recent received packet_id *)
                   expected_packet state.session ch.transport d
@@ -1482,8 +1491,8 @@ let handle_static_client t s keys ev =
               let session = { t.session with protocol } in
               let keys, payload =
                 let add_timestamp = ptime_to_ts_exn (t.now ()) in
-                static_out ~add_timestamp keys t.session.hmac_algorithm t.session.compress protocol t.rng
-                  ping
+                static_out ~add_timestamp keys t.session.hmac_algorithm
+                  t.session.compress protocol t.rng ping
               in
               let state = Client_static (keys, Ready) in
               Ok
@@ -1502,7 +1511,8 @@ let handle_static_client t s keys ev =
               Ok (t', outs, None))
       | _, `Data cs ->
           let t = { t with last_received = ts } in
-          let add_timestamp = true and compress = t.session.compress
+          let add_timestamp = true
+          and compress = t.session.compress
           and hmac_algorithm = t.session.hmac_algorithm in
           let rec process_one acc linger =
             if Cstruct.length linger = 0 then
@@ -1512,7 +1522,8 @@ let handle_static_client t s keys ev =
               | Error `Partial -> Ok ({ t with linger }, [], acc)
               | Ok (cs, linger) ->
                   let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
-                  incoming_data ~add_timestamp bad_mac keys hmac_algorithm compress cs
+                  incoming_data ~add_timestamp bad_mac keys hmac_algorithm
+                    compress cs
                   >>= fun d -> process_one (merge_payload acc d) linger
           in
           process_one None (Cstruct.append t.linger cs)

@@ -95,7 +95,9 @@ let decode_header ~hmac_len buf =
   let ack_message_ids = List.init arr_len ack_message_id in
   let remote_session =
     if arr_len > 0 then
-      Some (Cstruct.BE.get_uint64 buf (hdr_len hmac_len + (packet_id_len * arr_len)))
+      Some
+        (Cstruct.BE.get_uint64 buf
+           (hdr_len hmac_len + (packet_id_len * arr_len)))
     else None
   in
   ( {

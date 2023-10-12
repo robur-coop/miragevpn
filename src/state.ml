@@ -208,14 +208,17 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B protocol %a hmac %s my session %Lu packet %lu@.their session %Lu \
-     packet %lu"
+    "compression %B protocol %a hmac %s my session %Lu packet %lu@.their \
+     session %Lu packet %lu"
     t.compress pp_proto t.protocol
     (match t.hmac_algorithm with
-     | `MD5 -> "MD5" | `SHA1 -> "SHA1" | `SHA224 -> "SHA224"
-     | `SHA256 -> "SHA256" | `SHA384 -> "SHA384" | `SHA512 -> "SHA512")
-    t.my_session_id t.my_packet_id
-    t.their_session_id t.their_packet_id
+    | `MD5 -> "MD5"
+    | `SHA1 -> "SHA1"
+    | `SHA224 -> "SHA224"
+    | `SHA256 -> "SHA256"
+    | `SHA384 -> "SHA384"
+    | `SHA512 -> "SHA512")
+    t.my_session_id t.my_packet_id t.their_session_id t.their_packet_id
 
 type client_state =
   | Resolving of
@@ -288,8 +291,7 @@ let mtu config compress =
     | Some x -> x
   in
   let hmac_len =
-    Option.value ~default:`SHA1
-      (Config.find Auth config)
+    Option.value ~default:`SHA1 (Config.find Auth config)
     |> Mirage_crypto.Hash.digest_size
   in
   (* padding, done on packet_id + [timestamp] + compress + data *)
