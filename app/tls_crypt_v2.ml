@@ -186,7 +186,7 @@ let tls_crypt_v2_wrap_client server_key (a, b, metadata) =
   let b = Tls_crypt_v2_key.to_cstruct b in
   let cs = Cstruct.concat [ a; b ] in
   let metadata = Metadata.to_cstruct metadata in
-  let net_len = (128 * 2) + (Cstruct.length metadata) + _TLS_CRYPT_V2_TAG_SIZE + 2 in
+  let net_len = Cstruct.length cs + Cstruct.length metadata + Mirage_crypto.Hash.SHA256.digest_size + 2 in
   let net_len =
     let cs = Cstruct.create 2 in
     Cstruct.BE.set_uint16 cs 0 net_len; cs in
@@ -212,7 +212,7 @@ let save_tls_crypt_v2_client_key server_key client_key filename =
   let b64 = Base64.encode_string ~pad:true payload in
   let oc = open_out filename in
   line oc "-----BEGIN OpenVPN tls-crypt-v2 client key-----";
-  let lines = String.split_at 65 b64 in
+  let lines = String.split_at 64 b64 in
   List.iter (line oc) lines;
   line oc "-----END OpenVPN tls-crypt-v2 client key-----";
   close_out oc
