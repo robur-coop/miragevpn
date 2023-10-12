@@ -521,31 +521,36 @@ let incoming_control_client config rng session channel now op data =
   | TLS_established (tls, key), Packet.Control -> (
       let open Result.Infix in
       incoming_tls tls data >>= fun (tls', tls_resp, d) ->
-      maybe_kdf session key d >>= fun (tls_data, keys) ->
-      let config = merge_server_config_into_client config tls_data in
       let tls_out =
         match tls_resp with None -> [] | Some c -> [ (`Control, c) ]
       in
-      (* ok, two options:
-         - initial handshake done, we need push request / reply
-         - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
-      *)
-      (* this may be a bit too early since tls_response...  *)
-      match Config.(find Ifconfig config) with
-      | Some _ ->
-          let ip_config = ip_from_config config in
-          let channel_st = Established keys in
-          Ok (Some ip_config, config, { channel with channel_st }, tls_out)
+      match d with
       | None ->
-          (* now we send a PUSH_REQUEST\0 and see what happens *)
-          push_request tls' >>| fun (tls'', out) ->
-          let channel_st = Push_request_sent (tls'', keys) in
-          (* first send an ack for the received key data packet (this needs to be
-             a separate packet from the PUSH_REQUEST for unknown reasons) *)
-          ( None,
-            config,
-            { channel with channel_st },
-            tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] ))
+          let channel_st = TLS_established (tls', key) in
+          Ok (None, config, { channel with channel_st }, tls_out)
+      | _ -> (
+          maybe_kdf session key d >>= fun (tls_data, keys) ->
+          let config = merge_server_config_into_client config tls_data in
+          (* ok, two options:
+             - initial handshake done, we need push request / reply
+             - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
+          *)
+          (* this may be a bit too early since tls_response...  *)
+          match Config.(find Ifconfig config) with
+          | Some _ ->
+              let ip_config = ip_from_config config in
+              let channel_st = Established keys in
+              Ok (Some ip_config, config, { channel with channel_st }, tls_out)
+          | None ->
+              (* now we send a PUSH_REQUEST\0 and see what happens *)
+              push_request tls' >>| fun (tls'', out) ->
+              let channel_st = Push_request_sent (tls'', keys) in
+              (* first send an ack for the received key data packet (this needs to be
+                 a separate packet from the PUSH_REQUEST for unknown reasons) *)
+              ( None,
+                config,
+                { channel with channel_st },
+                tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] )))
   | Push_request_sent (tls, keys), Packet.Control ->
       let open Result.Infix in
       Log.debug (fun m -> m "in push request sent");
