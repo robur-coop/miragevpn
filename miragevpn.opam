@@ -48,6 +48,8 @@ depends: [
   "mtime"
   "dns-client-lwt" {>= "7.0.0"}
   "tuntap" {>= "1.8.1"}
+  "base64" {>= "3.0.0"}
+  "hxd"
   # mirage:
   "dns-client-mirage" {>= "7.0.0"}
   "tcpip" {>= "7.0.0"}
