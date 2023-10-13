@@ -850,6 +850,15 @@ let data_out ?add_timestamp (ctx : keys) compress protocol rng key data =
         (Cstruct.length out) ctx.my_packet_id);
   (ctx, out)
 
+let static_out ~add_timestamp ctx compress protocol rng data =
+  let ctx, payload = out ~add_timestamp ctx compress rng data in
+  let prefix = Packet.encode_protocol protocol (Cstruct.length payload) in
+  let out = Cstruct.append prefix payload in
+  Log.debug (fun m ->
+      m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
+        (Cstruct.length payload) ctx.my_packet_id);
+  (ctx, out)
+
 let outgoing s data =
   let incr ch out =
     { ch with packets = succ ch.packets; bytes = Cstruct.length out + ch.bytes }
@@ -857,11 +866,10 @@ let outgoing s data =
   match (s.state, keys_opt s.channel) with
   | Client_static (ctx, c), _ ->
       let add_timestamp = ptime_to_ts_exn (s.now ()) in
-      let ctx, payload = out ~add_timestamp ctx s.session.compress s.rng data in
-      let prefix =
-        Packet.encode_protocol s.session.protocol (Cstruct.length payload)
+      let ctx, out =
+        static_out ~add_timestamp ctx s.session.compress s.session.protocol
+          s.rng data
       in
-      let out = Cstruct.append prefix payload in
       let channel = incr s.channel out in
       let state = Client_static (ctx, c) in
       Ok ({ s with state; channel; last_sent = s.ts () }, out)
@@ -1457,7 +1465,8 @@ let handle_static_client t s keys ev =
               let session = { t.session with protocol } in
               let keys, payload =
                 let add_timestamp = ptime_to_ts_exn (t.now ()) in
-                out ~add_timestamp keys t.session.compress t.rng ping
+                static_out ~add_timestamp keys t.session.compress protocol t.rng
+                  ping
               in
               let state = Client_static (keys, Ready) in
               Ok
