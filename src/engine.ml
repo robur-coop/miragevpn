@@ -149,6 +149,7 @@ let client config ts now rng =
       Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
   | [] -> Error (`Msg "couldn't find remote in configuration"))
   >>= fun (action, state) ->
+  let hmac_algorithm = Config.get Auth config in
   match (hmacs config, secret config) with
   | Error e, Error _ -> Error e
   | Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
@@ -166,7 +167,7 @@ let client config ts now rng =
         match Config.find Comp_lzo config with None -> false | Some () -> true
       in
       let session =
-        init_session ~my_session_id:0L ~compress ~my_hmac ~their_hmac ()
+        init_session ~my_session_id:0L ~hmac_algorithm ~compress ~my_hmac ~their_hmac ()
       in
       let channel = new_channel 0 current_ts in
       let state =
@@ -186,7 +187,7 @@ let client config ts now rng =
       in
       Ok (state, action)
   | Ok (my_hmac, their_hmac), _ ->
-      let session = init_session ~my_session_id:0L ~my_hmac ~their_hmac () in
+      let session = init_session ~my_session_id:0L ~hmac_algorithm ~my_hmac ~their_hmac () in
       let channel = new_channel 0 current_ts in
       let state =
         {
@@ -226,9 +227,11 @@ let server server_config server_ts server_now server_rng =
     port )
 
 let new_connection server =
+  let hmac_algorithm = Config.get Config.Auth server.server_config in
   let session =
     init_session
       ~my_session_id:(Randomconv.int64 server.server_rng)
+      ~hmac_algorithm
       ~my_hmac:server.server_hmac ~their_hmac:server.client_hmac ()
   in
   let current_ts = server.server_ts () in
@@ -1393,8 +1396,9 @@ let handle_client t s ev =
           and my_hmac = t.session.my_hmac
           and their_hmac = t.session.their_hmac in
           let protocol = match remote idx with _, _, proto -> proto in
+          let hmac_algorithm = Config.get Auth t.config in
           let session =
-            init_session ~my_session_id ~protocol ~my_hmac ~their_hmac ()
+            init_session ~my_session_id ~protocol ~hmac_algorithm ~my_hmac ~their_hmac ()
           in
           let session, channel, out =
             init_channel Packet.Hard_reset_client session 0 now ts

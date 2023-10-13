@@ -193,7 +193,7 @@ type session = {
 }
 
 let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
-    ?(protocol = `Tcp) ?(hmac_algorithm = `SHA1) ~my_hmac ~their_hmac () =
+    ?(protocol = `Tcp) ~hmac_algorithm ~my_hmac ~their_hmac () =
   {
     hmac_algorithm;
     my_session_id;
