@@ -587,6 +587,7 @@ module Defaults = struct
     |> add Renegotiate_seconds 3600
     |> add Handshake_window 60 |> add Transition_window 3600
     |> add Proto (None, `Udp)
+    |> add Auth `SHA1
 
   let client =
     let open Conf_map in

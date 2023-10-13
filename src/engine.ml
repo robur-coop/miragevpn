@@ -105,10 +105,7 @@ let hmacs config =
   match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (direction, _, hmac1, _, hmac2) ->
-      let hmac_len =
-        Option.value ~default:`SHA1 (Config.find Auth config)
-        |> Mirage_crypto.Hash.digest_size
-      in
+      let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
       let a, b =
         match direction with
         | None -> (hmac1, hmac1)
@@ -122,10 +119,7 @@ let secret config =
   match Config.find Secret config with
   | None -> Error (`Msg "no pre-shared secret found")
   | Some (key1, hmac1, _key2, _hmac2) ->
-      let hmac_len =
-        Option.value ~default:`SHA1 (Config.find Auth config)
-        |> Mirage_crypto.Hash.digest_size
-      in
+      let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
       let hm cs = Cstruct.sub cs 0 hmac_len
       and cipher cs = Cstruct.sub cs 0 32 in
       Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
