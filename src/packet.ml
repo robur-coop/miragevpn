@@ -54,9 +54,8 @@ let pp_operation ppf op =
 type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
 let packet_id_len = 4
-let hmac_len = 20 (* SHA1 is what you say *)
 let cipher_block_size = 16
-let hdr_len = 8 + hmac_len + packet_id_len + 4 + 1
+let hdr_len hmac_len = 8 + hmac_len + packet_id_len + 4 + 1
 let guard f e = if f then Ok () else Error e
 
 type header = {
@@ -77,9 +76,9 @@ let pp_header ppf hdr =
     Fmt.(option ~none:(any " ") uint64)
     hdr.remote_session
 
-let decode_header buf =
+let decode_header ~hmac_len buf =
   let open Result.Infix in
-  guard (Cstruct.length buf >= hdr_len) `Partial >>= fun () ->
+  guard (Cstruct.length buf >= hdr_len hmac_len) `Partial >>= fun () ->
   let local_session = Cstruct.BE.get_uint64 buf 0
   and hmac = Cstruct.sub buf 8 hmac_len
   and packet_id = Cstruct.BE.get_uint32 buf (hmac_len + 8)
@@ -87,16 +86,18 @@ let decode_header buf =
   and arr_len = Cstruct.get_uint8 buf (hmac_len + 16) in
   let rs = if arr_len = 0 then 0 else 8 in
   guard
-    (Cstruct.length buf >= hdr_len + (packet_id_len * arr_len) + rs)
+    (Cstruct.length buf >= hdr_len hmac_len + (packet_id_len * arr_len) + rs)
     `Partial
   >>| fun () ->
   let ack_message_id idx =
-    Cstruct.BE.get_uint32 buf (hdr_len + (packet_id_len * idx))
+    Cstruct.BE.get_uint32 buf (hdr_len hmac_len + (packet_id_len * idx))
   in
   let ack_message_ids = List.init arr_len ack_message_id in
   let remote_session =
     if arr_len > 0 then
-      Some (Cstruct.BE.get_uint64 buf (hdr_len + (packet_id_len * arr_len)))
+      Some
+        (Cstruct.BE.get_uint64 buf
+           (hdr_len hmac_len + (packet_id_len * arr_len)))
     else None
   in
   ( {
@@ -107,12 +108,13 @@ let decode_header buf =
       ack_message_ids;
       remote_session;
     },
-    hdr_len + (packet_id_len * arr_len) + rs )
+    hdr_len hmac_len + (packet_id_len * arr_len) + rs )
 
 let encode_header hdr =
   let id_arr_len = packet_id_len * List.length hdr.ack_message_ids in
   let rsid = if id_arr_len = 0 then 0 else 8 in
-  let buf = Cstruct.create (hdr_len + rsid + id_arr_len) in
+  let hmac_len = Cstruct.length hdr.hmac in
+  let buf = Cstruct.create (hdr_len hmac_len + rsid + id_arr_len) in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session;
   Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
   Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id;
@@ -126,8 +128,8 @@ let encode_header hdr =
   | None -> ()
   | Some v ->
       assert (rsid <> 0);
-      Cstruct.BE.set_uint64 buf (hdr_len + id_arr_len) v);
-  (buf, hdr_len + rsid + id_arr_len)
+      Cstruct.BE.set_uint64 buf (hdr_len hmac_len + id_arr_len) v);
+  (buf, hdr_len hmac_len + rsid + id_arr_len)
 
 let to_be_signed_header ?(more = 0) op header =
   (* packet_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ msg_id *)
@@ -161,9 +163,9 @@ let pp_control ppf (hdr, id, payload) =
   Fmt.pf ppf "%a message-id %lu@.payload %d bytes" pp_header hdr id
     (Cstruct.length payload)
 
-let decode_control buf =
+let decode_control ~hmac_len buf =
   let open Result.Infix in
-  decode_header buf >>= fun (header, off) ->
+  decode_header ~hmac_len buf >>= fun (header, off) ->
   guard (Cstruct.length buf >= off + 4) `Partial >>| fun () ->
   let message_id = Cstruct.BE.get_uint32 buf off
   and payload = Cstruct.shift buf (off + 4) in
@@ -194,7 +196,7 @@ let decode_protocol proto buf =
       (Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2))
   | `Udp -> Ok (buf, Cstruct.empty)
 
-let decode proto buf =
+let decode ~hmac_len proto buf =
   let open Result.Infix in
   decode_protocol proto buf >>= fun (buf', rest) ->
   guard (Cstruct.length buf' >= 1) `Partial >>= fun () ->
@@ -202,9 +204,9 @@ let decode proto buf =
   let op, key = (opkey lsr 3, opkey land 0x07) in
   let payload = Cstruct.shift buf' 1 in
   (int_to_operation op >>= function
-   | Ack -> decode_header payload >>| fun (ack, _) -> `Ack ack
+   | Ack -> decode_header ~hmac_len payload >>| fun (ack, _) -> `Ack ack
    | Data_v1 -> Ok (`Data payload)
-   | op' -> decode_control payload >>| fun ctl -> `Control (op', ctl))
+   | op' -> decode_control ~hmac_len payload >>| fun ctl -> `Control (op', ctl))
   >>| fun res -> (key, res, rest)
 
 let operation = function

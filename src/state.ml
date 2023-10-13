@@ -281,6 +281,10 @@ let mtu config compress =
     | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
     | Some x -> x
   in
+  let hmac_len =
+    Option.value ~default:`SHA1 (Config.find Auth config)
+    |> Mirage_crypto.Hash.digest_size
+  in
   (* padding, done on packet_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
@@ -298,7 +302,7 @@ let mtu config compress =
     + (* 1 byte op + key *)
     Packet.cipher_block_size
     + (* IV *)
-    Packet.hmac_len
+    hmac_len
   in
   (* now we know: tun_mtu - hdrs is space we have for data *)
   let data = tun_mtu - hdrs in

@@ -123,6 +123,7 @@ module Conf_map = struct
          - Remove it from Ignored Directives and/or Unimplemented Directives
   *)
   type 'a k =
+    | Auth : Mirage_crypto.Hash.hash k
     | Auth_nocache : flag k
     | Auth_retry : [ `Interact | `Nointeract | `None ] k
     | Auth_user_pass : (string * string) k
@@ -379,7 +380,18 @@ module Conf_map = struct
         | `TLS_1_1 -> "1.1"
         | `TLS_1_0 -> "1.0")
     in
+    let pp_digest_algorithm ppf h =
+      Fmt.string ppf
+        (match h with
+        | `MD5 -> "MD5"
+        | `SHA1 -> "SHA1"
+        | `SHA224 -> "SHA224"
+        | `SHA256 -> "SHA256"
+        | `SHA384 -> "SHA384"
+        | `SHA512 -> "SHA512")
+    in
     match (k, v) with
+    | Auth, h -> p () "auth %a" pp_digest_algorithm h
     | Auth_nocache, () -> p () "auth-nocache"
     | Auth_retry, `None -> p () "auth-retry none"
     | Auth_retry, `Nointeract -> p () "auth-retry nointeract"
@@ -575,6 +587,7 @@ module Defaults = struct
     |> add Renegotiate_seconds 3600
     |> add Handshake_window 60 |> add Transition_window 3600
     |> add Proto (None, `Udp)
+    |> add Auth `SHA1
 
   let client =
     let open Conf_map in
@@ -1292,6 +1305,18 @@ let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>| fun v ->
   `Entry (B (Cipher, v))
 
+let a_auth =
+  string "auth" *> a_whitespace *> a_single_param >>= fun h ->
+  (match String.uppercase_ascii h with
+  | "MD5" -> return `MD5
+  | "SHA1" -> return `SHA1
+  | "SHA224" -> return `SHA224
+  | "SHA256" -> return `SHA256
+  | "SHA384" -> return `SHA384
+  | "SHA512" -> return `SHA512
+  | _ -> Fmt.kstr fail "Unknown message digest algorithm %S" h)
+  >>| fun h -> `Entry (B (Auth, h))
+
 let a_replay_window =
   let replay_window a b = `Entry (B (Replay_window, (a, b))) in
   lift2 replay_window
@@ -1481,6 +1506,7 @@ let a_config_entry : line A.t =
          a_link_mtu;
          a_tun_mtu;
          a_cipher;
+         a_auth;
          a_port;
          a_server;
          a_verify_client_cert;
