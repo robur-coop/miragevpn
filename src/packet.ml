@@ -58,7 +58,10 @@ type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
 let packet_id_len = 4
 let cipher_block_size = 16
-let hdr_len hmac_len = 8 + hmac_len + packet_id_len + 4 + 1 (* packet_id_len + 4 + 1 *)
+
+let hdr_len hmac_len =
+  8 + hmac_len + packet_id_len + 4 + 1 (* packet_id_len + 4 + 1 *)
+
 let guard f e = if f then Ok () else Error e
 
 type header = {
@@ -118,10 +121,14 @@ let encode_header hdr =
   let rsid = if id_arr_len = 0 then 0 else 8 in
   let hmac_len = Cstruct.length hdr.hmac in
   let buf = Cstruct.create (hdr_len hmac_len + rsid + id_arr_len) in
-  Cstruct.BE.set_uint64 buf 0 hdr.local_session; (* not encrypted *)
-  Cstruct.blit hdr.hmac 0 buf 8 hmac_len; (* not encrypted, not part of hmac *)
-  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id; (* not encrypted *)
-  Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp; (* not encrypted *)
+  Cstruct.BE.set_uint64 buf 0 hdr.local_session;
+  (* not encrypted *)
+  Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
+  (* not encrypted, not part of hmac *)
+  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id;
+  (* not encrypted *)
+  Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp;
+  (* not encrypted *)
   Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_message_ids);
   List.iteri
     (fun i v ->
@@ -174,33 +181,41 @@ let decode_control ~hmac_len buf =
   and payload = Cstruct.shift buf (off + 4) in
   (header, message_id, payload)
 
-let tls_crypt_encrypt ~hmac ~key ?(off= 0) ?len buf =
+let tls_crypt_encrypt ~hmac ~key ?(off = 0) ?len buf =
   let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
-  let len = match len with
-    | Some len -> len
-    | None -> Cstruct.length buf - off in
+  let len =
+    match len with Some len -> len | None -> Cstruct.length buf - off
+  in
   let iv = Cstruct.sub hmac 0 (128 / 8) in
   let ctr = AES_CTR.ctr_of_cstruct iv in
-  let key = AES_CTR.of_secret key in
+  let key = AES_CTR.of_secret (Cstruct.sub key 0 32 (* 256 bits *)) in
   AES_CTR.encrypt ~key ~ctr (Cstruct.sub buf off len)
-
-
-(* TODO: be able to parametize the hash algorithm used to calculate the HMAC. *)
 
 let encode_control ?tls_crypt (header, packet_id, payload) =
   let hdr_buf, len = encode_header header in
   let packet_id_buf = Cstruct.create 4 in
   Cstruct.BE.set_uint32 packet_id_buf 0 packet_id;
-  let buf, len = ( Cstruct.concat [ hdr_buf; packet_id_buf; payload ],
-    len + Cstruct.length payload + 4 ) in
+  let buf, len =
+    ( Cstruct.concat [ hdr_buf; packet_id_buf; payload ],
+      len + Cstruct.length payload + 4 )
+  in
   match tls_crypt with
-  | Some key -> 
+  | Some ((key, _hmac, _their_key, _their_hmac), _wkc) ->
       (* here, we encrypt only the payload part which includes ACKs. Only the first part of the header:
          [opcode + session_id + hmac + packed_id + timestamp] is not encrypted. *)
-      let encrypted = tls_crypt_encrypt ~hmac:header.hmac ~key buf ~off:(17 + Mirage_crypto.Hash.SHA256.digest_size) in
-      let buf = Cstruct.concat [ Cstruct.sub buf 0 (17 + Mirage_crypto.Hash.SHA256.digest_size); encrypted ] in
-      buf, Cstruct.length buf
-  | None -> buf, len
+      let encrypted =
+        tls_crypt_encrypt ~hmac:header.hmac ~key buf
+          ~off:(17 + Mirage_crypto.Hash.SHA256.digest_size)
+      in
+      let buf =
+        Cstruct.concat
+          [
+            Cstruct.sub buf 0 (17 + Mirage_crypto.Hash.SHA256.digest_size);
+            encrypted;
+          ]
+      in
+      (buf, Cstruct.length buf)
+  | None -> (buf, len)
 
 let to_be_signed_control op (header, packet_id, payload) =
   (* rly? not length!? *)
@@ -260,11 +275,19 @@ let encode ?tls_crypt proto (key, p) =
   let op_buf =
     let b = Cstruct.create 1 in
     let op = op_key (operation p) key in
-    Cstruct.set_uint8 b 0 op; (* + 1 byte *)
+    Cstruct.set_uint8 b 0 op;
+    (* + 1 byte *)
     b
   in
+  let maybe_wkc, len =
+    match (tls_crypt, p) with
+    | None, `Control (Hard_reset_client_v3, _) -> invalid_arg "Packet.encode"
+    | Some (_key, wkc), `Control (Hard_reset_client_v3, _) ->
+        (wkc, len + Cstruct.length wkc)
+    | _ -> (Cstruct.empty, len)
+  in
   let prefix = encode_protocol proto (succ len) in
-  Cstruct.concat [ prefix; op_buf; payload ]
+  Cstruct.concat [ prefix; op_buf; payload; maybe_wkc ]
 
 let to_be_signed key p =
   let op = op_key (operation p) key in

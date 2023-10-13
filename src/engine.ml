@@ -95,25 +95,31 @@ let compute_hmac key p hmac_algorithm hmac_key =
   let tbs = Packet.to_be_signed key p in
   Mirage_crypto.Hash.mac hmac_algorithm ~key:hmac_key tbs
 
-let hmac_and_out protocol key hmac_algorithm hmac_key (p : Packet.pkt) =
+let hmac_and_out protocol key ?tls_crypt hmac_algorithm hmac_key
+    (p : Packet.pkt) =
   let hmac = compute_hmac key p hmac_algorithm hmac_key in
   let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
-  Packet.encode protocol (key, p')
+  Packet.encode protocol ?tls_crypt (key, p')
 
 let hmacs config =
-  match Config.find Tls_auth config with
-  | None -> Error (`Msg "no tls auth payload in config")
-  | Some (direction, _, hmac1, _, hmac2) ->
-      let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
+  let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
+  let s cs = Cstruct.sub cs 0 hmac_len in
+  match
+    (Config.find Tls_auth config, Config.find Tls_crypt_v2_client config)
+  with
+  | None, None -> Error (`Msg "no tls-auth or tls-crypt-v2 payload in config")
+  | Some _, Some _ -> Error (`Msg "can't have both tls-auth and tls-crypt-v2")
+  | Some (direction, _, hmac1, _, hmac2), None ->
       let a, b =
         match direction with
         | None -> (hmac1, hmac1)
         | Some `Incoming -> (hmac2, hmac1)
         | Some `Outgoing -> (hmac1, hmac2)
       in
-      let s cs = Cstruct.sub cs 0 hmac_len in
       Ok (s a, s b)
+  | None, Some ((_key1, hmac1, _key2, hmac2), _wkc, _force_cookie) ->
+      Ok (s hmac1, s hmac2)
 
 let secret config =
   match Config.find Secret config with
@@ -580,7 +586,7 @@ let incoming_control_client config rng session channel now op data =
       (Some ip_config, config', { channel with channel_st }, [])
   | _ -> Error (`No_transition (channel, op, data))
 
-let init_channel how session hmac_algorithm keyid now ts =
+let init_channel how session ?tls_crypt hmac_algorithm keyid now ts =
   let channel = new_channel keyid ts in
   let timestamp = ptime_to_ts_exn now in
   let session, transport, header =
@@ -589,7 +595,8 @@ let init_channel how session hmac_algorithm keyid now ts =
   let transport, m_id = next_message_id transport in
   let p = `Control (how, (header, m_id, Cstruct.empty)) in
   let out =
-    hmac_and_out session.protocol channel.keyid hmac_algorithm session.my_hmac p
+    hmac_and_out ?tls_crypt session.protocol channel.keyid hmac_algorithm
+      session.my_hmac p
   in
   let out_packets = IM.add m_id (ts, out) transport.out_packets in
   let transport = { transport with out_packets } in
@@ -1089,7 +1096,8 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
               let transport, m_id = next_message_id transport in
               ( session,
                 transport,
-                [ `Control (Packet.Hard_reset_server_v2, (header, m_id, out)) ] )
+                [ `Control (Packet.Hard_reset_server_v2, (header, m_id, out)) ]
+              )
           | `Reset ->
               let session, transport, header =
                 header session hmac_algorithm transport now_ts
@@ -1413,9 +1421,14 @@ let handle_client t s ev =
           let session =
             init_session ~my_session_id ~protocol ~my_hmac ~their_hmac ()
           in
+          let how, tls_crypt =
+            match Config.find Config.Tls_crypt_v2_client t.config with
+            | Some (kc, wkc, _force_cookie) ->
+                (Packet.Hard_reset_client_v3, Some (kc, wkc))
+            | None -> (Packet.Hard_reset_client_v2, None)
+          in
           let session, channel, out =
-            init_channel Packet.Hard_reset_client_v2 session hmac_algorithm 0 now
-              ts
+            init_channel how session ?tls_crypt hmac_algorithm 0 now ts
           in
           let state = client (Handshaking (idx, ts)) in
           Ok ({ t with state; channel; session }, [ out ], None)
