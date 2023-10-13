@@ -16,5 +16,6 @@
   domain-name
   ipaddr
   gmap
-  randomconv)
+  randomconv
+  base64)
  (wrapped true))
