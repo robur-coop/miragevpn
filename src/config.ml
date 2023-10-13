@@ -243,11 +243,7 @@ module Conf_map = struct
       >>= fun () ->
         (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
            Error "currently only supported Cipher is 'AES-256-CBC'"
-         else Ok ())
-        >>= fun () ->
-        match find Auth t with
-        | None | Some `SHA1 -> Ok ()
-        | Some _h -> Error "currently only supported auth is 'SHA1'" )
+         else Ok ()))
 
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
