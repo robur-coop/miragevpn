@@ -116,18 +116,18 @@ let decode_header ~hmac_len buf =
     },
     hdr_len hmac_len + (packet_id_len * arr_len) + rs )
 
-let encode_header hdr =
+let encode_header ?(swap_hmac_and_pid = false) hdr =
   let id_arr_len = packet_id_len * List.length hdr.ack_message_ids in
   let rsid = if id_arr_len = 0 then 0 else 8 in
   let hmac_len = Cstruct.length hdr.hmac in
   let buf = Cstruct.create (hdr_len hmac_len + rsid + id_arr_len) in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session;
   (* not encrypted *)
-  Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
+  Cstruct.blit hdr.hmac 0 buf (if swap_hmac_and_pid then 16 else 8) hmac_len;
   (* not encrypted, not part of hmac *)
-  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id;
+  Cstruct.BE.set_uint32 buf (8 + if swap_hmac_and_pid then 0 else hmac_len) hdr.packet_id;
   (* not encrypted *)
-  Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp;
+  Cstruct.BE.set_uint32 buf (12 + if swap_hmac_and_pid then 0 else hmac_len) hdr.timestamp;
   (* not encrypted *)
   Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_message_ids);
   List.iteri
@@ -192,7 +192,7 @@ let tls_crypt_encrypt ~hmac ~key ?(off = 0) ?len buf =
   AES_CTR.encrypt ~key ~ctr (Cstruct.sub buf off len)
 
 let encode_control ?tls_crypt (header, packet_id, payload) =
-  let hdr_buf, len = encode_header header in
+  let hdr_buf, len = encode_header ~swap_hmac_and_pid:(Option.is_some tls_crypt) header in
   let packet_id_buf = Cstruct.create 4 in
   Cstruct.BE.set_uint32 packet_id_buf 0 packet_id;
   let buf, len =
