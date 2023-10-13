@@ -278,9 +278,8 @@ let handle_action conn = function
       Lwt_mvar.put conn.est_mvar (ip, mtu)
 
 let rec event conn =
-  Logs.info (fun m -> m "processing event");
   Lwt_mvar.take conn.event_mvar >>= fun ev ->
-  Logs.info (fun m ->
+  Logs.debug (fun m ->
       m "now for real processing event %a" Miragevpn.pp_event ev);
   match Miragevpn.handle conn.o_client ev with
   | Error e ->
@@ -288,10 +287,10 @@ let rec event conn =
       Lwt.return_unit
   | Ok (t', outs, action) ->
       conn.o_client <- t';
-      Logs.info (fun m ->
-          m "handling action %a"
-            Fmt.(option ~none:(any "none") Miragevpn.pp_action)
-            action);
+      Option.iter
+        (fun a ->
+          Logs.debug (fun m -> m "handling action %a" Miragevpn.pp_action a))
+        action;
       (match outs with
       | [] -> ()
       | _ ->
