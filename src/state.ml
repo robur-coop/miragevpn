@@ -206,10 +206,10 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B protocol %a my session %Lu packet %lu@.their \
-     session %Lu packet %lu"
-    t.compress pp_proto t.protocol
-    t.my_session_id t.my_packet_id t.their_session_id t.their_packet_id
+    "compression %B protocol %a my session %Lu packet %lu@.their session %Lu \
+     packet %lu"
+    t.compress pp_proto t.protocol t.my_session_id t.my_packet_id
+    t.their_session_id t.their_packet_id
 
 type client_state =
   | Resolving of

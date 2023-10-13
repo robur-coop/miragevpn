@@ -574,12 +574,13 @@ let incoming_control_client config rng session channel now op data =
 let init_channel how session hmac_algorithm keyid now ts =
   let channel = new_channel keyid ts in
   let timestamp = ptime_to_ts_exn now in
-  let session, transport, header = header session hmac_algorithm channel.transport timestamp in
+  let session, transport, header =
+    header session hmac_algorithm channel.transport timestamp
+  in
   let transport, m_id = next_message_id transport in
   let p = `Control (how, (header, m_id, Cstruct.empty)) in
   let out =
-    hmac_and_out session.protocol channel.keyid hmac_algorithm
-      session.my_hmac p
+    hmac_and_out session.protocol channel.keyid hmac_algorithm session.my_hmac p
   in
   let out_packets = IM.add m_id (ts, out) transport.out_packets in
   let transport = { transport with out_packets } in
@@ -881,8 +882,8 @@ let outgoing s data =
       let add_timestamp = ptime_to_ts_exn (s.now ()) in
       let hmac_algorithm = Config.get Auth s.config in
       let ctx, out =
-        static_out ~add_timestamp ctx hmac_algorithm
-          s.session.compress s.session.protocol s.rng data
+        static_out ~add_timestamp ctx hmac_algorithm s.session.compress
+          s.session.protocol s.rng data
       in
       let channel = incr s.channel out in
       let state = Client_static (ctx, c) in
@@ -925,7 +926,8 @@ let maybe_init_rekey s =
   in
   let hmac_algorithm = Config.get Auth s.config in
   let session, channel, out =
-    init_channel Packet.Soft_reset s.session hmac_algorithm keyid (s.now ()) (s.ts ())
+    init_channel Packet.Soft_reset s.session hmac_algorithm keyid (s.now ())
+      (s.ts ())
   in
   match s.state with
   | Client Ready ->
@@ -1091,8 +1093,7 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
         (* hmac each outgoing frame and encode *)
         let out =
           List.map
-            (hmac_and_out session.protocol key hmac_algorithm
-               session.my_hmac)
+            (hmac_and_out session.protocol key hmac_algorithm session.my_hmac)
             p
         in
         let out_packets =
@@ -1171,8 +1172,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     (set_ch state ch, out, act))
             | (`Ack _ | `Control _) as d -> (
                 match
-                  check_control_integrity bad_mac key p
-                    hmac_algorithm state.session.their_hmac
+                  check_control_integrity bad_mac key p hmac_algorithm
+                    state.session.their_hmac
                   >>= fun () ->
                   (* _first_ update state with most recent received packet_id *)
                   expected_packet state.session ch.transport d
@@ -1404,7 +1405,8 @@ let handle_client t s ev =
             init_session ~my_session_id ~protocol ~my_hmac ~their_hmac ()
           in
           let session, channel, out =
-            init_channel Packet.Hard_reset_client session hmac_algorithm 0 now ts
+            init_channel Packet.Hard_reset_client session hmac_algorithm 0 now
+              ts
           in
           let state = client (Handshaking (idx, ts)) in
           Ok ({ t with state; channel; session }, [ out ], None)
@@ -1493,8 +1495,8 @@ let handle_static_client t s keys ev =
               let hmac_algorithm = Config.get Auth t.config in
               let keys, payload =
                 let add_timestamp = ptime_to_ts_exn (t.now ()) in
-                static_out ~add_timestamp keys hmac_algorithm
-                  t.session.compress protocol t.rng ping
+                static_out ~add_timestamp keys hmac_algorithm t.session.compress
+                  protocol t.rng ping
               in
               let state = Client_static (keys, Ready) in
               Ok

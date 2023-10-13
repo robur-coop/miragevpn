@@ -241,9 +241,9 @@ module Conf_map = struct
       (fun err -> `Msg ("not a valid config: " ^ err))
       ( ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
       >>= fun () ->
-        (if mem Cipher t && get Cipher t <> "AES-256-CBC" then
-           Error "currently only supported Cipher is 'AES-256-CBC'"
-         else Ok ()))
+        if mem Cipher t && get Cipher t <> "AES-256-CBC" then
+          Error "currently only supported Cipher is 'AES-256-CBC'"
+        else Ok () )
 
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
