@@ -180,7 +180,6 @@ let next_free_ip config is_not_taken =
   isit (Ipaddr.V4.Prefix.first cidr)
 
 type session = {
-  hmac_algorithm : Mirage_crypto.Hash.hash;
   my_session_id : int64;
   my_packet_id : int32; (* this starts from 1l, indicates the next to-be-send *)
   my_hmac : Cstruct.t;
@@ -193,9 +192,8 @@ type session = {
 }
 
 let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
-    ?(protocol = `Tcp) ~hmac_algorithm ~my_hmac ~their_hmac () =
+    ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
   {
-    hmac_algorithm;
     my_session_id;
     my_packet_id = 1l;
     my_hmac;
@@ -208,16 +206,9 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B protocol %a hmac %s my session %Lu packet %lu@.their \
+    "compression %B protocol %a my session %Lu packet %lu@.their \
      session %Lu packet %lu"
     t.compress pp_proto t.protocol
-    (match t.hmac_algorithm with
-    | `MD5 -> "MD5"
-    | `SHA1 -> "SHA1"
-    | `SHA224 -> "SHA224"
-    | `SHA256 -> "SHA256"
-    | `SHA384 -> "SHA384"
-    | `SHA512 -> "SHA512")
     t.my_session_id t.my_packet_id t.their_session_id t.their_packet_id
 
 type client_state =
