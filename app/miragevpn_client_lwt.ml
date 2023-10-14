@@ -398,9 +398,7 @@ let jump _ filename =
      | Ok config -> establish_tunnel config)
 (* <- Lwt_main.run *)
 
-let report_with_ts ~dst () =
-  let buf = Buffer.create 200 in
-  let log_fmt = Format.formatter_of_buffer buf in
+let reporter_with_ts ~dst () =
   let pp_tags f tags =
     let pp tag () =
       let (Logs.Tag.V (def, value)) = tag in
@@ -412,33 +410,25 @@ let report_with_ts ~dst () =
   let report src level ~over k msgf =
     let tz_offset_s = Ptime_clock.current_tz_offset_s () in
     let posix_time = Ptime_clock.now () in
-    msgf @@ fun ?header ?(tags = Logs.Tag.empty) fmt ->
+    let src = Logs.Src.name src in
     let k _ =
-      if not (Logs.Tag.is_empty tags) then
-        Format.fprintf log_fmt ":%a" pp_tags tags;
-      Format.pp_print_flush log_fmt ();
-      let msg = Buffer.contents buf in
-      Buffer.clear buf;
-      Format.fprintf dst "%a: %s\n%!"
-        (Ptime.pp_rfc3339 ?tz_offset_s ())
-        posix_time msg;
       over ();
       k ()
     in
-    let src = Logs.Src.name src in
-    match header with
-    | None ->
-        Format.kfprintf k log_fmt ("%a [%s] " ^^ fmt) Logs.pp_level level src
-    | Some h ->
-        Format.kfprintf k log_fmt ("%a [%s:%s] " ^^ fmt) Logs.pp_level level src
-          h
+    msgf @@ fun ?header ?tags fmt ->
+    Format.kfprintf k dst
+      ("%a: %a%a [%s] @[" ^^ fmt ^^ "@]@.")
+      (Ptime.pp_rfc3339 ?tz_offset_s ())
+      posix_time
+      Fmt.(option ~none:(any "") (pp_tags ++ any " "))
+      tags Logs_fmt.pp_header (level, header) src
   in
   { Logs.report }
 
 let setup_log style_renderer level =
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
-  Logs.set_reporter (report_with_ts ~dst:Format.std_formatter ())
+  Logs.set_reporter (reporter_with_ts ~dst:Format.std_formatter ())
 
 open Cmdliner
 
