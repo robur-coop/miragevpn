@@ -81,6 +81,7 @@ let minimal_config =
   |> add Connect_timeout 120
   |> add Connect_retry_max `Unlimited
   |> add Proto (None, `Udp)
+  |> add Auth `SHA1
   (* Minimal contents of actual config file: *)
   |> add Cipher "AES-256-CBC"
   |> add Tls_mode `Client
@@ -663,15 +664,6 @@ let server_tls_crypt_v2 () =
         "second part of server key" b (Cstruct.to_string b');
       Alcotest.(check bool) "force-cookie" true force_cookie
 
-let crowbar_fuzz_config () =
-  Crowbar.add_test ~name:"Fuzzing doesn't crash Config.parse_client"
-    [ Crowbar.bytes ] (fun s ->
-      try
-        Crowbar.check
-          (ignore @@ parse_noextern_client s;
-           true)
-      with _ -> Crowbar.bad_test ())
-
 let tests =
   [
     ("minimal client config", `Quick, ok_minimal_client);
@@ -716,13 +708,21 @@ let tests =
     ( "parsing configuration 'wild-client-no-auth'",
       `Quick,
       parse_client_configuration "wild-client-no-auth.conf" );
-    (* ( "parsing configuration 'wild-client'", `Quick,
-       parse_client_configuration "wild-client.conf" ) ; -- auth *)
-    (* ( "parsing configuration 'windows-riseup-client'", `Quick,
-       parse_client_configuration "windows-riseup-client.conf" ); --auth *)
+    ( "parsing configuration 'wild-client'",
+      `Quick,
+      parse_client_configuration "wild-client.conf" );
+    ( "parsing configuration 'windows-riseup-client'",
+      `Quick,
+      parse_client_configuration "windows-riseup-client.conf" );
     ( "parsing 'tls-home-with-cipher'",
       `Quick,
       parse_client_configuration ~config:tls_home_conf_with_cipher
         "tls-home-with-cipher.conf" );
-    ("crowbar fuzzing", `Slow, crowbar_fuzz_config);
   ]
+
+let tests = [ ("Config tests", tests) ]
+
+let () =
+  Logs.set_reporter @@ Logs_fmt.reporter ~dst:Format.std_formatter ();
+  Logs.(set_level @@ Some Debug);
+  Alcotest.run "MirageVPN tests" tests

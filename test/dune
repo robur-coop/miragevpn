@@ -1,9 +1,14 @@
 (test
- (name test_engine)
- (modules test_engine config_tests)
- (libraries alcotest crowbar fmt logs.fmt miragevpn)
+ (name config_tests)
+ (modules config_tests)
+ (libraries alcotest fmt logs.fmt miragevpn)
  (deps
   (source_tree sample-configuration-files)))
+
+(test
+ (name crowbar_tests)
+ (modules crowbar_tests)
+ (libraries alcotest logs.fmt miragevpn crowbar))
 
 ;(executable
 ;  (public_name config_afl)

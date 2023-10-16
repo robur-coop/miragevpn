@@ -1463,11 +1463,12 @@ let a_not_implemented =
       string "log";
       (* TODO: *)
       string "redirect-gateway";
+      string "block-outside-dns";
+      string "remote-cert-eku";
       string "up";
       string "dh";
       string "explicit-exit-notify";
     ]
-  <* a_whitespace
   >>= fun key ->
   a_line not_control_char >>| fun rest ->
   Log.warn (fun m -> m "IGNORING %S %S" key rest);
