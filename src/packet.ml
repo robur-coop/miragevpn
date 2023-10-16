@@ -378,8 +378,9 @@ let decode_tls_data ?(with_premaster = false) buf =
      if Cstruct.length buf > end_of_data then
        let data = Cstruct.shift buf end_of_data in
        Log.warn (fun m ->
-           m "slack at end of tls_data %s (p is %s)@.%a"
-             (Cstruct.to_string data) p Cstruct.hexdump_pp data)
+           m "%u bytes slack at end of tls_data %s (p is %s)@.%a"
+             (Cstruct.length data) (Cstruct.to_string data) p Cstruct.hexdump_pp
+             data)
      else ();
      match (u, p) with "", "" -> None | _ -> Some (u, p))
   >>| fun user_pass -> { pre_master; random1; random2; options; user_pass }
