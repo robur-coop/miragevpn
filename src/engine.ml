@@ -466,6 +466,12 @@ let maybe_push_reply config = function
         if String.starts_with str ~prefix:p_r then
           let opts = String.sub str p_r_len (String.length str - p_r_len) in
           Config.merge_push_reply config opts
+        else if String.starts_with str ~prefix:"AUTH_FAILED" then
+          let msg =
+            "Authentication failed: "
+            ^ (List.tl (String.split_on_char ',' str) |> String.concat ",")
+          in
+          Error (`Msg msg)
         else
           Error (`Msg (Fmt.str "push request expected push_reply, got %S" str))
   | None -> Error (`Msg "push request expected data, received no data")
