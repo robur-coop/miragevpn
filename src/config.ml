@@ -16,7 +16,7 @@ type inlineable =
   | `Tls_auth of [ `Incoming | `Outgoing ] option
   | `Tls_cert
   | `Tls_key
-  | `Secret
+  | `Secret of [ `Incoming | `Outgoing ] option
   | `Tls_crypt_v2 of bool ]
 
 let string_of_inlineable = function
@@ -27,7 +27,7 @@ let string_of_inlineable = function
   | `Tls_auth _ -> "tls-auth"
   | `Tls_cert -> "cert"
   | `Tls_key -> "key"
-  | `Secret -> "secret"
+  | `Secret _ -> "secret"
   | `Tls_crypt_v2 _ -> "tls-crypt-v2"
 
 type inline_or_path =
@@ -190,7 +190,13 @@ module Conf_map = struct
     | Route_metric : [ `Default | `Metric of int ] k
     | Route_nopull : flag k
     | Script_security : int k
-    | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Secret
+        : ([ `Incoming | `Outgoing ] option
+          * Cstruct.t
+          * Cstruct.t
+          * Cstruct.t
+          * Cstruct.t)
+          k
     | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth
         : ([ `Incoming | `Outgoing ] option
@@ -304,6 +310,11 @@ module Conf_map = struct
         >>= fun () ->
         ensure_not Tls_crypt_v2_server
           "server tls-crypt-v2 key passed in tls-crypt-v2" )
+
+  let pp_opt_direction ppf = function
+    | None -> ()
+    | Some `Incoming -> Fmt.pf ppf " 1"
+    | Some `Outgoing -> Fmt.pf ppf " 0"
 
   let pp_key ppf (a, b, c, d) =
     Fmt.pf ppf
@@ -508,19 +519,17 @@ module Conf_map = struct
     | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.pp ip
     | Route_nopull, () -> p () "route-nopull"
     | Script_security, d -> p () "script-security %u" d
-    | Secret, (a, b, c, d) -> p () "<secret>\n%a\n</secret>" pp_key (a, b, c, d)
+    | Secret, (direction, a, b, c, d) ->
+        p () "secret [inline]%a\n<secret>\n%a\n</secret>" pp_opt_direction
+          direction pp_key (a, b, c, d)
     | Server, cidr ->
         p () "server %a %a" Ipaddr.V4.pp
           (Ipaddr.V4.Prefix.address cidr)
           Ipaddr.V4.pp
           (Ipaddr.V4.Prefix.netmask cidr)
     | Tls_auth, (direction, a, b, c, d) ->
-        p () "tls-auth [inline]%s\n<tls-auth>\n%a\n</tls-auth>"
-          (match direction with
-          | Some `Incoming -> " 1"
-          | Some `Outgoing -> " 0"
-          | None -> "")
-          pp_key (a, b, c, d)
+        p () "tls-auth [inline]%a\n<tls-auth>\n%a\n</tls-auth>" pp_opt_direction
+          direction pp_key (a, b, c, d)
     | Route_metric, `Metric i -> p () "route-metric %d" i
     | Route_metric, `Default -> p () "route-metric default"
     | Tls_cert, cert -> pp_cert cert
@@ -821,19 +830,21 @@ let a_key_payload str =
 
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 
-let a_tls_auth =
-  a_option_with_single_path "tls-auth" () >>= fun source ->
-  (* --key-direction or the optional arg here:
-     0 -> CN_OUTGOING
-     1 -> CN_INCOMING
-  *)
+let a_key_direction_option =
   choice
     [
       a_whitespace *> string "0" *> return (Some `Outgoing);
       a_whitespace *> string "1" *> return (Some `Incoming);
       return None;
     ]
-  >>| fun direction ->
+
+let a_tls_auth =
+  a_option_with_single_path "tls-auth" () >>= fun source ->
+  (* --key-direction or the optional arg here:
+     0 -> CN_OUTGOING
+     1 -> CN_INCOMING
+  *)
+  a_key_direction_option >>| fun direction ->
   match source with
   | `Need_inline () -> `Need_inline (`Tls_auth direction)
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
@@ -945,16 +956,17 @@ let a_tls_ciphersuite =
 let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
-let a_secret_payload str =
+let a_secret_payload direction str =
   match parse_string ~consume:Consume.All (inline_payload "secret") str with
-  | Ok (a, b, c, d) -> Ok (B (Secret, (a, b, c, d)))
+  | Ok (a, b, c, d) -> Ok (B (Secret, (direction, a, b, c, d)))
   | Error e -> Error e
 
 let a_secret =
-  a_option_with_single_path "secret" () >>| fun source ->
+  a_option_with_single_path "secret" () >>= fun source ->
+  a_key_direction_option >>| fun direction ->
   match source with
-  | `Need_inline () -> `Need_inline `Secret
-  | `Path (path, ()) -> `Path (path, `Secret)
+  | `Need_inline () -> `Need_inline (`Secret direction)
+  | `Path (path, ()) -> `Path (path, `Secret direction)
 
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
@@ -1596,7 +1608,7 @@ let parse_inline str = function
       parse_string ~consume:Consume.All
         (a_tls_crypt_v2_payload force_cookie)
         str
-  | `Secret -> a_secret_payload str
+  | `Secret direction -> a_secret_payload direction str
   | kind ->
       Error
         ("config-parser: not sure how to parse inline "
@@ -1607,9 +1619,9 @@ let eq : eq =
     f =
       (fun (type x) (k : x k) (v : x) (v2 : x) ->
         match (k, v, v2) with
-        | Secret, (a, b, c, d), (a', b', c', d') ->
-            Cstruct.equal a a' && Cstruct.equal b b' && Cstruct.equal c c'
-            && Cstruct.equal d d'
+        | Secret, (dir, a, b, c, d), (dir', a', b', c', d') ->
+            dir = dir' && Cstruct.equal a a' && Cstruct.equal b b'
+            && Cstruct.equal c c' && Cstruct.equal d d'
         | Tls_auth, (dir, a, b, c, d), (dir', a', b', c', d') ->
             dir = dir' && Cstruct.equal a a' && Cstruct.equal b b'
             && Cstruct.equal c c' && Cstruct.equal d d'
@@ -1816,7 +1828,8 @@ let parse_next (effect : parser_effect) initial_state :
             parse_inline x `Connection >>= resolve_add_conflict acc
             >>= fun acc -> loop acc tl
         | `Inline ("secret", payload) ->
-            parse_inline payload `Secret >>= resolve_add_conflict acc
+            (* If there's a "secret [inline] dir" earlier this doesn't trigger inshallah *)
+            parse_inline payload (`Secret None) >>= resolve_add_conflict acc
             >>= fun acc -> loop acc tl
         | `Inline (fname, _) ->
             (* Except for "connection" all blocks must be warranted by an
