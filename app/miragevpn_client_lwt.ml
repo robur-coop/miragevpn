@@ -417,10 +417,10 @@ let reporter_with_ts ~dst () =
     in
     msgf @@ fun ?header ?tags fmt ->
     Format.kfprintf k dst
-      ("%a: %a%a [%s] @[" ^^ fmt ^^ "@]@.")
+      ("%a:%a %a [%s] @[" ^^ fmt ^^ "@]@.")
       (Ptime.pp_rfc3339 ?tz_offset_s ())
       posix_time
-      Fmt.(option ~none:(any "") (pp_tags ++ any " "))
+      Fmt.(option ~none:(any "") pp_tags)
       tags Logs_fmt.pp_header (level, header) src
   in
   { Logs.report }
