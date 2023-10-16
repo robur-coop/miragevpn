@@ -222,7 +222,7 @@ type conn = {
     [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
   data_mvar : Cstruct.t list Lwt_mvar.t;
-  est_mvar : (Miragevpn.ip_config * int) Lwt_mvar.t;
+  est_mvar : (Miragevpn.ip_config * int, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
 
@@ -275,7 +275,7 @@ let handle_action conn = function
   | `Payload data -> Lwt_mvar.put conn.data_mvar data
   | `Established (ip, mtu) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
-      Lwt_mvar.put conn.est_mvar (ip, mtu)
+      Lwt_mvar.put conn.est_mvar (Ok (ip, mtu))
 
 let rec event conn =
   Lwt_mvar.take conn.event_mvar >>= fun ev ->
@@ -283,8 +283,8 @@ let rec event conn =
       m "now for real processing event %a" Miragevpn.pp_event ev);
   match Miragevpn.handle conn.o_client ev with
   | Error e ->
-      Logs.err (fun m -> m "miragevpn handle failed %a" Miragevpn.pp_error e);
-      Lwt.return_unit
+      Logs.err (fun m -> m "miragevpn handle failed: %a" Miragevpn.pp_error e);
+      Lwt_mvar.put conn.est_mvar (Error ()) >>= fun () -> Lwt.return_unit
   | Ok (t', outs, action) ->
       conn.o_client <- t';
       Option.iter
@@ -341,7 +341,7 @@ let establish_tunnel config =
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "client construction failed %s" msg);
       failwith msg
-  | Ok (o_client, action) ->
+  | Ok (o_client, action) -> (
       let data_mvar = Lwt_mvar.create_empty ()
       and est_mvar = Lwt_mvar.create_empty ()
       and event_mvar = Lwt_mvar.create_empty () in
@@ -363,10 +363,13 @@ let establish_tunnel config =
       in
       Lwt.async (fun () -> handle_action conn action);
       Logs.info (fun m -> m "waiting for established");
-      Lwt_mvar.take est_mvar >>= fun (ip_config, mtu) ->
-      Logs.info (fun m ->
-          m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config mtu);
-      send_recv conn config ip_config mtu
+      Lwt_mvar.take est_mvar >>= function
+      | Error () -> Lwt.return_error (`Msg "Impossible to establish a channel")
+      | Ok (ip_config, mtu) ->
+          Logs.info (fun m ->
+              m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config
+                mtu);
+          send_recv conn config ip_config mtu)
 
 let string_of_file ~dir filename =
   let file =
