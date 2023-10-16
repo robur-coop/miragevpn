@@ -91,13 +91,13 @@ let ptime_to_ts_exn now =
   | None -> assert false (* this will break in 2038-01-19 *)
   | Some x -> Int32.of_int x
 
-let compute_hmac key p hmac_algorithm hmac_key =
-  let tbs = Packet.to_be_signed key p in
+let compute_hmac key p tls_crypt hmac_algorithm hmac_key =
+  let tbs = Packet.to_be_signed ~tls_crypt key p in
   Mirage_crypto.Hash.mac hmac_algorithm ~key:hmac_key tbs
 
 let hmac_and_out protocol key ?tls_crypt hmac_algorithm hmac_key
     (p : Packet.pkt) =
-  let hmac = compute_hmac key p hmac_algorithm hmac_key in
+  let hmac = compute_hmac key p (Option.is_some tls_crypt) hmac_algorithm hmac_key in
   let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode protocol ?tls_crypt (key, p')
@@ -119,7 +119,7 @@ let hmacs config =
       in
       Ok (s a, s b)
   | None, Some ((_key1, hmac1, _key2, hmac2), _wkc, _force_cookie) ->
-      Ok (s hmac1, s hmac2)
+      Ok (s hmac2, s hmac1)
 
 let secret config =
   match Config.find Secret config with
@@ -1056,7 +1056,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
 let check_control_integrity err key p hmac_algorithm hmac_key =
   let open Result.Infix in
   let computed_mac, packet_mac =
-    (compute_hmac key p hmac_algorithm hmac_key, Packet.((header p).hmac))
+    (compute_hmac key p false (* <-- FIXME *) hmac_algorithm hmac_key, Packet.((header p).hmac))
   in
   guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
   Log.info (fun m -> m "mac good")

@@ -167,6 +167,39 @@ let to_be_signed_header ?(more = 0) op header =
   | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x);
   (buf, 18 + acks + rses)
 
+let to_be_signed_tls_crypt ?(more = 0) op header =
+  (* op_key ++ session_id ++ packet_id ++ timestamp ++ ack_len ++ acks ++ remote_session ++ msg_id *)
+  let acks =
+    match header.ack_message_ids with
+    | [] -> 0
+    | x -> List.length x * packet_id_len
+  and rses = match header.remote_session with None -> 0 | Some _ -> 8 in
+  let buflen = packet_id_len + 4 + 1 + 8 + 1 + acks + rses + more in
+  let buf = Cstruct.create buflen in
+  Cstruct.set_uint8 buf 0 op;
+  Cstruct.BE.set_uint64 buf 1 header.local_session;
+  Cstruct.BE.set_uint32 buf 9 header.packet_id;
+  Cstruct.BE.set_uint32 buf 13 header.timestamp;
+  Cstruct.set_uint8 buf 17 (List.length header.ack_message_ids);
+  let rec enc_ack off = function
+    | [] -> ()
+    | hd :: tl ->
+        Cstruct.BE.set_uint32 buf off hd;
+        enc_ack (off + 4) tl
+  in
+  enc_ack 18 header.ack_message_ids;
+  (match header.remote_session with
+  | None -> ()
+  | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x);
+  (buf, 18 + acks + rses)
+
+
+let to_be_signed_header ~tls_crypt ?(more = 0) op header =
+  if tls_crypt then
+    to_be_signed_tls_crypt ~more op header
+  else
+    to_be_signed_header ~more op header
+
 type control = header * packet_id * Cstruct.t
 
 let pp_control ppf (hdr, id, payload) =
@@ -181,45 +214,43 @@ let decode_control ~hmac_len buf =
   and payload = Cstruct.shift buf (off + 4) in
   (header, message_id, payload)
 
-let tls_crypt_encrypt ~hmac ~key ?(off = 0) ?len buf =
+let tls_crypt_encrypt ~hmac ~key ?(off = 0) buf =
   let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
-  let len =
-    match len with Some len -> len | None -> Cstruct.length buf - off
-  in
+  let len = Cstruct.length buf - off in
   let iv = Cstruct.sub hmac 0 (128 / 8) in
   let ctr = AES_CTR.ctr_of_cstruct iv in
   let key = AES_CTR.of_secret (Cstruct.sub key 0 32 (* 256 bits *)) in
   AES_CTR.encrypt ~key ~ctr (Cstruct.sub buf off len)
 
-let encode_control ?tls_crypt (header, packet_id, payload) =
+let encode_control ~tls_crypt (header, packet_id, payload) =
   let hdr_buf, len = encode_header ~swap_hmac_and_pid:(Option.is_some tls_crypt) header in
   let packet_id_buf = Cstruct.create 4 in
   Cstruct.BE.set_uint32 packet_id_buf 0 packet_id;
   let buf, len =
     ( Cstruct.concat [ hdr_buf; packet_id_buf; payload ],
-      len + Cstruct.length payload + 4 )
+      len + 4 + Cstruct.length payload )
   in
   match tls_crypt with
-  | Some ((key, _hmac, _their_key, _their_hmac), _wkc) ->
+  | Some ((_their_key, _their_hmac, key, _hmac), _wkc) ->
       (* here, we encrypt only the payload part which includes ACKs. Only the first part of the header:
          [opcode + session_id + hmac + packed_id + timestamp] is not encrypted. *)
+      let cleartext_len = (* 1 + *) 8 + Mirage_crypto.Hash.SHA256.digest_size + 4 + 4 in
       let encrypted =
-        tls_crypt_encrypt ~hmac:header.hmac ~key buf
-          ~off:(17 + Mirage_crypto.Hash.SHA256.digest_size)
+        tls_crypt_encrypt ~hmac:header.hmac ~key buf ~off:cleartext_len
       in
       let buf =
         Cstruct.concat
           [
-            Cstruct.sub buf 0 (17 + Mirage_crypto.Hash.SHA256.digest_size);
+            Cstruct.sub buf 0 cleartext_len;
             encrypted;
           ]
       in
       (buf, Cstruct.length buf)
   | None -> (buf, len)
 
-let to_be_signed_control op (header, packet_id, payload) =
+let to_be_signed_control ~tls_crypt op (header, packet_id, payload) =
   (* rly? not length!? *)
-  let buf, off = to_be_signed_header ~more:packet_id_len op header in
+  let buf, off = to_be_signed_header ~tls_crypt ~more:packet_id_len op header in
   Cstruct.BE.set_uint32 buf off packet_id;
   Cstruct.append buf payload
 
@@ -269,15 +300,15 @@ let encode ?tls_crypt proto (key, p) =
   let payload, len =
     match p with
     | `Ack ack -> encode_header ack
-    | `Control (_, control) -> encode_control ?tls_crypt control
+    | `Control (_, control) -> encode_control ~tls_crypt control
     | `Data d -> (d, Cstruct.length d)
   in
-  let op_buf =
+  let op_buf, len =
     let b = Cstruct.create 1 in
     let op = op_key (operation p) key in
     Cstruct.set_uint8 b 0 op;
     (* + 1 byte *)
-    b
+    b, succ len
   in
   let maybe_wkc, len =
     match (tls_crypt, p) with
@@ -286,14 +317,15 @@ let encode ?tls_crypt proto (key, p) =
         (wkc, len + Cstruct.length wkc)
     | _ -> (Cstruct.empty, len)
   in
-  let prefix = encode_protocol proto (succ len) in
+  assert (len = Cstruct.lenv [ op_buf; payload; maybe_wkc ]);
+  let prefix = encode_protocol proto len in
   Cstruct.concat [ prefix; op_buf; payload; maybe_wkc ]
 
-let to_be_signed key p =
+let to_be_signed ~tls_crypt key p =
   let op = op_key (operation p) key in
   match p with
-  | `Ack hdr -> fst (to_be_signed_header op hdr)
-  | `Control (_, c) -> to_be_signed_control op c
+  | `Ack hdr -> fst (to_be_signed_header ~tls_crypt op hdr)
+  | `Control (_, c) -> to_be_signed_control ~tls_crypt op c
   | `Data _ -> assert false
 
 type pkt =
