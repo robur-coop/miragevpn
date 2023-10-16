@@ -118,11 +118,14 @@ let hmacs config =
 let secret config =
   match Config.find Secret config with
   | None -> Error (`Msg "no pre-shared secret found")
-  | Some (key1, hmac1, _key2, _hmac2) ->
+  | Some (dir, key1, hmac1, key2, hmac2) -> (
       let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
       let hm cs = Cstruct.sub cs 0 hmac_len
       and cipher cs = Cstruct.sub cs 0 32 in
-      Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
+      match dir with
+      | None -> Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
+      | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)
+      | Some `Outgoing -> Ok (cipher key1, hm hmac1, cipher key2, hm hmac2))
 
 let client config ts now rng =
   let open Result.Infix in

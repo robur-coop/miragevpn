@@ -143,7 +143,13 @@ module Config : sig
         (** Default metric for [Route _] directives *)
     | Route_nopull : flag k
     | Script_security : int k
-    | Secret : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Secret
+        : ([ `Incoming | `Outgoing ] option
+          * Cstruct.t
+          * Cstruct.t
+          * Cstruct.t
+          * Cstruct.t)
+          k
     | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth
         : ([ `Incoming | `Outgoing ] option
