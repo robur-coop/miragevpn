@@ -310,7 +310,7 @@ let mtu config compress =
   (* padding, done on packet_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
-    4
+    Packet.packet_id_len
     + (* packet id *)
     (if static_key_mode then 4 else 0)
     +

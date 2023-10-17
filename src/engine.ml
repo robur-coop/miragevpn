@@ -879,21 +879,21 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let hdr_len =
-    Packet.packet_id_len
-    + (match add_timestamp with None -> 0 | Some _ -> 4)
-    + if compress then 1 else 0
+  let packet_id =
+    let buf = Cstruct.create Packet.packet_id_len in
+    Cstruct.BE.set_uint32 buf 0 ctx.my_packet_id;
+    buf
   in
-  let hdr = Cstruct.create hdr_len in
-  Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
-  (match add_timestamp with
-  | None -> ()
-  | Some ts -> Cstruct.BE.set_uint32 hdr Packet.packet_id_len ts);
-  (* TODO check whether compress and AEAD is the same *)
-  if compress then
-    (* byte (hdr_len - 1) is compression -- 0xFA is "no compression" *)
-    Cstruct.set_uint8 hdr (pred hdr_len) 0xfa;
   let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
+  let compression =
+    if compress then (
+      let buf = Cstruct.create 1 in
+      (* 0xFA is "no compression" *)
+      Cstruct.set_uint8 buf 0 0xfa;
+      buf)
+    else Cstruct.empty
+  in
+  let data = Cstruct.append compression data in
   match ctx.keys with
   | AES_CBC { my_key; my_hmac; _ } ->
       (* the wire format of CBC data packets is:
@@ -902,6 +902,13 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
          - hmac over the entire encrypted payload
            - timestamp only used in static key mode (32bit, seconds since unix epoch)
       *)
+      let ts =
+        let ts_len = Option.fold ~none:0 ~some:(fun _ -> 4) add_timestamp in
+        let ts_buf = Cstruct.create ts_len in
+        Option.iter (fun ts -> Cstruct.BE.set_uint32 ts_buf 0 ts) add_timestamp;
+        ts_buf
+      in
+      let hdr = Cstruct.append packet_id ts in
       let iv = rng Packet.cipher_block_size
       and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
       let open Mirage_crypto in
@@ -911,34 +918,20 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
       let packet = Cstruct.append hmac payload in
       (ctx', packet)
   | AES_GCM { my_key; my_implicit_iv; _ } ->
-      assert (Cstruct.length hdr = Packet.packet_id_len);
-      let nonce =
-        let buf = Cstruct.create 12 in
-        Cstruct.BE.set_uint32 buf 0 ctx.my_packet_id;
-        Cstruct.blit my_implicit_iv 0 buf Packet.packet_id_len
-          (Cstruct.length my_implicit_iv);
-        buf
-      in
+      let nonce = Cstruct.append packet_id my_implicit_iv in
       let enc, tag =
         Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag ~key:my_key
-          ~nonce ~adata:hdr data
+          ~nonce ~adata:packet_id data
       in
-      let packet = Cstruct.concat [ hdr; tag; enc ] in
+      let packet = Cstruct.concat [ packet_id; tag; enc ] in
       (ctx', packet)
   | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
-      assert (Cstruct.length hdr = Packet.packet_id_len);
-      let nonce =
-        let buf = Cstruct.create 12 in
-        Cstruct.BE.set_uint32 buf 0 ctx.my_packet_id;
-        Cstruct.blit my_implicit_iv 0 buf Packet.packet_id_len
-          (Cstruct.length my_implicit_iv);
-        buf
-      in
+      let nonce = Cstruct.append packet_id my_implicit_iv in
       let enc, tag =
         Mirage_crypto.Chacha20.authenticate_encrypt_tag ~key:my_key ~nonce
-          ~adata:hdr data
+          ~adata:packet_id data
       in
-      let packet = Cstruct.concat [ hdr; tag; enc ] in
+      let packet = Cstruct.concat [ packet_id; tag; enc ] in
       (ctx', packet)
 
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
@@ -1093,11 +1086,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
       let iv, data = Cstruct.split data Packet.cipher_block_size in
       let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
       (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-      let hdr_len =
-        Packet.packet_id_len
-        + (if add_timestamp then 4 else 0)
-        + if compress then 1 else 0
-      in
+      let hdr_len = Packet.packet_id_len + if add_timestamp then 4 else 0 in
       guard
         (Cstruct.length dec >= hdr_len)
         (Result.msgf "payload too short (need %d bytes): %a" hdr_len
@@ -1107,27 +1096,18 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
       Log.debug (fun m ->
           m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
       (* TODO validate ts if provided (avoid replay) *)
-      unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len) >>= fun data ->
-      if compress then
-        (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
-        match Cstruct.get_uint8 dec (pred hdr_len) with
-        | 0xFA -> Ok data
-        | 0x66 ->
-            Lzo.uncompress_with_buffer (Cstruct.to_bigarray data)
-            >>| Cstruct.of_string
-            >>| fun lz ->
-            Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
-            lz
-        | comp ->
-            Result.error_msgf "unknown compression %#X in packet:@.%a" comp
-              Cstruct.hexdump_pp dec
-      else Ok data
+      unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
   | AES_GCM { their_key; their_implicit_iv; _ } ->
+      let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+      guard
+        (Cstruct.length data >= Packet.packet_id_len + tag_len)
+        (Result.msgf "payload too short (need %d bytes): %a"
+           (Packet.packet_id_len + tag_len)
+           Cstruct.hexdump_pp data)
+      >>= fun () ->
       let packet_id, tag, payload =
         let p_id, rest = Cstruct.split data Packet.packet_id_len in
-        let tag, payload =
-          Cstruct.split rest Mirage_crypto.Cipher_block.AES.GCM.tag_size
-        in
+        let tag, payload = Cstruct.split rest tag_len in
         (p_id, tag, payload)
       in
       let nonce = Cstruct.append packet_id their_implicit_iv in
@@ -1140,9 +1120,16 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
           m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
       Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
   | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
+      let tag_len = Mirage_crypto.Chacha20.tag_size in
+      guard
+        (Cstruct.length data >= Packet.packet_id_len + tag_len)
+        (Result.msgf "payload too short (need %d bytes): %a"
+           (Packet.packet_id_len + tag_len)
+           Cstruct.hexdump_pp data)
+      >>= fun () ->
       let packet_id, tag, payload =
         let p_id, rest = Cstruct.split data Packet.packet_id_len in
-        let tag, payload = Cstruct.split rest Mirage_crypto.Chacha20.tag_size in
+        let tag, payload = Cstruct.split rest tag_len in
         (p_id, tag, payload)
       in
       let nonce = Cstruct.append packet_id their_implicit_iv in
@@ -1154,6 +1141,26 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
       Log.debug (fun m ->
           m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
       Option.to_result ~none:(`Msg "AEAD decrypt failed") plain)
+  >>= fun data ->
+  (if compress then
+     (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
+     guard
+       (Cstruct.length data >= 1)
+       (`Msg "payload too short, need compression byte")
+     >>= fun () ->
+     let comp, data = Cstruct.split data 1 in
+     match Cstruct.get_uint8 comp 0 with
+     | 0xFA -> Ok data
+     | 0x66 ->
+         Lzo.uncompress_with_buffer (Cstruct.to_bigarray data)
+         >>| Cstruct.of_string
+         >>| fun lz ->
+         Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
+         lz
+     | comp ->
+         Result.error_msgf "unknown compression %#X in packet:@.%a" comp
+           Cstruct.hexdump_pp data
+   else Ok data)
   >>| fun data' ->
   if Cstruct.equal data' ping then (
     Log.warn (fun m -> m "received ping!");
