@@ -884,7 +884,6 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     Cstruct.BE.set_uint32 buf 0 ctx.my_packet_id;
     buf
   in
-  let ctx' = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
   let compression =
     if compress then (
       let buf = Cstruct.create 1 in
@@ -894,45 +893,45 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     else Cstruct.empty
   in
   let data = Cstruct.append compression data in
-  match ctx.keys with
-  | AES_CBC { my_key; my_hmac; _ } ->
-      (* the wire format of CBC data packets is:
-         hmac (IV enc(packet_id [timestamp] [compression] data pad))
-         where:
-         - hmac over the entire encrypted payload
-           - timestamp only used in static key mode (32bit, seconds since unix epoch)
-      *)
-      let ts =
-        let ts_len = Option.fold ~none:0 ~some:(fun _ -> 4) add_timestamp in
-        let ts_buf = Cstruct.create ts_len in
-        Option.iter (fun ts -> Cstruct.BE.set_uint32 ts_buf 0 ts) add_timestamp;
-        ts_buf
-      in
-      let hdr = Cstruct.append packet_id ts in
-      let iv = rng Packet.cipher_block_size
-      and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
-      let open Mirage_crypto in
-      let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
-      let payload = Cstruct.append iv enc in
-      let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
-      let packet = Cstruct.append hmac payload in
-      (ctx', packet)
-  | AES_GCM { my_key; my_implicit_iv; _ } ->
-      let nonce = Cstruct.append packet_id my_implicit_iv in
-      let enc, tag =
-        Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag ~key:my_key
-          ~nonce ~adata:packet_id data
-      in
-      let packet = Cstruct.concat [ packet_id; tag; enc ] in
-      (ctx', packet)
-  | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
-      let nonce = Cstruct.append packet_id my_implicit_iv in
-      let enc, tag =
-        Mirage_crypto.Chacha20.authenticate_encrypt_tag ~key:my_key ~nonce
-          ~adata:packet_id data
-      in
-      let packet = Cstruct.concat [ packet_id; tag; enc ] in
-      (ctx', packet)
+  ( { ctx with my_packet_id = Int32.succ ctx.my_packet_id },
+    match ctx.keys with
+    | AES_CBC { my_key; my_hmac; _ } ->
+        (* the wire format of CBC data packets is:
+           hmac (IV enc(packet_id [timestamp] [compression] data pad))
+           where:
+           - hmac over the entire encrypted payload
+             - timestamp only used in static key mode (32bit, seconds since unix epoch)
+        *)
+        let ts =
+          let ts_len = Option.fold ~none:0 ~some:(fun _ -> 4) add_timestamp in
+          let ts_buf = Cstruct.create ts_len in
+          Option.iter
+            (fun ts -> Cstruct.BE.set_uint32 ts_buf 0 ts)
+            add_timestamp;
+          ts_buf
+        in
+        let hdr = Cstruct.append packet_id ts in
+        let iv = rng Packet.cipher_block_size
+        and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
+        let open Mirage_crypto in
+        let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
+        let payload = Cstruct.append iv enc in
+        let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
+        Cstruct.append hmac payload
+    | AES_GCM { my_key; my_implicit_iv; _ } ->
+        let nonce = Cstruct.append packet_id my_implicit_iv in
+        let enc, tag =
+          Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag
+            ~key:my_key ~nonce ~adata:packet_id data
+        in
+        Cstruct.concat [ packet_id; tag; enc ]
+    | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
+        let nonce = Cstruct.append packet_id my_implicit_iv in
+        let enc, tag =
+          Mirage_crypto.Chacha20.authenticate_encrypt_tag ~key:my_key ~nonce
+            ~adata:packet_id data
+        in
+        Cstruct.concat [ packet_id; tag; enc ] )
 
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
