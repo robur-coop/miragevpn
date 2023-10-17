@@ -300,28 +300,33 @@ let pp_tls_data ppf t =
 
 let key_method = 0x02
 
+(* strings are
+   (a) length-prefixed (2 bytes, big endian);
+   (b) terminated with 0 byte;
+   the terminating 0 byte is accounted for the length *)
+let write_string str =
+  let len = String.length str in
+  let buf = Cstruct.create (len + 3) in
+  Cstruct.blit_from_string str 0 buf 2 len;
+  Cstruct.BE.set_uint16 buf 0 (succ len);
+  buf
+
 let encode_tls_data t =
   let prefix = Cstruct.create 5 in
   (* 4 zero bytes, and one byte key_method *)
   Cstruct.set_uint8 prefix 4 key_method;
   let key_source = Cstruct.concat [ t.pre_master; t.random1; t.random2 ] in
-  let opt_len = Cstruct.create 2 in
   (* the options field, and also username and password are zero-terminated
      in addition to be length-prefixed... *)
-  let null = Cstruct.create 1 in
-  Cstruct.BE.set_uint16 opt_len 0 (succ (String.length t.options));
-  let u_p =
+  let opt = write_string t.options
+  and u_p =
     match t.user_pass with
     | None -> Cstruct.empty
     | Some (u, p) ->
         (* username and password are each 2 byte length, <value>, 0x00 *)
-        let u_l = Cstruct.create 2 and p_l = Cstruct.create 2 in
-        Cstruct.BE.set_uint16 u_l 0 (succ (String.length u));
-        Cstruct.BE.set_uint16 p_l 0 (succ (String.length p));
-        Cstruct.concat
-          [ u_l; Cstruct.of_string u; null; p_l; Cstruct.of_string p; null ]
-  and opt = Cstruct.of_string t.options in
-  Cstruct.concat [ prefix; key_source; opt_len; opt; null; u_p ]
+        Cstruct.append (write_string u) (write_string p)
+  in
+  Cstruct.concat [ prefix; key_source; opt; u_p ]
 
 let maybe_string prefix buf off = function
   | 0 | 1 -> Ok ""
