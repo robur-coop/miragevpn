@@ -156,6 +156,7 @@ let client config ts now rng =
   | Error e, Error _ -> Error e
   | Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
       (* in static key mode, only CBC is allowed *)
+      assert (Config.get Cipher config = `AES_256_CBC);
       let keys =
         let keys =
           AES_CBC
