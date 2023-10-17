@@ -39,7 +39,8 @@ module Config : sig
         [bind ipv6only] is unimplemented.
     *)
     | Ca : X509.Certificate.t list k
-    | Cipher : string k
+    | Cipher
+        : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k

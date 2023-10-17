@@ -28,17 +28,39 @@ let init_transport =
     out_packets = IM.empty;
   }
 
+type key_variant =
+  | AES_CBC of {
+      my_key : Mirage_crypto.Cipher_block.AES.CBC.key;
+      my_hmac : Cstruct.t;
+      their_key : Mirage_crypto.Cipher_block.AES.CBC.key;
+      their_hmac : Cstruct.t;
+    }
+  | AES_GCM of {
+      my_key : Mirage_crypto.Cipher_block.AES.GCM.key;
+      my_implicit_iv : Cstruct.t;
+      their_key : Mirage_crypto.Cipher_block.AES.GCM.key;
+      their_implicit_iv : Cstruct.t;
+    }
+  | CHACHA20_POLY1305 of {
+      my_key : Mirage_crypto.Chacha20.key;
+      my_implicit_iv : Cstruct.t;
+      their_key : Mirage_crypto.Chacha20.key;
+      their_implicit_iv : Cstruct.t;
+    }
+
 type keys = {
-  my_key : Mirage_crypto.Cipher_block.AES.CBC.key;
-  my_hmac : Cstruct.t;
   my_packet_id : int32;
-  their_key : Mirage_crypto.Cipher_block.AES.CBC.key;
-  their_hmac : Cstruct.t;
   their_packet_id : int32;
+  keys : key_variant;
 }
 
 let pp_keys ppf t =
-  Fmt.pf ppf "keys: my id %lu, their id %lu" t.my_packet_id t.their_packet_id
+  Fmt.pf ppf "%s keys: my id %lu, their id %lu"
+    (match t.keys with
+    | AES_CBC _ -> "AES-CBC"
+    | AES_GCM _ -> "AES-GCM"
+    | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
+    t.my_packet_id t.their_packet_id
 
 type channel_state =
   | Expect_reset
