@@ -315,7 +315,6 @@ let encode_tls_data t =
   let prefix = Cstruct.create 5 in
   (* 4 zero bytes, and one byte key_method *)
   Cstruct.set_uint8 prefix 4 key_method;
-  let key_source = Cstruct.concat [ t.pre_master; t.random1; t.random2 ] in
   (* the options field, and also username and password are zero-terminated
      in addition to be length-prefixed... *)
   let opt = write_string t.options
@@ -323,9 +322,18 @@ let encode_tls_data t =
     (* always send username and password, empty if there's none *)
     let u, p = Option.value ~default:("", "") t.user_pass in
     (* username and password are each 2 byte length, <value>, 0x00 *)
-    Cstruct.append (write_string u) (write_string p)
+    [ write_string u; write_string p ]
   in
-  Cstruct.concat [ prefix; key_source; opt; u_p ]
+  (* prefix - 4 zero bytes, key_method
+     pre_master
+     random1
+     random2
+     opt string
+     user string
+     password string
+     peer_info
+  *)
+  Cstruct.concat ([ prefix; t.pre_master; t.random1; t.random2; opt ] @ u_p)
 
 let maybe_string prefix buf off = function
   | 0 | 1 -> Ok ""
