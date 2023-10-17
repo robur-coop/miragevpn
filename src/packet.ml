@@ -320,11 +320,10 @@ let encode_tls_data t =
      in addition to be length-prefixed... *)
   let opt = write_string t.options
   and u_p =
-    Option.fold ~none:Cstruct.empty
-      ~some:(fun (u, p) ->
-        (* username and password are each 2 byte length, <value>, 0x00 *)
-        Cstruct.append (write_string u) (write_string p))
-      t.user_pass
+    (* always send username and password, empty if there's none *)
+    let u, p = Option.value ~default:("", "") t.user_pass in
+    (* username and password are each 2 byte length, <value>, 0x00 *)
+    Cstruct.append (write_string u) (write_string p)
   in
   Cstruct.concat [ prefix; key_source; opt; u_p ]
 
