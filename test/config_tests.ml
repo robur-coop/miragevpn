@@ -83,7 +83,7 @@ let minimal_config =
   |> add Proto (None, `Udp)
   |> add Auth `SHA1
   (* Minimal contents of actual config file: *)
-  |> add Cipher "AES-256-CBC"
+  |> add Cipher `AES_256_CBC
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser", "testpass")
   |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp) ]
@@ -498,7 +498,7 @@ let client_conf =
   |> add_b (a_cert_payload (string_of_file "client.crt"))
   |> add_b (a_key_payload (string_of_file "client.key"))
   |> add Remote_cert_tls `Server
-  |> add Tls_auth tls_auth |> add Cipher "AES-256-CBC" |> add Verb 3
+  |> add Tls_auth tls_auth |> add Cipher `AES_256_CBC |> add Verb 3
 
 let tls_home_conf =
   let open Miragevpn.Config in
@@ -510,7 +510,7 @@ let tls_home_conf =
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
   |> add_b (a_cert_payload (string_of_file "client.crt"))
   |> add_b (a_key_payload (string_of_file "client.key"))
-  |> add Cipher "AES-256-CBC" |> add Verb 3
+  |> add Cipher `AES_256_CBC |> add Verb 3
 
 let tls_home_conf_with_cipher =
   let open Miragevpn.Config in
@@ -600,7 +600,7 @@ efabaa5e34619f13adbe58b6c83536d3
   |> add Remote_cert_tls `Server
   |> add Ping_interval (`Seconds 10)
   |> add Ping_timeout (`Restart 30)
-  |> add Cipher "AES-256-CBC" |> add Persist_key () |> add Comp_lzo ()
+  |> add Cipher `AES_256_CBC |> add Persist_key () |> add Comp_lzo ()
   |> add Tun_mtu 1500 |> add Mssfix 1200 |> add Passtos () |> add Verb 3
   |> add Replay_window (512, 60)
   |> add Mute_replay_warnings ()

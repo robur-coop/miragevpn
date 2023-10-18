@@ -134,7 +134,8 @@ module Conf_map = struct
           option
           k
     | Ca : X509.Certificate.t list k
-    | Cipher : string k
+    | Cipher
+        : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k
@@ -242,14 +243,9 @@ module Conf_map = struct
   let is_valid_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
-    let open Result.Infix in
     Result.map_error
       (fun err -> `Msg ("not a valid config: " ^ err))
-      ( ensure_mem Cipher "config must specify 'cipher AES-256-CBC'"
-      >>= fun () ->
-        if mem Cipher t && get Cipher t <> "AES-256-CBC" then
-          Error "currently only supported Cipher is 'AES-256-CBC'"
-        else Ok () )
+      (ensure_mem Cipher "config must specify 'cipher'")
 
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
@@ -401,6 +397,14 @@ module Conf_map = struct
         | `SHA384 -> "SHA384"
         | `SHA512 -> "SHA512")
     in
+    let pp_cipher ppf v =
+      Fmt.string ppf
+        (match v with
+        | `AES_256_CBC -> "AES-256-CBC"
+        | `AES_128_GCM -> "AES-128-GCM"
+        | `AES_256_GCM -> "AES-256-GCM"
+        | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305")
+    in
     match (k, v) with
     | Auth, h -> p () "auth %a" pp_digest_algorithm h
     | Auth_nocache, () -> p () "auth-nocache"
@@ -425,7 +429,7 @@ module Conf_map = struct
         | Some (`Domain n) -> p () "%alocal %a" sep () Domain_name.pp n
         | Some (`Ip ip) -> p () "%alocal %a" sep () Ipaddr.pp ip)
     | Ca, ca -> pp_ca ca
-    | Cipher, cipher -> p () "cipher %s" cipher
+    | Cipher, cipher -> p () "cipher %a" pp_cipher cipher
     | Comp_lzo, () -> p () "comp-lzo"
     | Connect_retry, (low, high) -> p () "connect-retry %d %d" low high
     | Connect_retry_max, `Unlimited -> p () "connect-retry-max unlimited"
@@ -1314,8 +1318,14 @@ let a_server =
   | Error (`Msg m) -> fail m
 
 let a_cipher =
-  string "cipher" *> a_whitespace *> a_single_param >>| fun v ->
-  `Entry (B (Cipher, v))
+  string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
+  (match String.uppercase_ascii v with
+  | "AES-256-CBC" -> return `AES_256_CBC
+  | "AES-128-GCM" -> return `AES_128_GCM
+  | "AES-256-GCM" -> return `AES_256_GCM
+  | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
+  | _ -> Fmt.kstr fail "Unknown cipher %S" v)
+  >>| fun v -> `Entry (B (Cipher, v))
 
 let a_auth =
   string "auth" *> a_whitespace *> a_single_param >>= fun h ->

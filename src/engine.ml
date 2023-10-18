@@ -155,15 +155,19 @@ let client config ts now rng =
   match (hmacs config, secret config) with
   | Error e, Error _ -> Error e
   | Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
+      (* in static key mode, only CBC is allowed *)
+      assert (Config.get Cipher config = `AES_256_CBC);
       let keys =
-        {
-          my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
-          my_hmac;
-          my_packet_id = 1l;
-          their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
-          their_hmac;
-          their_packet_id = 1l;
-        }
+        let keys =
+          AES_CBC
+            {
+              my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+              my_hmac;
+              their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+              their_hmac;
+            }
+        in
+        { my_packet_id = 1l; their_packet_id = 1l; keys }
       in
       let compress =
         match Config.find Comp_lzo config with None -> false | Some () -> true
@@ -372,7 +376,7 @@ let merge_server_config_into_client config tls_data =
           m "server options (%S) failure: %s" tls_data.options msg);
       config
 
-let maybe_kdf ?with_premaster session hmac_algorithm key = function
+let maybe_kdf ?with_premaster session cipher hmac_algorithm key = function
   | None -> Error (`Msg "TLS established, expected data, received nothing")
   | Some data ->
       let open Result.Infix in
@@ -380,36 +384,75 @@ let maybe_kdf ?with_premaster session hmac_algorithm key = function
           m "received tls payload %d bytes" (Cstruct.length data));
       Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
       let keys = derive_keys session key tls_data in
-      let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
-      (* TODO offsets and length depend on some configuration parameters (such as cipher), no? *)
-      let my_key, my_hmac, their_key, their_hmac =
-        if Cstruct.(equal empty key.State.pre_master) then
-          ( Cstruct.sub keys 128 32,
-            Cstruct.sub keys 192 hmac_len,
-            Cstruct.sub keys 0 32,
-            Cstruct.sub keys 64 hmac_len )
-        else
-          ( Cstruct.sub keys 0 32,
-            Cstruct.sub keys 64 hmac_len,
-            Cstruct.sub keys 128 32,
-            Cstruct.sub keys 192 hmac_len )
+      let maybe_swap (a, b, c, d) =
+        if Cstruct.(equal empty key.State.pre_master) then (c, d, a, b)
+        else (a, b, c, d)
       in
-      let keys_ctx =
-        {
-          my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
-          my_hmac;
-          my_packet_id = 1l;
-          their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
-          their_hmac;
-          their_packet_id = 1l;
-        }
+      let extract klen hlen =
+        ( Cstruct.sub keys 0 klen,
+          Cstruct.sub keys 64 hlen,
+          Cstruct.sub keys 128 klen,
+          Cstruct.sub keys 192 hlen )
       in
+      let keys =
+        match cipher with
+        | `AES_256_CBC ->
+            let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+            let my_key, my_hmac, their_key, their_hmac =
+              maybe_swap (extract 32 hmac_len)
+            in
+            AES_CBC
+              {
+                my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+                my_hmac;
+                their_key =
+                  Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+                their_hmac;
+              }
+        | `AES_128_GCM ->
+            let my_key, my_implicit_iv, their_key, their_implicit_iv =
+              maybe_swap (extract 16 (Packet.aead_nonce - Packet.packet_id_len))
+            in
+            AES_GCM
+              {
+                my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+                my_implicit_iv;
+                their_key =
+                  Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+                their_implicit_iv;
+              }
+        | `AES_256_GCM ->
+            let my_key, my_implicit_iv, their_key, their_implicit_iv =
+              maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
+            in
+            AES_GCM
+              {
+                my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+                my_implicit_iv;
+                their_key =
+                  Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+                their_implicit_iv;
+              }
+        | `CHACHA20_POLY1305 ->
+            let my_key, my_implicit_iv, their_key, their_implicit_iv =
+              maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
+            in
+            CHACHA20_POLY1305
+              {
+                my_key = Mirage_crypto.Chacha20.of_secret my_key;
+                my_implicit_iv;
+                their_key = Mirage_crypto.Chacha20.of_secret their_key;
+                their_implicit_iv;
+              }
+      in
+      let keys_ctx = { my_packet_id = 1l; their_packet_id = 1l; keys } in
       (tls_data, keys_ctx)
 
 let kex_server config session (keys : key_source) tls data =
   let open Result.Infix in
-  let hmac_algorithm = Config.get Auth config in
-  maybe_kdf ~with_premaster:true session hmac_algorithm keys data
+  let cipher = Config.get Cipher config
+  and hmac_algorithm = Config.get Auth config in
+  maybe_kdf ~with_premaster:true session cipher hmac_algorithm keys data
   >>= fun (_tls_data, keys_ctx) ->
   (* TODO verify username + password, respect incoming tls_data *)
   (* TODO return (modified!?) config' *)
@@ -546,8 +589,10 @@ let incoming_control_client config rng session channel now op data =
           let channel_st = TLS_established (tls', key) in
           Ok (None, config, { channel with channel_st }, tls_out)
       | _ -> (
-          let hmac_algorithm = Config.get Auth config in
-          maybe_kdf session hmac_algorithm key d >>= fun (tls_data, keys) ->
+          let cipher = Config.get Cipher config
+          and hmac_algorithm = Config.get Auth config in
+          maybe_kdf session cipher hmac_algorithm key d
+          >>= fun (tls_data, keys) ->
           let config = merge_server_config_into_client config tls_data in
           (* ok, two options:
              - initial handshake done, we need push request / reply
@@ -831,37 +876,62 @@ let unpad block_size cs =
   else Error (`Msg "bad padding")
 
 let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
-  (* the wire format of data packets is:
-     hmac (IV enc(packet_id [timestamp] [compression] data pad))
-     where:
-     - hmac over the entire encrypted payload
-     - timestamp only used in static key mode (32bit, seconds since unix epoch)
-     - compression only if configured (0xfa for uncompressed)
-
+  (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let hdr_len =
-    4
-    + (match add_timestamp with None -> 0 | Some _ -> 4)
-    + if compress then 1 else 0
+  let packet_id =
+    let buf = Cstruct.create Packet.packet_id_len in
+    Cstruct.BE.set_uint32 buf 0 ctx.my_packet_id;
+    buf
   in
-  let hdr = Cstruct.create hdr_len in
-  Cstruct.BE.set_uint32 hdr 0 ctx.my_packet_id;
-  (match add_timestamp with
-  | None -> ()
-  | Some ts -> Cstruct.BE.set_uint32 hdr 4 ts);
-  if compress then
-    (* byte (hdr_len - 1) is compression -- 0xFA is "no compression" *)
-    Cstruct.set_uint8 hdr (pred hdr_len) 0xfa;
-  let iv = rng Packet.cipher_block_size
-  and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
-  let open Mirage_crypto in
-  let enc = Cipher_block.AES.CBC.encrypt ~key:ctx.my_key ~iv data in
-  let payload = Cstruct.append iv enc in
-  let hmac = Hash.mac hmac_algorithm ~key:ctx.my_hmac payload in
-  let packet = Cstruct.append hmac payload in
-  let ctx = { ctx with my_packet_id = Int32.succ ctx.my_packet_id } in
-  (ctx, packet)
+  let compression =
+    if compress then (
+      let buf = Cstruct.create 1 in
+      (* 0xFA is "no compression" *)
+      Cstruct.set_uint8 buf 0 0xfa;
+      buf)
+    else Cstruct.empty
+  in
+  let data = Cstruct.append compression data in
+  ( { ctx with my_packet_id = Int32.succ ctx.my_packet_id },
+    match ctx.keys with
+    | AES_CBC { my_key; my_hmac; _ } ->
+        (* the wire format of CBC data packets is:
+           hmac (IV enc(packet_id [timestamp] [compression] data pad))
+           where:
+           - hmac over the entire encrypted payload
+             - timestamp only used in static key mode (32bit, seconds since unix epoch)
+        *)
+        let ts =
+          let ts_len = Option.fold ~none:0 ~some:(fun _ -> 4) add_timestamp in
+          let ts_buf = Cstruct.create ts_len in
+          Option.iter
+            (fun ts -> Cstruct.BE.set_uint32 ts_buf 0 ts)
+            add_timestamp;
+          ts_buf
+        in
+        let hdr = Cstruct.append packet_id ts in
+        let iv = rng Packet.cipher_block_size
+        and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
+        let open Mirage_crypto in
+        let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
+        let payload = Cstruct.append iv enc in
+        let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
+        Cstruct.append hmac payload
+    | AES_GCM { my_key; my_implicit_iv; _ } ->
+        let nonce = Cstruct.append packet_id my_implicit_iv in
+        let enc, tag =
+          Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag
+            ~key:my_key ~nonce ~adata:packet_id data
+        in
+        Cstruct.concat [ packet_id; tag; enc ]
+    | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
+        let nonce = Cstruct.append packet_id my_implicit_iv in
+        let enc, tag =
+          Mirage_crypto.Chacha20.authenticate_encrypt_tag ~key:my_key ~nonce
+            ~adata:packet_id data
+        in
+        Cstruct.concat [ packet_id; tag; enc ] )
 
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
@@ -996,39 +1066,89 @@ let timer state =
 
 let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
     compress data =
-  (* spec described the layout as:
-     hmac <+> payload
-     where payload consists of IV <+> encrypted data
-     where plain data consists of packet_id [timestamp] [compress] data pad
-
-     note that the timestamp is only used in static key mode, when
-     ~add_timestamp is provided and true.
-  *)
-  let open Mirage_crypto in
   let open Result.Infix in
-  let module H = (val Mirage_crypto.Hash.module_of hmac_algorithm) in
-  let hmac, data = Cstruct.split data H.digest_size in
-  let computed_hmac = H.hmac ~key:ctx.their_hmac data in
-  guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
-  let iv, data = Cstruct.split data Packet.cipher_block_size in
-  let dec = Cipher_block.AES.CBC.decrypt ~key:ctx.their_key ~iv data in
-  (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-  let hdr_len =
-    4 + (if add_timestamp then 4 else 0) + if compress then 1 else 0
-  in
-  guard
-    (Cstruct.length dec >= hdr_len)
-    (Result.msgf "payload too short (need %d bytes): %a" hdr_len
-       Cstruct.hexdump_pp dec)
-  >>= fun () ->
-  (* TODO validate packet id and ordering -- do i need to ack it as well? *)
-  Log.debug (fun m ->
-      m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
-  (* TODO validate ts if provided (avoid replay) *)
-  unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len) >>= fun data ->
+  (match ctx.keys with
+  | AES_CBC { their_key; their_hmac; _ } ->
+      (* spec described the layout as:
+         hmac <+> payload
+         where payload consists of IV <+> encrypted data
+         where plain data consists of packet_id [timestamp] [compress] data pad
+
+         note that the timestamp is only used in static key mode, when
+         ~add_timestamp is provided and true.
+      *)
+      let open Mirage_crypto in
+      let module H = (val Mirage_crypto.Hash.module_of hmac_algorithm) in
+      let hmac, data = Cstruct.split data H.digest_size in
+      let computed_hmac = H.hmac ~key:their_hmac data in
+      guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
+      let iv, data = Cstruct.split data Packet.cipher_block_size in
+      let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
+      (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
+      let hdr_len = Packet.packet_id_len + if add_timestamp then 4 else 0 in
+      guard
+        (Cstruct.length dec >= hdr_len)
+        (Result.msgf "payload too short (need %d bytes): %a" hdr_len
+           Cstruct.hexdump_pp dec)
+      >>= fun () ->
+      (* TODO validate packet id and ordering *)
+      Log.debug (fun m ->
+          m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+      (* TODO validate ts if provided (avoid replay) *)
+      unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
+  | AES_GCM { their_key; their_implicit_iv; _ } ->
+      let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+      guard
+        (Cstruct.length data >= Packet.packet_id_len + tag_len)
+        (Result.msgf "payload too short (need %d bytes): %a"
+           (Packet.packet_id_len + tag_len)
+           Cstruct.hexdump_pp data)
+      >>= fun () ->
+      let packet_id, tag, payload =
+        let p_id, rest = Cstruct.split data Packet.packet_id_len in
+        let tag, payload = Cstruct.split rest tag_len in
+        (p_id, tag, payload)
+      in
+      let nonce = Cstruct.append packet_id their_implicit_iv in
+      let plain =
+        Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
+          ~key:their_key ~nonce ~adata:packet_id ~tag payload
+      in
+      (* TODO validate packet id and ordering *)
+      Log.debug (fun m ->
+          m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
+      Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
+  | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
+      let tag_len = Mirage_crypto.Chacha20.tag_size in
+      guard
+        (Cstruct.length data >= Packet.packet_id_len + tag_len)
+        (Result.msgf "payload too short (need %d bytes): %a"
+           (Packet.packet_id_len + tag_len)
+           Cstruct.hexdump_pp data)
+      >>= fun () ->
+      let packet_id, tag, payload =
+        let p_id, rest = Cstruct.split data Packet.packet_id_len in
+        let tag, payload = Cstruct.split rest tag_len in
+        (p_id, tag, payload)
+      in
+      let nonce = Cstruct.append packet_id their_implicit_iv in
+      let plain =
+        Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
+          ~adata:packet_id ~tag payload
+      in
+      (* TODO validate packet id and ordering *)
+      Log.debug (fun m ->
+          m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
+      Option.to_result ~none:(`Msg "AEAD decrypt failed") plain)
+  >>= fun data ->
   (if compress then
      (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
-     match Cstruct.get_uint8 dec (pred hdr_len) with
+     guard
+       (Cstruct.length data >= 1)
+       (`Msg "payload too short, need compression byte")
+     >>= fun () ->
+     let comp, data = Cstruct.split data 1 in
+     match Cstruct.get_uint8 comp 0 with
      | 0xFA -> Ok data
      | 0x66 ->
          Lzo.uncompress_with_buffer (Cstruct.to_bigarray data)
@@ -1038,7 +1158,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
          lz
      | comp ->
          Result.error_msgf "unknown compression %#X in packet:@.%a" comp
-           Cstruct.hexdump_pp dec
+           Cstruct.hexdump_pp data
    else Ok data)
   >>| fun data' ->
   if Cstruct.equal data' ping then (

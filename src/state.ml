@@ -28,17 +28,39 @@ let init_transport =
     out_packets = IM.empty;
   }
 
+type key_variant =
+  | AES_CBC of {
+      my_key : Mirage_crypto.Cipher_block.AES.CBC.key;
+      my_hmac : Cstruct.t;
+      their_key : Mirage_crypto.Cipher_block.AES.CBC.key;
+      their_hmac : Cstruct.t;
+    }
+  | AES_GCM of {
+      my_key : Mirage_crypto.Cipher_block.AES.GCM.key;
+      my_implicit_iv : Cstruct.t;
+      their_key : Mirage_crypto.Cipher_block.AES.GCM.key;
+      their_implicit_iv : Cstruct.t;
+    }
+  | CHACHA20_POLY1305 of {
+      my_key : Mirage_crypto.Chacha20.key;
+      my_implicit_iv : Cstruct.t;
+      their_key : Mirage_crypto.Chacha20.key;
+      their_implicit_iv : Cstruct.t;
+    }
+
 type keys = {
-  my_key : Mirage_crypto.Cipher_block.AES.CBC.key;
-  my_hmac : Cstruct.t;
   my_packet_id : int32;
-  their_key : Mirage_crypto.Cipher_block.AES.CBC.key;
-  their_hmac : Cstruct.t;
   their_packet_id : int32;
+  keys : key_variant;
 }
 
 let pp_keys ppf t =
-  Fmt.pf ppf "keys: my id %lu, their id %lu" t.my_packet_id t.their_packet_id
+  Fmt.pf ppf "%s keys: my id %lu, their id %lu"
+    (match t.keys with
+    | AES_CBC _ -> "AES-CBC"
+    | AES_GCM _ -> "AES-GCM"
+    | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
+    t.my_packet_id t.their_packet_id
 
 type channel_state =
   | Expect_reset
@@ -274,6 +296,7 @@ let pp ppf t =
 
 let compress s = s.session.compress
 
+(* TODO this depends on the cipher used.. *)
 let mtu config compress =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
   let tun_mtu =
@@ -282,13 +305,14 @@ let mtu config compress =
     | Some x -> x
   in
   let hmac_len =
+    (* TODO we now always have a Auth value in config -- revisit (also in light of #36) *)
     Option.value ~default:`SHA1 (Config.find Auth config)
     |> Mirage_crypto.Hash.digest_size
   in
   (* padding, done on packet_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
-    4
+    Packet.packet_id_len
     + (* packet id *)
     (if static_key_mode then 4 else 0)
     +

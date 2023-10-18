@@ -55,6 +55,7 @@ type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
 let packet_id_len = 4
 let cipher_block_size = 16
+let aead_nonce = 12
 let hdr_len hmac_len = 8 + hmac_len + packet_id_len + 4 + 1
 let guard f e = if f then Ok () else Error e
 
