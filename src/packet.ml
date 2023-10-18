@@ -288,7 +288,7 @@ type tls_data = {
   options : string; (* null terminated -- record may end after options! *)
   (* 16 bit len, user (0 terminated), 16 bit len, password (0 terminated) *)
   user_pass : (string * string) option; (* 16 bit len *)
-  peer_info : string option;
+  peer_info : string list option;
 }
 
 let pp_tls_data ppf t =
@@ -300,7 +300,7 @@ let pp_tls_data ppf t =
         (append (any "user: ") (pair ~sep:(any ", pass") string string)))
     t.user_pass
     Fmt.(
-      option ~none:(any "no peer-info") (append (any "peer-info ") Dump.string))
+      option ~none:(any "no peer-info") (append (any "peer-info ") Fmt.(list ~sep:(any ", ") Dump.string)))
     t.peer_info
 
 let key_method = 0x02
@@ -330,14 +330,9 @@ let encode_tls_data t =
     [ write_string u; write_string p ]
   in
   let peer_info =
-    match t.peer_info with
-    | None -> Cstruct.empty
-    | Some peer_info ->
-        let len = String.length peer_info in
-        let pi = Cstruct.create (2 + len) in
-        Cstruct.BE.set_uint16 pi 0 len;
-        Cstruct.blit_from_string peer_info 0 pi 0 len;
-        pi
+    Option.map (fun pi -> String.concat "\n" (pi @ [])) t.peer_info
+    |> Option.map write_string
+    |> Option.value ~default:Cstruct.empty
   in
   (* prefix - 4 zero bytes, key_method
      pre_master
@@ -401,6 +396,7 @@ let decode_tls_data ?(with_premaster = false) buf =
      guard (Cstruct.length buf >= p_start + 2 + u_len + p_len) `Partial
      >>= fun () ->
      maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
+     let user_pass = match u, p with "", "" -> None | _ -> Some (u, p) in
      let end_of_data = p_start + 2 + p_len in
      (if Cstruct.length buf = end_of_data then Ok None
       else if Cstruct.length buf < end_of_data + 2 then (
@@ -420,9 +416,7 @@ let decode_tls_data ?(with_premaster = false) buf =
                 Cstruct.hexdump_pp data);
         Ok (Some (Cstruct.to_string ~off:2 ~len data)))
      >>| fun peer_info ->
-     match (u, p) with
-     | "", "" -> (None, peer_info)
-     | _ -> (Some (u, p), peer_info))
+     (user_pass, Option.map (String.split_on_char '\n') peer_info))
   >>| fun (user_pass, peer_info) ->
   { pre_master; random1; random2; options; user_pass; peer_info }
 

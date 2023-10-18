@@ -357,7 +357,7 @@ let maybe_kex_client rng config tls =
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
     Config.client_generate_connect_options config >>= fun options ->
     let user_pass = Config.find Auth_user_pass config in
-    let peer_info = Some "IV_PLAT=mirage" in
+    let peer_info = Some [ "IV_PLAT=mirage" ] in
     let td = { Packet.pre_master; random1; random2; options; user_pass; peer_info }
     and key_source = { State.pre_master; random1; random2 } in
     match
@@ -1206,7 +1206,6 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
               in
               one session transport 0 []
           | `Reset_server ->
-              Printf.printf "Reset_server case!!!!\n";
               let session, transport, header =
                 header session hmac_algorithm transport now_ts
               in
