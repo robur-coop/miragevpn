@@ -296,6 +296,7 @@ let pp ppf t =
 
 let compress s = s.session.compress
 
+(* TODO this depends on the cipher used.. *)
 let mtu config compress =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
   let tun_mtu =
@@ -304,6 +305,7 @@ let mtu config compress =
     | Some x -> x
   in
   let hmac_len =
+    (* TODO we now always have a Auth value in config -- revisit (also in light of #36) *)
     Option.value ~default:`SHA1 (Config.find Auth config)
     |> Mirage_crypto.Hash.digest_size
   in
