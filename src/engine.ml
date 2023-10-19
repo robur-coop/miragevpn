@@ -376,14 +376,6 @@ let maybe_kex_client rng config tls =
         Ok (client_state, Some payload)
   else Ok (TLS_handshake tls, None)
 
-let merge_server_config_into_client config tls_data =
-  match Config.client_merge_server_config config tls_data.Packet.options with
-  | Ok config -> config
-  | Error (`Msg msg) ->
-      Log.err (fun m ->
-          m "server options (%S) failure: %s" tls_data.options msg);
-      config
-
 let kdf session cipher hmac_algorithm key tls_data =
   let keys = derive_keys session key tls_data in
   let maybe_swap (a, b, c, d) =
@@ -589,7 +581,17 @@ let incoming_control_client config rng session channel now op data =
           Ok (None, config, { channel with channel_st }, tls_out)
       | Some d -> (
           Packet.decode_tls_data d >>= fun tls_data ->
-          let config = merge_server_config_into_client config tls_data in
+          let config =
+            let merged =
+              Config.client_merge_server_config config tls_data.Packet.options
+            in
+            Result.iter_error
+              (fun (`Msg msg) ->
+                Log.err (fun m ->
+                    m "server options (%S) failure: %s" tls_data.options msg))
+              merged;
+            Result.value ~default:config merged
+          in
           (* ok, two options:
              - initial handshake done, we need push request / reply
              - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
