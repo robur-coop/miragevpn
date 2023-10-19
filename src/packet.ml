@@ -253,6 +253,160 @@ let to_be_signed key p =
   | `Control (_, c) -> to_be_signed_control op c
   | `Data _ -> assert false
 
+module Tls_crypt = struct
+  (* Functions to implement:
+     - to_be_signed
+     - encode
+     - decode
+  *)
+  type cleartext_header = {
+    local_session : int64;
+    packet_id : packet_id;
+    timestamp : int32;
+    hmac : Cstruct.t; (* always 32 bytes *)
+  }
+
+  type clear_pkt =
+    [ `Ack of cleartext_header * Cstruct.t | `Control of operation * cleartext_header * Cstruct.t | `Data of Cstruct.t ]
+
+  let hmac_len = Mirage_crypto.Hash.SHA256.digest_size (* 32 *)
+  let hmac_offset = 16
+  let encrypted_offset = hmac_offset + hmac_len
+  let clear_hdr_len = hdr_len hmac_len - 1 (* not including acked msg ids *)
+
+  let to_be_signed_header ?(more = 0) op header =
+    (* op_key ++ session_id ++ packet_id ++ timestamp ++ ack_len ++ acks ++ remote_session ++ msg_id *)
+    let acks_len = List.length header.ack_message_ids * packet_id_len
+    and rses = if Option.is_some header.remote_session then 8 else 0 in
+    let buflen = 1 + 8 + packet_id_len + 4 + 1 + acks_len + rses + more in
+    let buf = Cstruct.create buflen in
+    Cstruct.set_uint8 buf 0 op;
+    Cstruct.BE.set_uint64 buf 1 header.local_session;
+    Cstruct.BE.set_uint32 buf 9 header.packet_id;
+    Cstruct.BE.set_uint32 buf 13 header.timestamp;
+    Cstruct.set_uint8 buf 17 (List.length header.ack_message_ids);
+    let enc_ack idx ack = Cstruct.BE.set_uint32 buf (18 + 4 * idx) ack in
+    List.iteri enc_ack header.ack_message_ids;
+    Option.iter (Cstruct.BE.set_uint64 buf (18 + acks_len)) header.remote_session;
+    (buf, 18 + acks_len + rses)
+
+  let to_be_signed_control op (header, packet_id, payload) =
+    let buf, off =
+      to_be_signed_header op header
+        ~more:(packet_id_len + Cstruct.length payload)
+    in
+    Cstruct.BE.set_uint32 buf off packet_id;
+    Cstruct.blit payload 0 buf (off + packet_id_len) (Cstruct.length payload);
+    buf
+
+  let to_be_signed key p =
+    let op = op_key (operation p) key in
+    match p with
+    | `Ack hdr -> fst (to_be_signed_header op hdr)
+    | `Control (_, c) -> to_be_signed_control op c
+
+  let encode_header hdr =
+    let acks_len = packet_id_len * List.length hdr.ack_message_ids in
+    let rsid_len = if acks_len = 0 then 0 else 8 in
+    let hmac_len = Cstruct.length hdr.hmac in
+    let buf = Cstruct.create (clear_hdr_len + 1 + acks_len + rsid_len) in
+    Cstruct.BE.set_uint64 buf 0 hdr.local_session;
+    (* annoyingly the replay packet id and hmac are swapped from the tls-auth header *)
+    Cstruct.BE.set_uint32 buf 8 hdr.packet_id;
+    Cstruct.BE.set_uint32 buf 12 hdr.timestamp;
+    Cstruct.blit hdr.hmac 0 buf 16 hmac_len;
+    Cstruct.set_uint8 buf (16 + hmac_len) (List.length hdr.ack_message_ids);
+    List.iteri
+      (fun i v ->
+         Cstruct.BE.set_uint32 buf (hmac_len + 17 + i * packet_id_len) v)
+      hdr.ack_message_ids;
+    Option.iter (fun v ->
+        assert (rsid_len <> 0);
+        Cstruct.BE.set_uint64 buf (clear_hdr_len + 1 + acks_len) v)
+      hdr.remote_session;
+    (buf, clear_hdr_len + 1 + acks_len + rsid_len)
+
+  let encode_control (header, packet_id, payload) =
+    let hdr_buf, len = encode_header header in
+    let packet_id_buf = Cstruct.create 4 in
+    Cstruct.BE.set_uint32 packet_id_buf 0 packet_id;
+    ( Cstruct.concat [ hdr_buf; packet_id_buf; payload ],
+      len + 4 + Cstruct.length payload)
+
+  let encode ?wkc proto (key, p) =
+    let () = match wkc, p with
+      | None, `Control (Hard_reset_client_v3, _) ->
+        invalid_arg "Packet.Tls_crypt.encode"
+      | Some _wkc, `Control (Hard_reset_client_v3, _) -> ()
+      | Some _wkc, `Control _ -> invalid_arg "Packet.Tls_crypt.encode"
+      | _ -> ()
+    in
+    let payload, len =
+      match p with
+      | `Ack ack -> encode_header ack
+      | `Control (_, control) -> encode_control control
+    in
+    let op_buf, len =
+      let b = Cstruct.create 1 in
+      let op = op_key (operation p) key in
+      Cstruct.set_uint8 b 0 op;
+      b, succ len
+    in
+    let wkc = Option.to_list wkc in
+    let len = len + Cstruct.lenv wkc in
+    let prefix = encode_protocol proto len in
+    let r = Cstruct.concat ([ prefix; op_buf; payload ] @ wkc) in
+    (* packet, to_encrypt_offset, to_encrypt_length *)
+    r, Cstruct.length prefix + encrypted_offset, len - Cstruct.lenv wkc
+
+  let decode_decrypted_header clear_hdr buf =
+    let open Result.Syntax in
+    let* () = guard (Cstruct.length buf >= 1) `Partial in
+    let arr_len = Cstruct.get_uint8 buf 0 in
+    let rs_len = if arr_len = 0 then 0 else 8 in
+    let* () =
+      guard (Cstruct.length buf >= 1 + packet_id_len * arr_len + rs_len) `Partial
+    in
+    let ack_message_id idx = Cstruct.BE.get_uint32 buf (1 + packet_id_len * idx) in
+    let ack_message_ids = List.init arr_len ack_message_id in
+    let remote_session =
+      if rs_len > 0 then
+        Some (Cstruct.BE.get_uint64 buf (1 + packet_id_len * arr_len))
+      else None
+    in
+    let { local_session; packet_id; timestamp; hmac } = clear_hdr in
+    Ok { local_session; packet_id; timestamp; hmac; ack_message_ids; remote_session }
+
+  let decode_cleartext_header buf =
+    let open Result.Syntax in
+    (* header up till acked message ids *)
+    let+ () = guard (Cstruct.length buf >= clear_hdr_len) `Partial in
+    let local_session = Cstruct.BE.get_uint64 buf 0
+    and packet_id = Cstruct.BE.get_uint32 buf 8
+    and timestamp = Cstruct.BE.get_uint32 buf 12
+    and hmac = Cstruct.sub buf 16 hmac_len in
+    { local_session; packet_id; timestamp; hmac }, clear_hdr_len
+
+  let decode_cleartext proto buf =
+    let open Result.Syntax in
+    let* (buf, linger) = decode_protocol proto buf in
+    let* () = guard (Cstruct.length buf >= 1) `Partial in
+    let opkey = Cstruct.get_uint8 buf 0 in
+    let op, key = (opkey lsr 3, opkey land 0x07) in
+    let payload = Cstruct.shift buf 1 in
+    let* op = int_to_operation op in
+    let+ res  =
+      match op with
+      | Data_v1 -> Ok (`Data payload)
+      | op ->
+        let+ (clear, off) = decode_cleartext_header buf in
+        let encrypted = Cstruct.shift buf off in
+        let res = match op with Ack -> `Ack (clear, encrypted) | op -> `Control (op, clear, encrypted) in
+        res
+    in
+    (key, res, linger)
+end
+
 type pkt =
   [ `Ack of header | `Control of operation * control | `Data of Cstruct.t ]
 
