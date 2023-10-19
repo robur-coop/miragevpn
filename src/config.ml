@@ -254,11 +254,18 @@ module Conf_map = struct
   include Gmap.Make (K)
 
   let is_valid_config t =
+    let open Result.Infix in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
-    Result.map_error
-      (fun err -> `Msg ("not a valid config: " ^ err))
-      (ensure_mem Cipher "config must specify 'cipher'")
+    if not (mem Tls_mode t) then
+      Result.map_error
+        (fun err -> `Msg ("not a valid config: " ^ err))
+        (ensure_mem Cipher "config must specify 'cipher'")
+      >>= fun () ->
+      if get Cipher t <> `AES_256_CBC then
+        Error (`Msg "only AES-256-CBC supported in static key mode")
+      else Ok ()
+    else Ok ()
 
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
@@ -1326,15 +1333,18 @@ let a_server =
   | Ok cidr -> return (`Entry (B (Server, cidr)))
   | Error (`Msg m) -> fail m
 
+let aead_cipher c =
+  match String.uppercase_ascii c with
+  | "AES-128-GCM" -> return `AES_128_GCM
+  | "AES-256-GCM" -> return `AES_256_GCM
+  | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
+  | _ -> Fmt.kstr fail "Unknown cipher %S" c
+
 let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
   (match String.uppercase_ascii v with
   | "AES-256-CBC" -> return `AES_256_CBC
-  | _ ->
-      Fmt.kstr fail
-        "Unknown cipher %S (only AES-256-CBC is supported, did you want to \
-         specify 'data-ciphers'?"
-        v)
+  | c -> aead_cipher c)
   >>| fun v -> `Entry (B (Cipher, v))
 
 let a_data_ciphers =
@@ -1343,12 +1353,7 @@ let a_data_ciphers =
   List.fold_left
     (fun acc c ->
       acc >>= fun acc ->
-      (match String.uppercase_ascii c with
-      | "AES-128-GCM" -> return `AES_128_GCM
-      | "AES-256-GCM" -> return `AES_256_GCM
-      | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
-      | _ -> Fmt.kstr fail "Unknown cipher %S" c)
-      >>| fun c -> c :: acc)
+      aead_cipher c >>| fun c -> c :: acc)
     (return []) ciphers
   >>| fun ciphers ->
   let ciphers = List.rev ciphers in
