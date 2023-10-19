@@ -357,6 +357,7 @@ let maybe_kex_client rng config tls =
   if Tls.Engine.can_handle_appdata tls then
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
     Config.client_generate_connect_options config >>= fun options ->
+    let pull = Config.mem Pull config in
     let user_pass = Config.find Auth_user_pass config in
     let peer_info =
       let ciphers =
@@ -365,6 +366,13 @@ let maybe_kex_client rng config tls =
              (Config.get Data_ciphers config))
       in
       Some [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers; "IV_NCP=2" ]
+    in
+    let peer_info =
+      match peer_info with
+      | Some peer_info when pull ->
+          Some ("IV_PROTO=4" (* IV_PROTO_REQUEST_PUSH *) :: peer_info)
+      | Some peer_info -> Some ("IV_PROTO=0" :: peer_info)
+      | None -> None
     in
     let td =
       { Packet.pre_master; random1; random2; options; user_pass; peer_info }
@@ -611,15 +619,24 @@ let incoming_control_client config rng session channel now op data =
               let channel_st = Established keys in
               Ok (Some ip_config, config, { channel with channel_st }, tls_out)
           | None ->
-              (* now we send a PUSH_REQUEST\0 and see what happens *)
-              push_request tls' >>| fun (tls'', out) ->
-              let channel_st = Push_request_sent (tls'', key, tls_data) in
-              (* first send an ack for the received key data packet (this needs to be
-                 a separate packet from the PUSH_REQUEST for unknown reasons) *)
-              ( None,
-                config,
-                { channel with channel_st },
-                tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] )))
+              let pull = Config.mem Pull config in
+              if pull then
+                let channel_st = Push_request_sent (tls', key, tls_data) in
+                Ok
+                  ( None,
+                    config,
+                    { channel with channel_st },
+                    tls_out @ [ (`Ack, Cstruct.empty) ] )
+              else
+                (* now we send a PUSH_REQUEST\0 and see what happens *)
+                push_request tls' >>| fun (tls'', out) ->
+                let channel_st = Push_request_sent (tls'', key, tls_data) in
+                (* first send an ack for the received key data packet (this needs to be
+                   a separate packet from the PUSH_REQUEST for unknown reasons) *)
+                ( None,
+                  config,
+                  { channel with channel_st },
+                  tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] )))
   | Push_request_sent (tls, key, tls_data), Packet.Control ->
       let open Result.Infix in
       Log.debug (fun m -> m "in push request sent");
