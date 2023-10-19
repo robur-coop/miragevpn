@@ -462,13 +462,13 @@ let parse_client_configuration ?config file () =
   let string_of_file n = Ok (string_of_file n) in
   match Miragevpn.Config.parse_client ~string_of_file data with
   | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" file err
-  | Ok conf -> (
-      match config with
-      | None -> ()
-      | Some cfg ->
+  | Ok conf ->
+      Option.iter
+        (fun cfg ->
           Alcotest.check conf_map
             ("parsed configuration " ^ file ^ " matches provided one")
             cfg conf)
+        config
 
 let minimal_ta_conf =
   let open Miragevpn.Config in
@@ -620,6 +620,19 @@ let parse_multiple_cas () =
       let cas = Miragevpn.Config.(get Ca) conf in
       Alcotest.(check int) "Exactly two CA certificates" 2 (List.length cas)
 
+let parse_server_configuration ?config file () =
+  let data = string_of_file file in
+  let string_of_file n = Ok (string_of_file n) in
+  match Miragevpn.Config.parse_server ~string_of_file data with
+  | Error (`Msg err) -> Alcotest.failf "Error parsing %S: %s" file err
+  | Ok conf ->
+      Option.iter
+        (fun cfg ->
+          Alcotest.check conf_map
+            ("parsed configuration " ^ file ^ " matches provided one")
+            cfg conf)
+        config
+
 let client_tls_crypt_v2_conf =
   let open Miragevpn.Config in
   let tls_crypt_v2_client =
@@ -719,6 +732,20 @@ let tests =
       `Quick,
       parse_client_configuration ~config:tls_home_conf_with_cipher
         "tls-home-with-cipher.conf" );
+    ( "parsing 'minimal-server'",
+      `Quick,
+      parse_server_configuration "minimal-server.conf" );
+    ("parsing 'server'", `Quick, parse_server_configuration "server.conf");
+    ( "parsing 'server-tcp'",
+      `Quick,
+      parse_server_configuration "server-tcp.conf" );
+    ( "parsing 'server-tcp-certauth-passauth'",
+      `Quick,
+      parse_server_configuration "server-tcp-certauth-passauth.conf" );
+    (* ( "parsing 'wild-server'",
+       `Quick,
+       parse_server_configuration
+         "wild-server.conf" ); not there yet, needs: dev-node writepid ping-timer-rem client-config-dir *)
   ]
 
 let tests = [ ("Config tests", tests) ]
