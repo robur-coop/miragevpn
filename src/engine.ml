@@ -1209,7 +1209,8 @@ let wrap_hmac_control now ts mtu session hmac_algorithm key transport outs =
               let transport, m_id = next_message_id transport in
               ( session,
                 transport,
-                [ `Control (Packet.Hard_reset_server_v2, (header, m_id, out)) ] )
+                [ `Control (Packet.Hard_reset_server_v2, (header, m_id, out)) ]
+              )
           | `Reset ->
               let session, transport, header =
                 header session hmac_algorithm transport now_ts
@@ -1534,8 +1535,8 @@ let handle_client t s ev =
             init_session ~my_session_id ~protocol ~my_hmac ~their_hmac ()
           in
           let session, channel, out =
-            init_channel Packet.Hard_reset_client_v2 session hmac_algorithm 0 now
-              ts
+            init_channel Packet.Hard_reset_client_v2 session hmac_algorithm 0
+              now ts
           in
           let state = client (Handshaking (idx, ts)) in
           Ok ({ t with state; channel; session }, [ out ], None)
