@@ -300,7 +300,8 @@ let pp_tls_data ppf t =
         (append (any "user: ") (pair ~sep:(any ", pass") string string)))
     t.user_pass
     Fmt.(
-      option ~none:(any "no peer-info") (append (any "peer-info ") Fmt.(list ~sep:(any ", ") Dump.string)))
+      option ~none:(any "no peer-info")
+        (append (any "peer-info ") Fmt.(list ~sep:(any ", ") Dump.string)))
     t.peer_info
 
 let key_method = 0x02
@@ -396,7 +397,7 @@ let decode_tls_data ?(with_premaster = false) buf =
      guard (Cstruct.length buf >= p_start + 2 + u_len + p_len) `Partial
      >>= fun () ->
      maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
-     let user_pass = match u, p with "", "" -> None | _ -> Some (u, p) in
+     let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
      let end_of_data = p_start + 2 + p_len in
      (if Cstruct.length buf = end_of_data then Ok None
       else if Cstruct.length buf < end_of_data + 2 then (
@@ -407,14 +408,14 @@ let decode_tls_data ?(with_premaster = false) buf =
       else
         let data = Cstruct.shift buf end_of_data in
         let len = Cstruct.BE.get_uint16 data 0 in
-        let data = Cstruct.shift buf 2 in
+        let data = Cstruct.shift data 2 in
         guard (Cstruct.length data >= len) `Partial >>= fun () ->
         if Cstruct.length data > len then
           Log.warn (fun m ->
               m "slack at end of tls_data %S @.%a"
-                (Cstruct.to_string ~off:len data)
+                (Cstruct.to_string ~len data)
                 Cstruct.hexdump_pp data);
-        Ok (Some (Cstruct.to_string ~off:2 ~len data)))
+        Ok (if len = 0 then None else Some (Cstruct.to_string ~len data)))
      >>| fun peer_info ->
      (user_pass, Option.map (String.split_on_char '\n') peer_info))
   >>| fun (user_pass, peer_info) ->

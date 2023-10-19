@@ -102,6 +102,14 @@ let ( (cipher13_to_cs13 : string -> Tls.Ciphersuite.ciphersuite13),
       | Some c -> c),
     fun c -> List.assoc c rev_map )
 
+type cipher = [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
+
+let cipher_to_string : cipher -> string = function
+  | `AES_256_CBC -> "AES-256-CBC"
+  | `AES_128_GCM -> "AES-128-GCM"
+  | `AES_256_GCM -> "AES-256-GCM"
+  | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305"
+
 module Conf_map = struct
   type flag = unit
 
@@ -140,6 +148,10 @@ module Conf_map = struct
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k
     | Connect_timeout : int k
+    | Data_ciphers
+        : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
+          list
+          k
     | Dev : ([ `Tun | `Tap ] * string option) k
     | Dhcp_disable_nbt : flag k
     | Dhcp_dns : Ipaddr.t list k
@@ -397,14 +409,7 @@ module Conf_map = struct
         | `SHA384 -> "SHA384"
         | `SHA512 -> "SHA512")
     in
-    let pp_cipher ppf v =
-      Fmt.string ppf
-        (match v with
-        | `AES_256_CBC -> "AES-256-CBC"
-        | `AES_128_GCM -> "AES-128-GCM"
-        | `AES_256_GCM -> "AES-256-GCM"
-        | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305")
-    in
+    let pp_cipher ppf v = Fmt.string ppf (cipher_to_string v) in
     match (k, v) with
     | Auth, h -> p () "auth %a" pp_digest_algorithm h
     | Auth_nocache, () -> p () "auth-nocache"
@@ -435,6 +440,8 @@ module Conf_map = struct
     | Connect_retry_max, `Unlimited -> p () "connect-retry-max unlimited"
     | Connect_retry_max, `Times i -> p () "connect-retry-max %d" i
     | Connect_timeout, seconds -> p () "connect-timeout %d" seconds
+    | Data_ciphers, cs ->
+        p () "data-ciphers %a" Fmt.(list ~sep:(any ":") pp_cipher) cs
     | Dev, (`Tap, None) -> p () "dev tap"
     | Dev, (`Tun, None) -> p () "dev tun"
     | Dev, (typ, Some name) ->
@@ -601,6 +608,7 @@ module Defaults = struct
     |> add Handshake_window 60 |> add Transition_window 3600
     |> add Proto (None, `Udp)
     |> add Auth `SHA1
+    |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
 
   let client =
     let open Conf_map in
@@ -1317,15 +1325,29 @@ let a_server =
   | Ok cidr -> return (`Entry (B (Server, cidr)))
   | Error (`Msg m) -> fail m
 
-let a_cipher =
-  string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
-  (match String.uppercase_ascii v with
+let c_name v =
+  match String.uppercase_ascii v with
   | "AES-256-CBC" -> return `AES_256_CBC
   | "AES-128-GCM" -> return `AES_128_GCM
   | "AES-256-GCM" -> return `AES_256_GCM
   | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
-  | _ -> Fmt.kstr fail "Unknown cipher %S" v)
-  >>| fun v -> `Entry (B (Cipher, v))
+  | _ -> Fmt.kstr fail "Unknown cipher %S" v
+
+let a_cipher =
+  string "cipher" *> a_whitespace *> a_single_param >>= c_name >>| fun v ->
+  `Entry (B (Cipher, v))
+
+let a_data_ciphers =
+  string "data-ciphers" *> a_whitespace *> a_single_param >>= fun v ->
+  let ciphers = String.split_on_char ':' v |> List.map String.trim in
+  List.fold_left
+    (fun acc c ->
+      acc >>= fun acc ->
+      c_name c >>| fun c -> c :: acc)
+    (return []) ciphers
+  >>| fun ciphers ->
+  let ciphers = List.rev ciphers in
+  `Entry (B (Data_ciphers, ciphers))
 
 let a_auth =
   string "auth" *> a_whitespace *> a_single_param >>= fun h ->
@@ -1529,6 +1551,7 @@ let a_config_entry : line A.t =
          a_link_mtu;
          a_tun_mtu;
          a_cipher;
+         a_data_ciphers;
          a_auth;
          a_port;
          a_server;
@@ -2087,6 +2110,13 @@ let merge_push_reply client (push_config : string) =
        can we ensure that statically? *)
     | Dhcp_dns, (Some _ as a), Some _ -> a
     | Dhcp_ntp, (Some _ as a), Some _ -> a
+    | Cipher, Some my, Some c -> (
+        match find Data_ciphers client with
+        | Some ciphers when List.mem c ciphers || c = my -> Some c
+        | _ ->
+            invalid_arg
+            @@ Fmt.str "push-reply: won't accept cipher %s" (cipher_to_string c)
+        )
     (* TODO | Route, Some a, _ -> a*)
     (* try to merge: *)
     | _, (Some a as some_a), Some b -> (
@@ -2125,13 +2155,13 @@ let client_generate_connect_options t =
   let excerpt =
     Conf_map.filter
       (function
-        | B (Cipher, _) -> true
+        | B (Cipher, _) -> false (* TODO: only relevant if no NCP is used *)
         | B (Comp_lzo, _) -> true
         | B (Tun_mtu, _) -> true
         | B (Link_mtu, _) -> true
         | B (Pull, _) -> true
         | B (Tls_mode, `Client) -> true
-        | B (Auth, _) -> true
+        | B (Auth, _) -> true (* TODO: only relevant if no NCP is used *)
         | _ -> false)
       t
   in

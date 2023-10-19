@@ -51,6 +51,10 @@ module Config : sig
         (** [connect-timeout] a.k.a. [server-poll-timeout]
         Timeout a connection attempt to a remote server after [SECONDS].
     *)
+    | Data_ciphers
+        : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
+          list
+          k
     | Dev : ([ `Tun | `Tap ] * string option) k
         (** The device to be used for the unencrypted traffic.
         The optional string is a device name, the [dev] directive.
