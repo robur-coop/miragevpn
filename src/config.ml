@@ -2166,7 +2166,7 @@ let client_generate_connect_options t =
   let excerpt =
     Conf_map.filter
       (function
-        | B (Cipher, _) -> false (* TODO: only relevant if no NCP is used *)
+        | B (Cipher, _) -> not (Conf_map.mem Tls_mode t)
         | B (Comp_lzo, _) -> true
         | B (Tun_mtu, _) -> true
         | B (Link_mtu, _) -> true
