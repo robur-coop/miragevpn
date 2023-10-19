@@ -360,7 +360,8 @@ let maybe_kex_client rng config tls =
     let peer_info =
       let ciphers =
         String.concat ":"
-          (List.map Config.cipher_to_string (Config.get Data_ciphers config))
+          (List.map Config.aead_cipher_to_string
+             (Config.get Data_ciphers config))
       in
       Some [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers; "IV_NCP=2" ]
     in

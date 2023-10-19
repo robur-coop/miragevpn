@@ -102,13 +102,17 @@ let ( (cipher13_to_cs13 : string -> Tls.Ciphersuite.ciphersuite13),
       | Some c -> c),
     fun c -> List.assoc c rev_map )
 
-type cipher = [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
+type aead_cipher = [ `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
+type cipher = [ aead_cipher | `AES_256_CBC ]
 
-let cipher_to_string : cipher -> string = function
-  | `AES_256_CBC -> "AES-256-CBC"
+let aead_cipher_to_string : aead_cipher -> string = function
   | `AES_128_GCM -> "AES-128-GCM"
   | `AES_256_GCM -> "AES-256-GCM"
   | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305"
+
+let cipher_to_string : cipher -> string = function
+  | #aead_cipher as c -> aead_cipher_to_string c
+  | `AES_256_CBC -> "AES-256-CBC"
 
 module Conf_map = struct
   type flag = unit
@@ -148,10 +152,7 @@ module Conf_map = struct
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k
     | Connect_timeout : int k
-    | Data_ciphers
-        : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
-          list
-          k
+    | Data_ciphers : [ `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] list k
     | Dev : ([ `Tun | `Tap ] * string option) k
     | Dhcp_disable_nbt : flag k
     | Dhcp_dns : Ipaddr.t list k
@@ -409,7 +410,7 @@ module Conf_map = struct
         | `SHA384 -> "SHA384"
         | `SHA512 -> "SHA512")
     in
-    let pp_cipher ppf v = Fmt.string ppf (cipher_to_string v) in
+    let pp_cipher ppf v = Fmt.string ppf (cipher_to_string (v :> cipher)) in
     match (k, v) with
     | Auth, h -> p () "auth %a" pp_digest_algorithm h
     | Auth_nocache, () -> p () "auth-nocache"
@@ -1325,17 +1326,16 @@ let a_server =
   | Ok cidr -> return (`Entry (B (Server, cidr)))
   | Error (`Msg m) -> fail m
 
-let c_name v =
-  match String.uppercase_ascii v with
-  | "AES-256-CBC" -> return `AES_256_CBC
-  | "AES-128-GCM" -> return `AES_128_GCM
-  | "AES-256-GCM" -> return `AES_256_GCM
-  | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
-  | _ -> Fmt.kstr fail "Unknown cipher %S" v
-
 let a_cipher =
-  string "cipher" *> a_whitespace *> a_single_param >>= c_name >>| fun v ->
-  `Entry (B (Cipher, v))
+  string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
+  (match String.uppercase_ascii v with
+  | "AES-256-CBC" -> return `AES_256_CBC
+  | _ ->
+      Fmt.kstr fail
+        "Unknown cipher %S (only AES-256-CBC is supported, did you want to \
+         specify 'data-ciphers'?"
+        v)
+  >>| fun v -> `Entry (B (Cipher, v))
 
 let a_data_ciphers =
   string "data-ciphers" *> a_whitespace *> a_single_param >>= fun v ->
@@ -1343,7 +1343,12 @@ let a_data_ciphers =
   List.fold_left
     (fun acc c ->
       acc >>= fun acc ->
-      c_name c >>| fun c -> c :: acc)
+      (match String.uppercase_ascii c with
+      | "AES-128-GCM" -> return `AES_128_GCM
+      | "AES-256-GCM" -> return `AES_256_GCM
+      | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
+      | _ -> Fmt.kstr fail "Unknown cipher %S" c)
+      >>| fun c -> c :: acc)
     (return []) ciphers
   >>| fun ciphers ->
   let ciphers = List.rev ciphers in
@@ -2110,9 +2115,10 @@ let merge_push_reply client (push_config : string) =
        can we ensure that statically? *)
     | Dhcp_dns, (Some _ as a), Some _ -> a
     | Dhcp_ntp, (Some _ as a), Some _ -> a
-    | Cipher, Some my, Some c -> (
+    | Cipher, Some my, Some c when c = my -> Some c
+    | Cipher, _, Some (#aead_cipher as c) -> (
         match find Data_ciphers client with
-        | Some ciphers when List.mem c ciphers || c = my -> Some c
+        | Some ciphers when List.mem c ciphers -> Some c
         | _ ->
             invalid_arg
             @@ Fmt.str "push-reply: won't accept cipher %s" (cipher_to_string c)
