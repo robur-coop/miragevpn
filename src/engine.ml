@@ -384,13 +384,6 @@ let merge_server_config_into_client config tls_data =
           m "server options (%S) failure: %s" tls_data.options msg);
       config
 
-let get_tls_data ?with_premaster data =
-  let open Result.Infix in
-  Log.debug (fun m -> m "received tls payload %d bytes" (Cstruct.length data));
-  Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
-  Log.debug (fun m -> m "Received tls-data %a" Packet.pp_tls_data tls_data);
-  tls_data
-
 let kdf session cipher hmac_algorithm key tls_data =
   let keys = derive_keys session key tls_data in
   let maybe_swap (a, b, c, d) =
@@ -468,7 +461,7 @@ let kex_server config session (keys : key_source) tls data =
       peer_info = None;
     }
   in
-  get_tls_data ~with_premaster:true data >>= fun tls_data ->
+  Packet.decode_tls_data ~with_premaster:true data >>= fun tls_data ->
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
   | None -> Error (`Msg "not yet established")
   | Some (tls', payload) ->
@@ -595,7 +588,7 @@ let incoming_control_client config rng session channel now op data =
           let channel_st = TLS_established (tls', key) in
           Ok (None, config, { channel with channel_st }, tls_out)
       | Some d -> (
-          get_tls_data d >>= fun tls_data ->
+          Packet.decode_tls_data d >>= fun tls_data ->
           let config = merge_server_config_into_client config tls_data in
           (* ok, two options:
              - initial handshake done, we need push request / reply
