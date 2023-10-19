@@ -84,6 +84,7 @@ let minimal_config =
   |> add Auth `SHA1
   (* Minimal contents of actual config file: *)
   |> add Cipher `AES_256_CBC
+  |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser", "testpass")
   |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp) ]
