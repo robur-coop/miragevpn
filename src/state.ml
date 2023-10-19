@@ -16,7 +16,7 @@ type transport = {
 }
 
 let pp_transport ppf t =
-  Fmt.pf ppf "my message %lu@.their message %lu (acked %lu) out %d"
+  Fmt.pf ppf "my message %lu@ their message %lu@ (acked %lu)@ out %d"
     t.my_message_id t.their_message_id t.last_acked_message_id
     (IM.cardinal t.out_packets)
 
@@ -226,8 +226,8 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B protocol %a my session %Lu packet %lu@.their session %Lu \
-     packet %lu"
+    "compression %B@ protocol %a@ my session %Lu@ packet %lu@ their session \
+     %Lu@ packet %lu"
     t.compress pp_proto t.protocol t.my_session_id t.my_packet_id
     t.their_session_id t.their_packet_id
 
@@ -285,8 +285,8 @@ let pp ppf t =
     match t.lame_duck with None -> None | Some (ch, _) -> Some ch
   in
   Fmt.pf ppf
-    "@[linger %d state %a session %a@.active %a@.lame duck %a@.last-rcvd %Lu \
-     last-sent %Lu@]"
+    "linger %d@ state %a@ session %a@ active %a@ lame duck %a@ last-rcvd %Lu@ \
+     last-sent %Lu"
     (Cstruct.length t.linger) pp_state t.state pp_session t.session pp_channel
     t.channel
     Fmt.(option ~none:(any "no") pp_channel)

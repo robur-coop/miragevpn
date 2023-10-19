@@ -1689,7 +1689,7 @@ let eq : eq =
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
             Log.debug (fun m ->
-                m "eq self-test: @[<v>%a@, %s @,%a@]" pp (singleton k v)
+                m "eq self-test: %a@ %s@ %a" pp (singleton k v)
                   (if eq then "=" else "<>")
                   pp (singleton k v2));
             eq);
