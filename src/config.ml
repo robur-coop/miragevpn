@@ -2161,7 +2161,7 @@ let client_generate_connect_options t =
         | B (Link_mtu, _) -> true
         | B (Pull, _) -> true
         | B (Tls_mode, `Client) -> true
-        | B (Auth, _) -> true (* TODO: only relevant if no NCP is used *)
+        | B (Auth, _) -> true
         | _ -> false)
       t
   in
