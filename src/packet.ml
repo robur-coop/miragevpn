@@ -332,8 +332,7 @@ let encode_tls_data t =
   in
   let peer_info =
     Option.map (fun pi -> String.concat "\n" (pi @ [])) t.peer_info
-    |> Option.map write_string
-    |> Option.to_list
+    |> Option.map write_string |> Option.to_list
   in
   (* prefix - 4 zero bytes, key_method
      pre_master
@@ -399,9 +398,10 @@ let decode_tls_data ?(with_premaster = false) buf =
      maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
      let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
      let peer_info_start = p_start + 2 + p_len in
-     (if Cstruct.length buf = peer_info_start then Ok None
+     (* XXX(dinosaure): if we don't have enough to have a peer-info (at least 2 bytes),
+        we just ignore it and return [None]. *)
+     (if Cstruct.length buf <= peer_info_start + 2 then Ok None
       else
-        guard (Cstruct.length buf >= peer_info_start + 2) `Partial >>= fun () ->
         let data = Cstruct.shift buf peer_info_start in
         let len = Cstruct.BE.get_uint16 data 0 in
         let data = Cstruct.shift data 2 in
