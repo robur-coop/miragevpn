@@ -333,7 +333,7 @@ let encode_tls_data t =
   let peer_info =
     Option.map (fun pi -> String.concat "\n" (pi @ [])) t.peer_info
     |> Option.map write_string
-    |> Option.value ~default:Cstruct.empty
+    |> Option.to_list
   in
   (* prefix - 4 zero bytes, key_method
      pre_master
@@ -345,7 +345,7 @@ let encode_tls_data t =
      peer_info
   *)
   Cstruct.concat
-    ([ prefix; t.pre_master; t.random1; t.random2; opt ] @ u_p @ [ peer_info ])
+    ([ prefix; t.pre_master; t.random1; t.random2; opt ] @ u_p @ peer_info)
 
 let maybe_string prefix buf off = function
   | 0 | 1 -> Ok ""
