@@ -152,7 +152,7 @@ module Conf_map = struct
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k
     | Connect_timeout : int k
-    | Data_ciphers : [ `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] list k
+    | Data_ciphers : aead_cipher list k
     | Dev : ([ `Tun | `Tap ] * string option) k
     | Dhcp_disable_nbt : flag k
     | Dhcp_dns : Ipaddr.t list k

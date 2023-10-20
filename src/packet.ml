@@ -398,15 +398,11 @@ let decode_tls_data ?(with_premaster = false) buf =
      >>= fun () ->
      maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
      let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
-     let end_of_data = p_start + 2 + p_len in
-     (if Cstruct.length buf = end_of_data then Ok None
-      else if Cstruct.length buf < end_of_data + 2 then (
-        Log.warn (fun m ->
-            m "Bad peer-info %a" Cstruct.hexdump_pp
-              (Cstruct.shift buf end_of_data));
-        Ok None)
+     let peer_info_start = p_start + 2 + p_len in
+     (if Cstruct.length buf = peer_info_start then Ok None
       else
-        let data = Cstruct.shift buf end_of_data in
+        guard (Cstruct.length buf >= peer_info_start + 2) `Partial >>= fun () ->
+        let data = Cstruct.shift buf peer_info_start in
         let len = Cstruct.BE.get_uint16 data 0 in
         let data = Cstruct.shift data 2 in
         guard (Cstruct.length data >= len) `Partial >>= fun () ->
