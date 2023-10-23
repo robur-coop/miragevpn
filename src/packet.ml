@@ -291,16 +291,21 @@ type tls_data = {
   options : string; (* null terminated -- record may end after options! *)
   (* 16 bit len, user (0 terminated), 16 bit len, password (0 terminated) *)
   user_pass : (string * string) option; (* 16 bit len *)
+  peer_info : string list option;
 }
 
 let pp_tls_data ppf t =
-  Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a"
+  Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a %a"
     (Cstruct.length t.pre_master)
     (Cstruct.length t.random1) (Cstruct.length t.random2) t.options
     Fmt.(
       option ~none:(any "no user + pass")
         (append (any "user: ") (pair ~sep:(any ", pass") string string)))
     t.user_pass
+    Fmt.(
+      option ~none:(any "no peer-info")
+        (append (any "peer-info ") Fmt.(list ~sep:(any ", ") Dump.string)))
+    t.peer_info
 
 let key_method = 0x02
 
@@ -328,6 +333,10 @@ let encode_tls_data t =
     (* username and password are each 2 byte length, <value>, 0x00 *)
     [ write_string u; write_string p ]
   in
+  let peer_info =
+    Option.map (fun pi -> String.concat "\n" (pi @ [])) t.peer_info
+    |> Option.map write_string |> Option.to_list
+  in
   (* prefix - 4 zero bytes, key_method
      pre_master
      random1
@@ -337,7 +346,8 @@ let encode_tls_data t =
      password string
      peer_info
   *)
-  Cstruct.concat ([ prefix; t.pre_master; t.random1; t.random2; opt ] @ u_p)
+  Cstruct.concat
+    ([ prefix; t.pre_master; t.random1; t.random2; opt ] @ u_p @ peer_info)
 
 let maybe_string prefix buf off = function
   | 0 | 1 -> Ok ""
@@ -375,7 +385,7 @@ let decode_tls_data ?(with_premaster = false) buf =
   let opt_len = Cstruct.BE.get_uint16 buf (opt_start - 2) in
   guard (Cstruct.length buf >= opt_start + opt_len) `Partial >>= fun () ->
   maybe_string "TLS data options" buf opt_start opt_len >>= fun options ->
-  (if Cstruct.length buf = opt_start + opt_len then Ok None
+  (if Cstruct.length buf = opt_start + opt_len then Ok (None, None)
    else
      (* more bytes - there's username and password (2 bytes len, value, 0x00) *)
      let u_start = opt_start + opt_len in
@@ -388,18 +398,27 @@ let decode_tls_data ?(with_premaster = false) buf =
      let p_len = Cstruct.BE.get_uint16 buf p_start in
      guard (Cstruct.length buf >= p_start + 2 + u_len + p_len) `Partial
      >>= fun () ->
-     maybe_string "password" buf (p_start + 2) p_len >>| fun p ->
-     let end_of_data = p_start + 2 + p_len in
-     (* for some reason there may be some slack here... *)
-     if Cstruct.length buf > end_of_data then
-       let data = Cstruct.shift buf end_of_data in
-       Log.warn (fun m ->
-           m "%u bytes slack at end of tls_data %s (p is %s)@.%a"
-             (Cstruct.length data) (Cstruct.to_string data) p Cstruct.hexdump_pp
-             data)
-     else ();
-     match (u, p) with "", "" -> None | _ -> Some (u, p))
-  >>| fun user_pass -> { pre_master; random1; random2; options; user_pass }
+     maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
+     let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
+     let peer_info_start = p_start + 2 + p_len in
+     (* dinosaure: if we don't have enough to have a peer-info (at least 2 bytes),
+        we just ignore it and return [None]. *)
+     (if Cstruct.length buf <= peer_info_start + 2 then Ok None
+      else
+        let data = Cstruct.shift buf peer_info_start in
+        let len = Cstruct.BE.get_uint16 data 0 in
+        let data = Cstruct.shift data 2 in
+        guard (Cstruct.length data >= len) `Partial >>= fun () ->
+        if Cstruct.length data > len then
+          Log.warn (fun m ->
+              m "slack at end of tls_data %S @.%a"
+                (Cstruct.to_string ~len data)
+                Cstruct.hexdump_pp data);
+        Ok (if len = 0 then None else Some (Cstruct.to_string ~len data)))
+     >>| fun peer_info ->
+     (user_pass, Option.map (String.split_on_char '\n') peer_info))
+  >>| fun (user_pass, peer_info) ->
+  { pre_master; random1; random2; options; user_pass; peer_info }
 
 let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
 let push_reply = Cstruct.of_string "PUSH_REPLY"

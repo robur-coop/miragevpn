@@ -297,27 +297,28 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
   and sha = p_hash Mirage_crypto.Hash.SHA1.(hmac, digest_size) s2 in
   Mirage_crypto.Uncommon.Cs.xor md5 sha
 
-let derive_keys session (key_source : State.key_source)
-    (tls_data : Packet.tls_data) =
+let derive_keys session (own_key_material : State.own_key_material)
+    (peer_key_material : Packet.tls_data) =
   let ( pre_master,
         client_random,
         server_random,
         client_random',
         server_random',
         sids ) =
-    if Cstruct.(equal empty key_source.pre_master) then
-      ( tls_data.pre_master,
-        tls_data.random1,
-        key_source.random1,
-        tls_data.random2,
-        key_source.random2,
+    if Cstruct.(equal empty own_key_material.pre_master) then
+      (* we're the server *)
+      ( peer_key_material.pre_master,
+        peer_key_material.random1,
+        own_key_material.random1,
+        peer_key_material.random2,
+        own_key_material.random2,
         (session.their_session_id, session.my_session_id) )
     else
-      ( key_source.pre_master,
-        key_source.random1,
-        tls_data.random1,
-        key_source.random2,
-        tls_data.random2,
+      ( own_key_material.pre_master,
+        own_key_material.random1,
+        peer_key_material.random1,
+        own_key_material.random2,
+        peer_key_material.random2,
         (session.my_session_id, session.their_session_id) )
   in
   let master_key =
@@ -357,124 +358,119 @@ let maybe_kex_client rng config tls =
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
     Config.client_generate_connect_options config >>= fun options ->
     let user_pass = Config.find Auth_user_pass config in
-    let td = { Packet.pre_master; random1; random2; options; user_pass }
-    and key_source = { State.pre_master; random1; random2 } in
+    let peer_info =
+      let ciphers =
+        String.concat ":"
+          (List.map Config.aead_cipher_to_string
+             (Config.get Data_ciphers config))
+      in
+      Some [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers; "IV_NCP=2" ]
+    in
+    let td =
+      { Packet.pre_master; random1; random2; options; user_pass; peer_info }
+    and own_key_material = { State.pre_master; random1; random2 } in
     match
       Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ]
     with
     | None -> Error (`Msg "Tls.send application data failed for tls_data")
     | Some (tls', payload) ->
-        let client_state = TLS_established (tls', key_source) in
+        let client_state = TLS_established (tls', own_key_material) in
         Ok (client_state, Some payload)
   else Ok (TLS_handshake tls, None)
 
-let merge_server_config_into_client config tls_data =
-  match Config.client_merge_server_config config tls_data.Packet.options with
-  | Ok config -> config
-  | Error (`Msg msg) ->
-      Log.err (fun m ->
-          m "server options (%S) failure: %s" tls_data.options msg);
-      config
+let kdf session cipher hmac_algorithm own_key_material peer_key_material =
+  let keys = derive_keys session own_key_material peer_key_material in
+  let maybe_swap (a, b, c, d) =
+    if Cstruct.(equal empty own_key_material.State.pre_master) then (c, d, a, b)
+    else (a, b, c, d)
+  in
+  let extract klen hlen =
+    ( Cstruct.sub keys 0 klen,
+      Cstruct.sub keys 64 hlen,
+      Cstruct.sub keys 128 klen,
+      Cstruct.sub keys 192 hlen )
+  in
+  let keys =
+    match cipher with
+    | `AES_256_CBC ->
+        let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+        let my_key, my_hmac, their_key, their_hmac =
+          maybe_swap (extract 32 hmac_len)
+        in
+        AES_CBC
+          {
+            my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+            my_hmac;
+            their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+            their_hmac;
+          }
+    | `AES_128_GCM ->
+        let my_key, my_implicit_iv, their_key, their_implicit_iv =
+          maybe_swap (extract 16 (Packet.aead_nonce - Packet.packet_id_len))
+        in
+        AES_GCM
+          {
+            my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+            my_implicit_iv;
+            their_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+            their_implicit_iv;
+          }
+    | `AES_256_GCM ->
+        let my_key, my_implicit_iv, their_key, their_implicit_iv =
+          maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
+        in
+        AES_GCM
+          {
+            my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+            my_implicit_iv;
+            their_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+            their_implicit_iv;
+          }
+    | `CHACHA20_POLY1305 ->
+        let my_key, my_implicit_iv, their_key, their_implicit_iv =
+          maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
+        in
+        CHACHA20_POLY1305
+          {
+            my_key = Mirage_crypto.Chacha20.of_secret my_key;
+            my_implicit_iv;
+            their_key = Mirage_crypto.Chacha20.of_secret their_key;
+            their_implicit_iv;
+          }
+  in
+  { my_packet_id = 1l; their_packet_id = 1l; keys }
 
-let maybe_kdf ?with_premaster session cipher hmac_algorithm key = function
-  | None -> Error (`Msg "TLS established, expected data, received nothing")
-  | Some data ->
-      let open Result.Infix in
-      Log.debug (fun m ->
-          m "received tls payload %d bytes" (Cstruct.length data));
-      Packet.decode_tls_data ?with_premaster data >>| fun tls_data ->
-      let keys = derive_keys session key tls_data in
-      let maybe_swap (a, b, c, d) =
-        if Cstruct.(equal empty key.State.pre_master) then (c, d, a, b)
-        else (a, b, c, d)
-      in
-      let extract klen hlen =
-        ( Cstruct.sub keys 0 klen,
-          Cstruct.sub keys 64 hlen,
-          Cstruct.sub keys 128 klen,
-          Cstruct.sub keys 192 hlen )
-      in
-      let keys =
-        match cipher with
-        | `AES_256_CBC ->
-            let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
-            let my_key, my_hmac, their_key, their_hmac =
-              maybe_swap (extract 32 hmac_len)
-            in
-            AES_CBC
-              {
-                my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
-                my_hmac;
-                their_key =
-                  Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
-                their_hmac;
-              }
-        | `AES_128_GCM ->
-            let my_key, my_implicit_iv, their_key, their_implicit_iv =
-              maybe_swap (extract 16 (Packet.aead_nonce - Packet.packet_id_len))
-            in
-            AES_GCM
-              {
-                my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
-                my_implicit_iv;
-                their_key =
-                  Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
-                their_implicit_iv;
-              }
-        | `AES_256_GCM ->
-            let my_key, my_implicit_iv, their_key, their_implicit_iv =
-              maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
-            in
-            AES_GCM
-              {
-                my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
-                my_implicit_iv;
-                their_key =
-                  Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
-                their_implicit_iv;
-              }
-        | `CHACHA20_POLY1305 ->
-            let my_key, my_implicit_iv, their_key, their_implicit_iv =
-              maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
-            in
-            CHACHA20_POLY1305
-              {
-                my_key = Mirage_crypto.Chacha20.of_secret my_key;
-                my_implicit_iv;
-                their_key = Mirage_crypto.Chacha20.of_secret their_key;
-                their_implicit_iv;
-              }
-      in
-      let keys_ctx = { my_packet_id = 1l; their_packet_id = 1l; keys } in
-      (tls_data, keys_ctx)
-
-let kex_server config session (keys : key_source) tls data =
+let kex_server config session (own_key_material : own_key_material) tls data =
   let open Result.Infix in
-  let cipher = Config.get Cipher config
-  and hmac_algorithm = Config.get Auth config in
-  maybe_kdf ~with_premaster:true session cipher hmac_algorithm keys data
-  >>= fun (_tls_data, keys_ctx) ->
-  (* TODO verify username + password, respect incoming tls_data *)
-  (* TODO return (modified!?) config' *)
+  (* TODO verify username + password, respect incoming data, including NCP *)
   let options = Config.server_generate_connect_options config in
   let td =
     {
       Packet.pre_master = Cstruct.empty;
-      random1 = keys.random1;
-      random2 = keys.random2;
+      random1 = own_key_material.random1;
+      random2 = own_key_material.random2;
       options;
       user_pass = None;
+      peer_info = None;
     }
   in
+  Packet.decode_tls_data ~with_premaster:true data >>= fun peer_key_material ->
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
   | None -> Error (`Msg "not yet established")
   | Some (tls', payload) ->
       (match Config.find Ifconfig config with
-      | None -> Ok (Push_request_sent (tls', keys_ctx), None)
+      | None ->
+          Ok
+            (Push_request_sent (tls', own_key_material, peer_key_material), None)
       | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
           let ip_config =
             let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
             { cidr; gateway = fst (server_ip config) }
+          in
+          let cipher = Config.get Cipher config
+          and hmac_algorithm = Config.get Auth config in
+          let keys_ctx =
+            kdf session cipher hmac_algorithm own_key_material peer_key_material
           in
           Ok (Established keys_ctx, Some ip_config)
       | _ ->
@@ -588,12 +584,19 @@ let incoming_control_client config rng session channel now op data =
       | None ->
           let channel_st = TLS_established (tls', key) in
           Ok (None, config, { channel with channel_st }, tls_out)
-      | _ -> (
-          let cipher = Config.get Cipher config
-          and hmac_algorithm = Config.get Auth config in
-          maybe_kdf session cipher hmac_algorithm key d
-          >>= fun (tls_data, keys) ->
-          let config = merge_server_config_into_client config tls_data in
+      | Some d -> (
+          Packet.decode_tls_data d >>= fun tls_data ->
+          let config =
+            let merged =
+              Config.client_merge_server_config config tls_data.Packet.options
+            in
+            Result.iter_error
+              (fun (`Msg msg) ->
+                Log.err (fun m ->
+                    m "server options (%S) failure: %s" tls_data.options msg))
+              merged;
+            Result.value ~default:config merged
+          in
           (* ok, two options:
              - initial handshake done, we need push request / reply
              - subsequent handshake, we're ready for data delivery [we already have ip and route in cfg]
@@ -602,23 +605,29 @@ let incoming_control_client config rng session channel now op data =
           match Config.(find Ifconfig config) with
           | Some _ ->
               let ip_config = ip_from_config config in
+              let cipher = Config.get Cipher config
+              and hmac_algorithm = Config.get Auth config in
+              let keys = kdf session cipher hmac_algorithm key tls_data in
               let channel_st = Established keys in
               Ok (Some ip_config, config, { channel with channel_st }, tls_out)
           | None ->
               (* now we send a PUSH_REQUEST\0 and see what happens *)
               push_request tls' >>| fun (tls'', out) ->
-              let channel_st = Push_request_sent (tls'', keys) in
+              let channel_st = Push_request_sent (tls'', key, tls_data) in
               (* first send an ack for the received key data packet (this needs to be
                  a separate packet from the PUSH_REQUEST for unknown reasons) *)
               ( None,
                 config,
                 { channel with channel_st },
                 tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] )))
-  | Push_request_sent (tls, keys), Packet.Control ->
+  | Push_request_sent (tls, key, tls_data), Packet.Control ->
       let open Result.Infix in
       Log.debug (fun m -> m "in push request sent");
       incoming_tls_without_reply tls data >>= fun (_tls', d) ->
       maybe_push_reply config d >>| fun config' ->
+      let cipher = Config.get Cipher config'
+      and hmac_algorithm = Config.get Auth config' in
+      let keys = kdf session cipher hmac_algorithm key tls_data in
       let channel_st = Established keys in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
@@ -688,6 +697,9 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
   | TLS_established (tls, keys), Packet.Control ->
       let open Result.Infix in
       incoming_tls_without_reply tls data >>= fun (tls', d) ->
+      Option.to_result
+        ~none:(`Msg "TLS established, expected data, received nothing") d
+      >>= fun d ->
       kex_server config session keys tls' d
       >>| fun ((channel_st, ip_config), out) ->
       (* keys established, move forward to "expect push request (reply with push reply)" *)
@@ -696,7 +708,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         session,
         { channel with channel_st },
         [ (`Control, out) ] )
-  | Push_request_sent (tls, keys), Packet.Control -> (
+  | Push_request_sent (tls, key, tls_data), Packet.Control -> (
       let
       (* TODO naming: this is actually server_stuff sent, awaiting push request *)
       open
@@ -733,6 +745,9 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
             in
             let reply = String.concat "," reply_things in
             push_reply tls' reply >>= fun (_tls'', out) ->
+            let cipher = Config.get Cipher config
+            and hmac_algorithm = Config.get Auth config in
+            let keys = kdf session cipher hmac_algorithm key tls_data in
             let channel_st = Established keys in
             let ip_config = { cidr; gateway = server_ip } in
             let config' =

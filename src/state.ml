@@ -1,4 +1,4 @@
-type key_source = {
+type own_key_material = {
   pre_master : Cstruct.t; (* only in client -> server, 48 bytes *)
   random1 : Cstruct.t; (* 32 bytes *)
   random2 : Cstruct.t; (* 32 bytes *)
@@ -16,7 +16,7 @@ type transport = {
 }
 
 let pp_transport ppf t =
-  Fmt.pf ppf "my message %lu@.their message %lu (acked %lu) out %d"
+  Fmt.pf ppf "my message %lu@ their message %lu@ (acked %lu)@ out %d"
     t.my_message_id t.their_message_id t.last_acked_message_id
     (IM.cardinal t.out_packets)
 
@@ -65,8 +65,8 @@ let pp_keys ppf t =
 type channel_state =
   | Expect_reset
   | TLS_handshake of Tls.Engine.state
-  | TLS_established of Tls.Engine.state * key_source
-  | Push_request_sent of Tls.Engine.state * keys
+  | TLS_established of Tls.Engine.state * own_key_material
+  | Push_request_sent of Tls.Engine.state * own_key_material * Packet.tls_data
   | Established of keys
 
 let pp_channel_state ppf = function
@@ -104,9 +104,7 @@ let new_channel ?(state = Expect_reset) keyid started =
   }
 
 let keys_opt ch =
-  match ch.channel_st with
-  | Push_request_sent (_, keys) | Established keys -> Some keys
-  | _ -> None
+  match ch.channel_st with Established keys -> Some keys | _ -> None
 
 let set_keys ch keys =
   let channel_st =
@@ -228,8 +226,8 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B protocol %a my session %Lu packet %lu@.their session %Lu \
-     packet %lu"
+    "compression %B@ protocol %a@ my session %Lu@ packet %lu@ their session \
+     %Lu@ packet %lu"
     t.compress pp_proto t.protocol t.my_session_id t.my_packet_id
     t.their_session_id t.their_packet_id
 
@@ -287,8 +285,8 @@ let pp ppf t =
     match t.lame_duck with None -> None | Some (ch, _) -> Some ch
   in
   Fmt.pf ppf
-    "@[linger %d state %a session %a@.active %a@.lame duck %a@.last-rcvd %Lu \
-     last-sent %Lu@]"
+    "linger %d@ state %a@ session %a@ active %a@ lame duck %a@ last-rcvd %Lu@ \
+     last-sent %Lu"
     (Cstruct.length t.linger) pp_state t.state pp_session t.session pp_channel
     t.channel
     Fmt.(option ~none:(any "no") pp_channel)

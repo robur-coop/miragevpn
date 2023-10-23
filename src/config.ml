@@ -102,6 +102,18 @@ let ( (cipher13_to_cs13 : string -> Tls.Ciphersuite.ciphersuite13),
       | Some c -> c),
     fun c -> List.assoc c rev_map )
 
+type aead_cipher = [ `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ]
+type cipher = [ aead_cipher | `AES_256_CBC ]
+
+let aead_cipher_to_string : aead_cipher -> string = function
+  | `AES_128_GCM -> "AES-128-GCM"
+  | `AES_256_GCM -> "AES-256-GCM"
+  | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305"
+
+let cipher_to_string : cipher -> string = function
+  | #aead_cipher as c -> aead_cipher_to_string c
+  | `AES_256_CBC -> "AES-256-CBC"
+
 module Conf_map = struct
   type flag = unit
 
@@ -140,6 +152,7 @@ module Conf_map = struct
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k
     | Connect_timeout : int k
+    | Data_ciphers : aead_cipher list k
     | Dev : ([ `Tun | `Tap ] * string option) k
     | Dhcp_disable_nbt : flag k
     | Dhcp_dns : Ipaddr.t list k
@@ -241,11 +254,18 @@ module Conf_map = struct
   include Gmap.Make (K)
 
   let is_valid_config t =
+    let open Result.Infix in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
-    Result.map_error
-      (fun err -> `Msg ("not a valid config: " ^ err))
-      (ensure_mem Cipher "config must specify 'cipher'")
+    if not (mem Tls_mode t) then
+      Result.map_error
+        (fun err -> `Msg ("not a valid config: " ^ err))
+        (ensure_mem Cipher "config must specify 'cipher'")
+      >>= fun () ->
+      if get Cipher t <> `AES_256_CBC then
+        Error (`Msg "only AES-256-CBC supported in static key mode")
+      else Ok ()
+    else Ok ()
 
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
@@ -397,14 +417,7 @@ module Conf_map = struct
         | `SHA384 -> "SHA384"
         | `SHA512 -> "SHA512")
     in
-    let pp_cipher ppf v =
-      Fmt.string ppf
-        (match v with
-        | `AES_256_CBC -> "AES-256-CBC"
-        | `AES_128_GCM -> "AES-128-GCM"
-        | `AES_256_GCM -> "AES-256-GCM"
-        | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305")
-    in
+    let pp_cipher ppf v = Fmt.string ppf (cipher_to_string (v :> cipher)) in
     match (k, v) with
     | Auth, h -> p () "auth %a" pp_digest_algorithm h
     | Auth_nocache, () -> p () "auth-nocache"
@@ -435,6 +448,8 @@ module Conf_map = struct
     | Connect_retry_max, `Unlimited -> p () "connect-retry-max unlimited"
     | Connect_retry_max, `Times i -> p () "connect-retry-max %d" i
     | Connect_timeout, seconds -> p () "connect-timeout %d" seconds
+    | Data_ciphers, cs ->
+        p () "data-ciphers %a" Fmt.(list ~sep:(any ":") pp_cipher) cs
     | Dev, (`Tap, None) -> p () "dev tap"
     | Dev, (`Tun, None) -> p () "dev tun"
     | Dev, (typ, Some name) ->
@@ -601,6 +616,7 @@ module Defaults = struct
     |> add Handshake_window 60 |> add Transition_window 3600
     |> add Proto (None, `Udp)
     |> add Auth `SHA1
+    |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
 
   let client =
     let open Conf_map in
@@ -1317,15 +1333,31 @@ let a_server =
   | Ok cidr -> return (`Entry (B (Server, cidr)))
   | Error (`Msg m) -> fail m
 
+let aead_cipher ~ctx c =
+  match String.uppercase_ascii c with
+  | "AES-128-GCM" -> return `AES_128_GCM
+  | "AES-256-GCM" -> return `AES_256_GCM
+  | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
+  | _ -> Fmt.kstr fail "Unknown or unsupported cipher for %S: %S" ctx c
+
 let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
   (match String.uppercase_ascii v with
   | "AES-256-CBC" -> return `AES_256_CBC
-  | "AES-128-GCM" -> return `AES_128_GCM
-  | "AES-256-GCM" -> return `AES_256_GCM
-  | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
-  | _ -> Fmt.kstr fail "Unknown cipher %S" v)
+  | c -> aead_cipher ~ctx:"cipher" c)
   >>| fun v -> `Entry (B (Cipher, v))
+
+let a_data_ciphers =
+  string "data-ciphers" *> a_whitespace *> a_single_param >>= fun v ->
+  let ciphers = String.split_on_char ':' v |> List.map String.trim in
+  List.fold_left
+    (fun acc c ->
+      acc >>= fun acc ->
+      aead_cipher ~ctx:"data-ciphers" c >>| fun c -> c :: acc)
+    (return []) ciphers
+  >>| fun ciphers ->
+  let ciphers = List.rev ciphers in
+  `Entry (B (Data_ciphers, ciphers))
 
 let a_auth =
   string "auth" *> a_whitespace *> a_single_param >>= fun h ->
@@ -1529,6 +1561,7 @@ let a_config_entry : line A.t =
          a_link_mtu;
          a_tun_mtu;
          a_cipher;
+         a_data_ciphers;
          a_auth;
          a_port;
          a_server;
@@ -1656,7 +1689,7 @@ let eq : eq =
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
             Log.debug (fun m ->
-                m "eq self-test: @[<v>%a@, %s @,%a@]" pp (singleton k v)
+                m "eq self-test: %a@ %s@ %a" pp (singleton k v)
                   (if eq then "=" else "<>")
                   pp (singleton k v2));
             eq);
@@ -2087,6 +2120,14 @@ let merge_push_reply client (push_config : string) =
        can we ensure that statically? *)
     | Dhcp_dns, (Some _ as a), Some _ -> a
     | Dhcp_ntp, (Some _ as a), Some _ -> a
+    | Cipher, Some my, Some c when c = my -> Some c
+    | Cipher, _, Some (#aead_cipher as c) -> (
+        match find Data_ciphers client with
+        | Some ciphers when List.mem c ciphers -> Some c
+        | _ ->
+            invalid_arg
+            @@ Fmt.str "push-reply: won't accept cipher %s" (cipher_to_string c)
+        )
     (* TODO | Route, Some a, _ -> a*)
     (* try to merge: *)
     | _, (Some a as some_a), Some b -> (
@@ -2125,12 +2166,13 @@ let client_generate_connect_options t =
   let excerpt =
     Conf_map.filter
       (function
-        | B (Cipher, _) -> true
+        | B (Cipher, _) -> not (Conf_map.mem Tls_mode t)
         | B (Comp_lzo, _) -> true
         | B (Tun_mtu, _) -> true
         | B (Link_mtu, _) -> true
         | B (Pull, _) -> true
         | B (Tls_mode, `Client) -> true
+        | B (Auth, _) -> true
         | _ -> false)
       t
   in
