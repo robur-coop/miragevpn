@@ -61,6 +61,9 @@ let open_tun config { Miragevpn.cidr; gateway } :
          (match devname with None -> "dynamic" | Some dev -> dev)
          msg)
 
+let safe_close fd =
+  Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
+
 let rec write_to_fd fd data =
   if Cstruct.length data = 0 then Lwt_result.return ()
   else
@@ -68,6 +71,7 @@ let rec write_to_fd fd data =
       (fun () ->
         Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
       (fun e ->
+        safe_close fd >>= fun () ->
         Lwt_result.lift (error_msgf "TCP write error %s" (Printexc.to_string e)))
 
 let write_multiple_to_fd fd bufs =
@@ -92,6 +96,7 @@ let write_udp fd data =
             m "UDP short write (length %d, written %d)" len sent);
       Ok ())
     (fun e ->
+      safe_close fd >>= fun () ->
       Lwt_result.lift (error_msgf "UDP write error %s" (Printexc.to_string e)))
 
 let write_multiple_udp fd bufs =
@@ -126,6 +131,7 @@ let read_from_fd fd =
 let rec reader_tcp mvar fd =
   read_from_fd fd >>= function
   | Error (`Msg msg) ->
+      safe_close fd >>= fun () ->
       Logs.err (fun m -> m "read error from remote %s" msg);
       Lwt_mvar.put mvar `Connection_failed
   | Ok data -> Lwt_mvar.put mvar (`Data data) >>= fun () -> reader_tcp mvar fd
@@ -144,6 +150,7 @@ let read_udp =
 let rec reader_udp mvar r =
   read_udp r >>= function
   | Error (`Msg msg) ->
+      safe_close r >>= fun () ->
       Logs.err (fun m -> m "read error from remote %s" msg);
       Lwt_mvar.put mvar `Connection_failed
   | Ok (Some data) ->
@@ -182,10 +189,11 @@ let connect_tcp ip port =
       Logs.app (fun m -> m "connected to %a:%d" Ipaddr.pp ip port);
       Some fd)
     (fun e ->
+      safe_close fd >|= fun () ->
       Logs.err (fun m ->
           m "error %s while connecting to %a:%d" (Printexc.to_string e)
             Ipaddr.pp ip port);
-      Lwt.return None)
+      None)
 (* TODO 2019-11-23 hannes is not sure whether this comment is still relevant.
    TODO here we should learn the MTU in order to set Link_mtu.
    We can use ioctl SIOCIFMTU bound in Tuntap.get_mtu
@@ -225,9 +233,6 @@ type conn = {
   est_mvar : (Miragevpn.ip_config * int, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
-
-let safe_close fd =
-  Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
 
 let handle_action conn = function
   | `Resolve data ->
