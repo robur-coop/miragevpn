@@ -254,17 +254,19 @@ let pp_server_state ppf = function
 
 type tls_auth = {
   hmac_algorithm : Mirage_crypto.Hash.hash;
-  my_hmac : Cstruct.t; their_hmac : Cstruct.t;
+  my_hmac : Cstruct.t;
+  their_hmac : Cstruct.t;
 }
 
 type state =
-  | Client_tls_auth of { tls_auth : tls_auth;  state : client_state }
+  | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
   | Client_static of { keys : keys; state : client_state }
   | Server_tls_auth of { tls_auth : tls_auth; state : server_state }
 
 let pp_state ppf = function
   | Client_tls_auth { state; _ } -> pp_client_state ppf state
-  | Client_static { state; _ } -> Fmt.pf ppf "client static %a" pp_client_state state
+  | Client_static { state; _ } ->
+      Fmt.pf ppf "client static %a" pp_client_state state
   | Server_tls_auth { state; _ } -> pp_server_state ppf state
 
 type t = {
@@ -348,15 +350,19 @@ let channel_of_keyid keyid s =
         Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
     | _ -> (
         match s.state with
-        | Client_tls_auth { state = Rekeying channel; tls_auth } when channel.keyid = keyid ->
+        | Client_tls_auth { state = Rekeying channel; tls_auth }
+          when channel.keyid = keyid ->
             let set s ch =
               let state = Client_tls_auth { tls_auth; state = Rekeying ch } in
               { s with state }
             in
             Some (channel, set)
-        | Server_tls_auth { state = Server_rekeying channel; tls_auth } when channel.keyid = keyid ->
+        | Server_tls_auth { state = Server_rekeying channel; tls_auth }
+          when channel.keyid = keyid ->
             let set s ch =
-              let state = Server_tls_auth { state = Server_rekeying ch; tls_auth } in
+              let state =
+                Server_tls_auth { state = Server_rekeying ch; tls_auth }
+              in
               { s with state }
             in
             Some (channel, set)
