@@ -1350,6 +1350,11 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         "Static client received control channel packet; \
                          ignoring.");
                   Ok (state, out, act)
+              | Packet.Hard_reset_client_v3, Client_tls_auth _ ->
+                  failwith "TODO" (* ignore? fail? *)
+              | Packet.Hard_reset_client_v3, Server_tls_auth { tls_auth; _ } ->
+                  let _ = tls_auth in
+                  failwith "TODO" (* TODO *)
               | ( Packet.Ack,
                   ( Client_tls_auth { tls_auth; _ }
                   | Server_tls_auth { tls_auth; _ } ) ) -> (
@@ -1373,11 +1378,6 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       let state = { state with session }
                       and ch = { ch with transport } in
                       Ok (set_ch state ch, out, act))
-              | Packet.Hard_reset_client_v3, Client_tls_auth _ ->
-                  failwith "TODO" (* ignore? fail? *)
-              | Packet.Hard_reset_client_v3, Server_tls_auth { tls_auth; _ } ->
-                  let _ = tls_auth in
-                  failwith "TODO" (* TODO *)
               | ( _control_op,
                   ( Client_tls_auth { tls_auth; _ }
                   | Server_tls_auth { tls_auth; _ } ) ) -> (
@@ -1506,6 +1506,38 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 },
                                 out,
                                 act ))))
+              | Packet.Ack, Client_tls_crypt { tls_crypt; _ } ->
+                let* cleartext, off = Packet.Tls_crypt.decode_cleartext_header payload in
+                let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
+                let encrypted = Cstruct.shift payload off in
+                let iv = Cstruct.sub cleartext.hmac 0 16 in
+                let ctr = Aes_ctr.ctr_of_cstruct iv in
+                let decrypted =
+                  Aes_ctr.decrypt ~key:tls_crypt.their_key ~ctr
+                    encrypted
+                in
+                let* ack = Packet.Tls_crypt.decode_decrypted_ack cleartext decrypted in
+                let to_be_signed = Packet.Tls_crypt.to_be_signed key (`Ack ack) in
+                let computed_hmac =
+                  Mirage_crypto.Hash.SHA256.hmac ~key:tls_crypt.their_hmac
+                    to_be_signed
+                in
+                let* () =
+                  (* XXX maybe just ignore? *)
+                  if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
+                    Ok ()
+                  else
+                    Error (`Bad_mac (state, computed_hmac, (key, `Ack ack)))
+                in
+                ( match expected_packet state.session ch.transport ack None with
+                  | Error e ->
+                      (* XXX: only in udp mode? *)
+                      Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
+                      Ok (state, out, None)
+                  | Ok (session, transport) ->
+                    let state = { state with session }
+                    and ch = { ch with transport } in
+                    Ok (set_ch state ch, out, act))
               | _ -> failwith "not implemented" (* FIXME *))
         in
         multi linger (state, out, act)

@@ -387,7 +387,7 @@ module Tls_crypt = struct
     let* () = guard (Cstruct.length buf >= 1) `Partial in
     let arr_len = Cstruct.get_uint8 buf 0 in
     let rs_len = if arr_len = 0 then 0 else 8 in
-    let* () =
+    let+ () =
       guard
         (Cstruct.length buf >= 1 + (packet_id_len * arr_len) + rs_len)
         `Partial
@@ -402,15 +402,33 @@ module Tls_crypt = struct
       else None
     in
     let { local_session; packet_id; timestamp; hmac } = clear_hdr in
-    Ok
-      {
-        local_session;
-        packet_id;
-        timestamp;
-        hmac;
-        ack_message_ids;
-        remote_session;
-      }
+    let res = {
+      local_session;
+      packet_id;
+      timestamp;
+      hmac;
+      ack_message_ids;
+      remote_session;
+    }
+    in
+    (res, 1 + arr_len + rs_len)
+
+  let decode_decrypted_ack clear_hdr buf =
+    let open Result.Syntax in
+    let+ hdr, off = decode_decrypted_header clear_hdr buf in
+    if off <> Cstruct.length buf then
+      Log.debug (fun m ->
+          m "decode_decrypted_ack: %d extra bytes at end of message"
+            (Cstruct.length buf - off));
+    hdr
+
+  let decode_decrypted_control clear_hdr buf =
+    let open Result.Syntax in
+    let* hdr, off = decode_decrypted_header clear_hdr buf in
+    let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
+    let message_id = Cstruct.BE.get_uint32 buf off
+    and payload = Cstruct.shift buf (off + 4) in
+    (hdr, message_id, payload)
 
   let decode_cleartext_header buf =
     let open Result.Syntax in
