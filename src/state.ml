@@ -202,24 +202,20 @@ let next_free_ip config is_not_taken =
 type session = {
   my_session_id : int64;
   my_packet_id : int32; (* this starts from 1l, indicates the next to-be-send *)
-  my_hmac : Cstruct.t;
   their_session_id : int64;
   their_packet_id : int32;
       (* the first should be 1l, indicates the next to-be-received *)
-  their_hmac : Cstruct.t;
   compress : bool;
   protocol : [ `Tcp | `Udp ];
 }
 
 let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
-    ?(protocol = `Tcp) ~my_hmac ~their_hmac () =
+    ?(protocol = `Tcp) () =
   {
     my_session_id;
     my_packet_id = 1l;
-    my_hmac;
     their_session_id;
     their_packet_id = 1l;
-    their_hmac;
     compress;
     protocol;
   }
@@ -256,15 +252,22 @@ let pp_server_state ppf = function
   | Server_ready -> Fmt.string ppf "server ready"
   | Server_rekeying c -> Fmt.pf ppf "server rekeying %a" pp_channel c
 
+type tls_auth = {
+  hmac_algorithm : Mirage_crypto.Hash.hash;
+  my_hmac : Cstruct.t;
+  their_hmac : Cstruct.t;
+}
+
 type state =
-  | Client of client_state
-  | Client_static of keys * client_state
-  | Server of server_state
+  | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
+  | Client_static of { keys : keys; state : client_state }
+  | Server_tls_auth of { tls_auth : tls_auth; state : server_state }
 
 let pp_state ppf = function
-  | Client c -> pp_client_state ppf c
-  | Client_static (_, c) -> Fmt.pf ppf "client static %a" pp_client_state c
-  | Server s -> pp_server_state ppf s
+  | Client_tls_auth { state; _ } -> pp_client_state ppf state
+  | Client_static { state; _ } ->
+      Fmt.pf ppf "client static %a" pp_client_state state
+  | Server_tls_auth { state; _ } -> pp_server_state ppf state
 
 type t = {
   config : Config.t;
@@ -347,15 +350,19 @@ let channel_of_keyid keyid s =
         Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
     | _ -> (
         match s.state with
-        | Client (Rekeying channel) when channel.keyid = keyid ->
+        | Client_tls_auth { state = Rekeying channel; tls_auth }
+          when channel.keyid = keyid ->
             let set s ch =
-              let state = Client (Rekeying ch) in
+              let state = Client_tls_auth { tls_auth; state = Rekeying ch } in
               { s with state }
             in
             Some (channel, set)
-        | Server (Server_rekeying channel) when channel.keyid = keyid ->
+        | Server_tls_auth { state = Server_rekeying channel; tls_auth }
+          when channel.keyid = keyid ->
             let set s ch =
-              let state = Server (Server_rekeying ch) in
+              let state =
+                Server_tls_auth { state = Server_rekeying ch; tls_auth }
+              in
               { s with state }
             in
             Some (channel, set)
@@ -366,8 +373,7 @@ type server = {
   server_rng : int -> Cstruct.t;
   server_ts : unit -> int64;
   server_now : unit -> Ptime.t;
-  server_hmac : Cstruct.t;
-  client_hmac : Cstruct.t;
+  tls_auth : tls_auth;
 }
 
 let pp_server ppf _s = Fmt.pf ppf "server"
