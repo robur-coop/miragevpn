@@ -418,8 +418,8 @@ module Tls_crypt = struct
       match op with
       | Data_v1 -> Ok (`Data payload)
       | Hard_reset_client_v3 ->
-          let* clear, off = decode_cleartext_header buf in
-          let encrypted = Cstruct.shift buf off in
+          let* clear, off = decode_cleartext_header payload in
+          let encrypted = Cstruct.shift payload off in
           let+ () = guard (Cstruct.length encrypted >= 2) `Partial in
           (* XXX: we could try deserialize wKc even further *)
           let wkc_len =
@@ -430,8 +430,8 @@ module Tls_crypt = struct
           in
           `Hard_reset_client_v3 (clear, encrypted, wkc)
       | op ->
-          let+ clear, off = decode_cleartext_header buf in
-          let encrypted = Cstruct.shift buf off in
+          let+ clear, off = decode_cleartext_header payload in
+          let encrypted = Cstruct.shift payload off in
           let res =
             match op with
             | Ack -> `Ack (clear, encrypted)
