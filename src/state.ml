@@ -1,4 +1,4 @@
-type own_key_material = {
+type my_key_material = {
   pre_master : Cstruct.t; (* only in client -> server, 48 bytes *)
   random1 : Cstruct.t; (* 32 bytes *)
   random2 : Cstruct.t; (* 32 bytes *)
@@ -65,8 +65,8 @@ let pp_keys ppf t =
 type channel_state =
   | Expect_reset
   | TLS_handshake of Tls.Engine.state
-  | TLS_established of Tls.Engine.state * own_key_material
-  | Push_request_sent of Tls.Engine.state * own_key_material * Packet.tls_data
+  | TLS_established of Tls.Engine.state * my_key_material
+  | Push_request_sent of Tls.Engine.state * my_key_material * Packet.tls_data
   | Established of keys
 
 let pp_channel_state ppf = function
