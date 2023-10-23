@@ -398,7 +398,7 @@ let decode_tls_data ?(with_premaster = false) buf =
      maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
      let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
      let peer_info_start = p_start + 2 + p_len in
-     (* XXX(dinosaure): if we don't have enough to have a peer-info (at least 2 bytes),
+     (* dinosaure: if we don't have enough to have a peer-info (at least 2 bytes),
         we just ignore it and return [None]. *)
      (if Cstruct.length buf <= peer_info_start + 2 then Ok None
       else
