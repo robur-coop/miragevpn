@@ -8,9 +8,11 @@ module Log =
          @@ Src.create ~doc:"Miragevpn library's packet module" "ovpn.packet")
       : Logs.LOG)
 
-type error = [ `Partial | `Unknown_operation of int | `Malformed of string ]
+type error =
+  [ `Tcp_partial | `Partial | `Unknown_operation of int | `Malformed of string ]
 
 let pp_error ppf = function
+  | `Tcp_partial -> Fmt.string ppf "pending data"
   | `Partial -> Fmt.string ppf "partial"
   | `Unknown_operation op -> Fmt.pf ppf "unknown operation %d" op
   | `Malformed msg -> Fmt.pf ppf "malformed %s" msg
@@ -167,6 +169,15 @@ let pp_control ppf (hdr, id, payload) =
   Fmt.pf ppf "%a message-id %lu@.payload %d bytes" pp_header hdr id
     (Cstruct.length payload)
 
+let decode_ack ~hmac_len buf =
+  let open Result.Syntax in
+  let+ hdr, off = decode_header ~hmac_len buf in
+  if off <> Cstruct.length buf then
+    Log.debug (fun m ->
+        m "decode_ack: %d extra bytes at end of message"
+          (Cstruct.length buf - off));
+  hdr
+
 let decode_control ~hmac_len buf =
   let open Result.Infix in
   decode_header ~hmac_len buf >>= fun (header, off) ->
@@ -194,15 +205,15 @@ let decode_protocol proto buf =
   let open Result.Infix in
   match proto with
   | `Tcp ->
-      guard (Cstruct.length buf >= 2) `Partial >>= fun () ->
+      guard (Cstruct.length buf >= 2) `Tcp_partial >>= fun () ->
       let plen = Cstruct.BE.get_uint16 buf 0 in
-      guard (Cstruct.length buf - 2 >= plen) `Partial >>| fun () ->
+      guard (Cstruct.length buf - 2 >= plen) `Tcp_partial >>| fun () ->
       (Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2))
   | `Udp -> Ok (buf, Cstruct.empty)
 
 let decode_key_op proto buf =
   let open Result.Syntax in
-  let* (buf, linger) = decode_protocol proto buf in
+  let* buf, linger = decode_protocol proto buf in
   let* () = guard (Cstruct.length buf >= 1) `Partial in
   let opkey = Cstruct.get_uint8 buf 0 in
   let op, key = (opkey lsr 3, opkey land 0x07) in
@@ -213,9 +224,9 @@ let decode ~hmac_len proto buf =
   let open Result.Infix in
   decode_key_op proto buf >>= fun (op, key, payload, rest) ->
   (match op with
-   | Ack -> decode_header ~hmac_len payload >>| fun (ack, _) -> `Ack ack
-   | Data_v1 -> Ok (`Data payload)
-   | op' -> decode_control ~hmac_len payload >>| fun ctl -> `Control (op', ctl))
+  | Ack -> decode_header ~hmac_len payload >>| fun (ack, _) -> `Ack ack
+  | Data_v1 -> Ok (`Data payload)
+  | op' -> decode_control ~hmac_len payload >>| fun ctl -> `Control (op', ctl))
   >>| fun res -> (key, res, rest)
 
 let operation = function
