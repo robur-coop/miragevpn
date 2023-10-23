@@ -1333,18 +1333,18 @@ let a_server =
   | Ok cidr -> return (`Entry (B (Server, cidr)))
   | Error (`Msg m) -> fail m
 
-let aead_cipher c =
+let aead_cipher ~ctx c =
   match String.uppercase_ascii c with
   | "AES-128-GCM" -> return `AES_128_GCM
   | "AES-256-GCM" -> return `AES_256_GCM
   | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
-  | _ -> Fmt.kstr fail "Unknown cipher %S" c
+  | _ -> Fmt.kstr fail "Unknown or unsupported cipher for %S: %S" ctx c
 
 let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
   (match String.uppercase_ascii v with
   | "AES-256-CBC" -> return `AES_256_CBC
-  | c -> aead_cipher c)
+  | c -> aead_cipher ~ctx:"cipher" c)
   >>| fun v -> `Entry (B (Cipher, v))
 
 let a_data_ciphers =
@@ -1353,7 +1353,7 @@ let a_data_ciphers =
   List.fold_left
     (fun acc c ->
       acc >>= fun acc ->
-      aead_cipher c >>| fun c -> c :: acc)
+      aead_cipher ~ctx:"data-ciphers" c >>| fun c -> c :: acc)
     (return []) ciphers
   >>| fun ciphers ->
   let ciphers = List.rev ciphers in
