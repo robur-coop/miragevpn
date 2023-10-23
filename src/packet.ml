@@ -200,14 +200,19 @@ let decode_protocol proto buf =
       (Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2))
   | `Udp -> Ok (buf, Cstruct.empty)
 
+let decode_key_op proto buf =
+  let open Result.Syntax in
+  let* (buf, linger) = decode_protocol proto buf in
+  let* () = guard (Cstruct.length buf >= 1) `Partial in
+  let opkey = Cstruct.get_uint8 buf 0 in
+  let op, key = (opkey lsr 3, opkey land 0x07) in
+  let+ op = int_to_operation op in
+  (op, key, Cstruct.shift buf 1, linger)
+
 let decode ~hmac_len proto buf =
   let open Result.Infix in
-  decode_protocol proto buf >>= fun (buf', rest) ->
-  guard (Cstruct.length buf' >= 1) `Partial >>= fun () ->
-  let opkey = Cstruct.get_uint8 buf' 0 in
-  let op, key = (opkey lsr 3, opkey land 0x07) in
-  let payload = Cstruct.shift buf' 1 in
-  (int_to_operation op >>= function
+  decode_key_op proto buf >>= fun (op, key, payload, rest) ->
+  (match op with
    | Ack -> decode_header ~hmac_len payload >>| fun (ack, _) -> `Ack ack
    | Data_v1 -> Ok (`Data payload)
    | op' -> decode_control ~hmac_len payload >>| fun ctl -> `Control (op', ctl))
@@ -408,12 +413,7 @@ module Tls_crypt = struct
 
   let decode_cleartext proto buf =
     let open Result.Syntax in
-    let* buf, linger = decode_protocol proto buf in
-    let* () = guard (Cstruct.length buf >= 1) `Partial in
-    let opkey = Cstruct.get_uint8 buf 0 in
-    let op, key = (opkey lsr 3, opkey land 0x07) in
-    let payload = Cstruct.shift buf 1 in
-    let* op = int_to_operation op in
+    let* op, key, payload, linger = decode_key_op proto buf in
     let+ res =
       match op with
       | Data_v1 -> Ok (`Data payload)
