@@ -7,3 +7,8 @@ module Infix = struct
   let ( >>= ) = bind
   let ( >>| ) x f = map f x
 end
+
+module Syntax = struct
+  let ( let* ) = bind
+  let ( let+ ) x f = map f x
+end
