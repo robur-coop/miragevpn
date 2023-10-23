@@ -297,27 +297,28 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
   and sha = p_hash Mirage_crypto.Hash.SHA1.(hmac, digest_size) s2 in
   Mirage_crypto.Uncommon.Cs.xor md5 sha
 
-let derive_keys session (key_source : State.key_source)
-    (tls_data : Packet.tls_data) =
+let derive_keys session (own_key_material : State.own_key_material)
+    (peer_key_material : Packet.tls_data) =
   let ( pre_master,
         client_random,
         server_random,
         client_random',
         server_random',
         sids ) =
-    if Cstruct.(equal empty key_source.pre_master) then
-      ( tls_data.pre_master,
-        tls_data.random1,
-        key_source.random1,
-        tls_data.random2,
-        key_source.random2,
+    if Cstruct.(equal empty own_key_material.pre_master) then
+      (* we're the server *)
+      ( peer_key_material.pre_master,
+        peer_key_material.random1,
+        own_key_material.random1,
+        peer_key_material.random2,
+        own_key_material.random2,
         (session.their_session_id, session.my_session_id) )
     else
-      ( key_source.pre_master,
-        key_source.random1,
-        tls_data.random1,
-        key_source.random2,
-        tls_data.random2,
+      ( own_key_material.pre_master,
+        own_key_material.random1,
+        peer_key_material.random1,
+        own_key_material.random2,
+        peer_key_material.random2,
         (session.my_session_id, session.their_session_id) )
   in
   let master_key =
@@ -367,20 +368,20 @@ let maybe_kex_client rng config tls =
     in
     let td =
       { Packet.pre_master; random1; random2; options; user_pass; peer_info }
-    and key_source = { State.pre_master; random1; random2 } in
+    and own_key_material = { State.pre_master; random1; random2 } in
     match
       Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ]
     with
     | None -> Error (`Msg "Tls.send application data failed for tls_data")
     | Some (tls', payload) ->
-        let client_state = TLS_established (tls', key_source) in
+        let client_state = TLS_established (tls', own_key_material) in
         Ok (client_state, Some payload)
   else Ok (TLS_handshake tls, None)
 
-let kdf session cipher hmac_algorithm key tls_data =
-  let keys = derive_keys session key tls_data in
+let kdf session cipher hmac_algorithm own_key_material peer_key_material =
+  let keys = derive_keys session own_key_material peer_key_material in
   let maybe_swap (a, b, c, d) =
-    if Cstruct.(equal empty key.State.pre_master) then (c, d, a, b)
+    if Cstruct.(equal empty own_key_material.State.pre_master) then (c, d, a, b)
     else (a, b, c, d)
   in
   let extract klen hlen =
@@ -439,27 +440,28 @@ let kdf session cipher hmac_algorithm key tls_data =
   in
   { my_packet_id = 1l; their_packet_id = 1l; keys }
 
-let kex_server config session (keys : key_source) tls data =
+let kex_server config session (own_key_material : own_key_material) tls data =
   let open Result.Infix in
-  (* TODO verify username + password, respect incoming tls_data *)
-  (* TODO return (modified!?) config' *)
+  (* TODO verify username + password, respect incoming data, including NCP *)
   let options = Config.server_generate_connect_options config in
   let td =
     {
       Packet.pre_master = Cstruct.empty;
-      random1 = keys.random1;
-      random2 = keys.random2;
+      random1 = own_key_material.random1;
+      random2 = own_key_material.random2;
       options;
       user_pass = None;
       peer_info = None;
     }
   in
-  Packet.decode_tls_data ~with_premaster:true data >>= fun tls_data ->
+  Packet.decode_tls_data ~with_premaster:true data >>= fun peer_key_material ->
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
   | None -> Error (`Msg "not yet established")
   | Some (tls', payload) ->
       (match Config.find Ifconfig config with
-      | None -> Ok (Push_request_sent (tls', keys, td), None)
+      | None ->
+          Ok
+            (Push_request_sent (tls', own_key_material, peer_key_material), None)
       | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
           let ip_config =
             let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
@@ -467,7 +469,9 @@ let kex_server config session (keys : key_source) tls data =
           in
           let cipher = Config.get Cipher config
           and hmac_algorithm = Config.get Auth config in
-          let keys_ctx = kdf session cipher hmac_algorithm keys tls_data in
+          let keys_ctx =
+            kdf session cipher hmac_algorithm own_key_material peer_key_material
+          in
           Ok (Established keys_ctx, Some ip_config)
       | _ ->
           Error
