@@ -290,30 +290,28 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
 
 let derive_keys session (my_key_material : State.my_key_material)
     (their_key_material : Packet.tls_data) =
-  let ( server,
-        ( pre_master,
-          client_random,
-          server_random,
-          client_random',
-          server_random',
-          sids ) ) =
-    if Cstruct.(equal empty my_key_material.pre_master) then
-      (* we're the server *)
-      ( true,
-        ( their_key_material.pre_master,
-          their_key_material.random1,
-          my_key_material.random1,
-          their_key_material.random2,
-          my_key_material.random2,
-          (session.their_session_id, session.my_session_id) ) )
+  (* are we the server? *)
+  let server = Cstruct.is_empty my_key_material.pre_master in
+  let ( pre_master,
+        client_random,
+        server_random,
+        client_random',
+        server_random',
+        sids ) =
+    if server then
+      ( their_key_material.pre_master,
+        their_key_material.random1,
+        my_key_material.random1,
+        their_key_material.random2,
+        my_key_material.random2,
+        (session.their_session_id, session.my_session_id) )
     else
-      ( false,
-        ( my_key_material.pre_master,
-          my_key_material.random1,
-          their_key_material.random1,
-          my_key_material.random2,
-          their_key_material.random2,
-          (session.my_session_id, session.their_session_id) ) )
+      ( my_key_material.pre_master,
+        my_key_material.random1,
+        their_key_material.random1,
+        my_key_material.random2,
+        their_key_material.random2,
+        (session.my_session_id, session.their_session_id) )
   in
   let master_key =
     prf ~label:"OpenVPN master secret" ~secret:pre_master ~client_random
