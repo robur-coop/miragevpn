@@ -147,10 +147,11 @@ let tls_crypt config =
   match Config.find Tls_crypt_v2_client config with
   | None -> Error (`Msg "no tls-crypt payload in config")
   | Some ((their_key, their_hmac, my_key, my_hmac), wkc, force_cookie) ->
+    let hm cs = Cstruct.sub cs 0 Packet.Tls_crypt.hmac_len in
     let cipher cs =
       Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 32)
     in
-    Ok ({ my_key = cipher my_key; my_hmac; their_key = cipher their_key; their_hmac }, wkc, force_cookie)
+    Ok ({ my_key = cipher my_key; my_hmac = hm my_hmac; their_key = cipher their_key; their_hmac = hm their_hmac }, wkc, force_cookie)
 
 let client config ts now rng =
   let open Result.Infix in

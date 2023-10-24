@@ -326,6 +326,9 @@ module Tls_crypt = struct
     let op = op_key (operation p) key in
     match p with
     | `Ack hdr -> fst (to_be_signed_header op hdr)
+    | `Control (Hard_reset_client_v3, (hdr, msg_id, _wkc)) ->
+      (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
+      to_be_signed_control op (hdr, msg_id, Cstruct.empty)
     | `Control (_, c) -> to_be_signed_control op c
     | `Data _ -> assert false
 
