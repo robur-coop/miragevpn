@@ -417,7 +417,7 @@ module Tls_crypt = struct
       remote_session;
     }
     in
-    (res, 1 + arr_len + rs_len)
+    (res, 1 + arr_len * packet_id_len + rs_len)
 
   let decode_decrypted_ack clear_hdr buf =
     let open Result.Syntax in
