@@ -101,6 +101,21 @@ let hmac_and_out protocol key { hmac_algorithm; my_hmac; _ } (p : Packet.pkt) =
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode protocol (key, p')
 
+let encrypt_and_out protocol key { my_key; my_hmac; _ } (p : Packet.pkt) =
+  let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
+  let hmac = Mirage_crypto.Hash.SHA256.hmac ~key:my_hmac to_be_signed in
+  let iv = Cstruct.sub hmac 0 16 in
+  let ctr = Mirage_crypto.Cipher_block.AES.CTR.ctr_of_cstruct iv in
+  let header = Packet.header p in
+  let p = Packet.with_header { header with Packet.hmac } p in
+  let buf, enc_off, enc_len = Packet.Tls_crypt.encode protocol (key, p) in
+  let encrypted =
+    Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
+      (Cstruct.sub buf enc_off enc_len)
+  in
+  Cstruct.blit encrypted 0 buf enc_off enc_len;
+  buf
+
 let tls_auth config =
   match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
@@ -1202,8 +1217,31 @@ let check_control_integrity err key p hmac_algorithm hmac_key =
   guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
   Log.info (fun m -> m "mac good")
 
+let split_control mtu outs =
+  List.concat_map
+    (function
+      | `Control, data ->
+        let rec datas acc data =
+          if Cstruct.is_empty data then
+            List.rev acc
+          else
+            let l = min mtu (Cstruct.length data) in
+            let data, data' = Cstruct.split data l in
+            datas (data :: acc) data'
+        in
+        List.map (fun data -> (`Control, data)) (datas [] data)
+      | (`Ack | `Reset_server | `Reset), _ as p -> [ p ])
+    outs
+
+let op_of_typ = function
+  | `Ack -> Packet.Ack
+  | `Control -> Packet.Control
+  | `Reset_server -> Packet.Hard_reset_server_v2
+  | `Reset -> Packet.Soft_reset_v2
+
 let wrap_hmac_control now ts mtu session tls_auth key transport outs =
   let now_ts = ptime_to_ts_exn now in
+  let outs = split_control mtu outs in
   let session, transport, outs =
     List.fold_left
       (fun (session, transport, acc) (typ, out) ->
@@ -1214,51 +1252,61 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
               let session, transport, header =
                 header session tls_auth.hmac_algorithm transport now_ts
               in
-              (session, transport, [ `Ack header ])
-          | `Control ->
-              let rec one session transport off acc =
-                if off = Cstruct.length out then
-                  (session, transport, List.rev acc)
-                else
-                  let session, transport, header =
-                    header session tls_auth.hmac_algorithm transport now_ts
-                  in
-                  let l = min mtu (Cstruct.length out - off) in
-                  let data = Cstruct.sub out off l in
-                  let transport, m_id = next_message_id transport in
-                  let out = `Control (Packet.Control, (header, m_id, data)) in
-                  one session transport (off + l) (out :: acc)
-              in
-              one session transport 0 []
-          | `Reset_server ->
+              (session, transport, `Ack header)
+          | `Control | `Reset_server | `Reset as typ ->
+              let op = op_of_typ typ in
               let session, transport, header =
                 header session tls_auth.hmac_algorithm transport now_ts
               in
               let transport, m_id = next_message_id transport in
               ( session,
                 transport,
-                [ `Control (Packet.Hard_reset_server_v2, (header, m_id, out)) ]
-              )
-          | `Reset ->
-              let session, transport, header =
-                header session tls_auth.hmac_algorithm transport now_ts
-              in
-              let transport, m_id = next_message_id transport in
-              ( session,
-                transport,
-                [ `Control (Packet.Soft_reset_v2, (header, m_id, out)) ] )
+                `Control (op, (header, m_id, out)) )
         in
         (* hmac each outgoing frame and encode *)
-        let out = List.map (hmac_and_out session.protocol key tls_auth) p in
+        let out = hmac_and_out session.protocol key tls_auth p in
         let out_packets =
-          List.fold_left2
-            (fun m pkt out ->
-              match pkt with
-              | `Ack _ -> m
-              | `Control (_, (_, m_id, _)) -> IM.add m_id (ts, out) m)
-            transport.out_packets p out
+          match p with
+          | `Ack _ -> transport.out_packets
+          | `Control (_, (_, m_id, _)) ->
+            IM.add m_id (ts, out) transport.out_packets
         in
-        (session, { transport with out_packets }, out @ acc))
+        (session, { transport with out_packets }, out :: acc))
+      (session, transport, []) outs
+  in
+  (session, transport, List.rev outs)
+
+let wrap_tls_crypt_control now ts mtu session tls_crypt key transport outs =
+  let now_ts = ptime_to_ts_exn now in
+  let outs = split_control mtu outs in
+  let session, transport, outs =
+    List.fold_left
+      (fun (session, transport, acc) (typ, out) ->
+        (* add the OpenVPN header *)
+         let session, transport, p =
+           match typ with
+           | `Ack ->
+             let session, transport, header =
+               header session Packet.Tls_crypt.hmac_algorithm transport now_ts
+             in
+             (session, transport, `Ack header)
+           | `Control | `Reset_server | `Reset as typ ->
+             let op = op_of_typ typ in
+             let session, transport, header =
+               header session Packet.Tls_crypt.hmac_algorithm transport now_ts
+             in
+             let transport, m_id = next_message_id transport in
+             ( session,
+               transport,
+               `Control (op, (header, m_id, out)))
+         in
+         let out = encrypt_and_out session.protocol key tls_crypt p in
+         let out_packets =
+           match p with
+           | `Ack _ -> transport.out_packets
+           | `Control (_, (_, m_id, _)) -> IM.add m_id (ts, out) transport.out_packets
+         in
+         (session, { transport with out_packets }, out :: acc))
       (session, transport, []) outs
   in
   (session, transport, List.rev outs)
@@ -1320,7 +1368,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
           | None ->
               (* XXX(reynir): why do we ignore it? Because the channel is unknown to us and we are not rekeying? *)
               Ok (state, out, act)
-          | Some (ch, set_ch) -> (
+          | Some (ch, set_ch) ->
               Log.debug (fun m ->
                   m "channel %a - received key %u op %a" pp_channel ch key
                     Packet.pp_operation op);
@@ -1505,7 +1553,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                   lame_duck;
                                 },
                                 out,
-                                act ))))
+                                act )
+                          | _ -> assert false)))
               | Packet.Ack, Client_tls_crypt { tls_crypt; _ } ->
                 let* cleartext, off = Packet.Tls_crypt.decode_cleartext_header payload in
                 let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
@@ -1538,7 +1587,107 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     let state = { state with session }
                     and ch = { ch with transport } in
                     Ok (set_ch state ch, out, act))
-              | _ -> failwith "not implemented" (* FIXME *))
+              | Packet.Hard_reset_client_v3, Client_tls_crypt { tls_crypt = _; _ } ->
+                failwith "Not implemented" (* TODO *)
+              | _control_op, Client_tls_crypt { tls_crypt; _ } ->
+                let* cleartext, off = Packet.Tls_crypt.decode_cleartext_header payload in
+                let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
+                let encrypted = Cstruct.shift payload off in
+                let iv = Cstruct.sub cleartext.hmac 0 16 in
+                let ctr = Aes_ctr.ctr_of_cstruct iv in
+                let decrypted =
+                  Aes_ctr.decrypt ~key:tls_crypt.their_key ~ctr
+                    encrypted
+                in
+                let* ((hdr, _, data) as control) =
+                  Packet.Tls_crypt.decode_decrypted_control cleartext decrypted
+                in
+                let to_be_signed = Packet.Tls_crypt.to_be_signed key (`Control (op, control)) in
+                let computed_hmac =
+                  Mirage_crypto.Hash.SHA256.hmac ~key:tls_crypt.their_hmac
+                    to_be_signed
+                in
+                let* () =
+                  (* XXX maybe just ignore? *)
+                  if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
+                    Ok ()
+                  else
+                    Error (`Bad_mac (state, computed_hmac, (key, `Control (op, control))))
+                in
+                ( match expected_packet state.session ch.transport hdr None with
+                  | Error e ->
+                      (* XXX: only in udp mode? *)
+                      Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
+                      Ok (state, out, None)
+                  | Ok (session, transport) ->
+                    let state = { state with session }
+                    and ch = { ch with transport } in
+                    let+ est, config, session, ch, out' = incoming_control is_not_taken state.config state.rng
+                        state.state state.session ch (state.now ()) (state.ts ()) key op data
+                    in
+                    Log.debug (fun m ->
+                        m "out channel %a, pkts %d" pp_channel ch
+                          (List.length out'));
+                    let state = { state with session } in
+                    (* each control needs to be acked! *)
+                    let out' =
+                      match out' with
+                      | [] -> [ (`Ack, Cstruct.empty) ]
+                      | xs -> xs
+                    in
+                    (* now prepare outgoing packets *)
+                    let my_mtu =
+                      let compress =
+                        match Config.find Comp_lzo config with
+                        | None -> false
+                        | Some () -> true
+                      in
+                      mtu config compress
+                    in
+                    let session, transport, encs =
+                      failwith "TODO" (* TODO *) out' my_mtu
+                    in
+                    let out = out @ encs
+                    and ch = { ch with transport }
+                    and state = { state with config; session } in
+                    match est with
+                    | None -> (set_ch state ch, out, act)
+                    | Some ip_config -> (
+                        match state.state with
+                        | Client_tls_crypt { state = Handshaking _; tls_crypt } ->
+                          let compress =
+                            match Config.find Comp_lzo config with
+                            | None -> false
+                            | Some () -> true
+                          in
+                          let session = { state.session with compress }
+                          and mtu = mtu config compress in
+                          let act = Some (`Established (ip_config, mtu)) in
+                          ( {
+                            state with
+                            state =
+                              Client_tls_crypt { state = Ready; tls_crypt };
+                            session;
+                            channel = ch;
+                          },
+                            out,
+                            act )
+                        | Client_tls_crypt { state = Rekeying _; tls_crypt } ->
+                              (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+                              let lame_duck =
+                                Some (state.channel, state.ts ())
+                              in
+                              ( {
+                                  state with
+                                  state =
+                                    Client_tls_crypt { state = Ready; tls_crypt };
+                                  channel = ch;
+                                  lame_duck;
+                                },
+                                out,
+                                act )
+                        | _ -> assert false))
+              | _ -> failwith "not implemented" (* FIXME *)
         in
         multi linger (state, out, act)
   in
