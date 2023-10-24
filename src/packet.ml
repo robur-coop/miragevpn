@@ -298,8 +298,8 @@ module Tls_crypt = struct
   let to_be_signed_header ?(more = 0) op header =
     (* op_key ++ session_id ++ packet_id ++ timestamp ++ ack_len ++ acks ++ remote_session ++ msg_id *)
     let acks_len = List.length header.ack_message_ids * packet_id_len
-    and rses = if Option.is_some header.remote_session then 8 else 0 in
-    let buflen = 1 + 8 + packet_id_len + 4 + 1 + acks_len + rses + more in
+    and rses_len = if Option.is_some header.remote_session then 8 else 0 in
+    let buflen = 1 + 8 + packet_id_len + 4 + 1 + acks_len + rses_len + more in
     let buf = Cstruct.create buflen in
     Cstruct.set_uint8 buf 0 op;
     Cstruct.BE.set_uint64 buf 1 header.local_session;
@@ -311,7 +311,7 @@ module Tls_crypt = struct
     Option.iter
       (Cstruct.BE.set_uint64 buf (18 + acks_len))
       header.remote_session;
-    (buf, 18 + acks_len + rses)
+    (buf, 18 + acks_len + rses_len)
 
   let to_be_signed_control op (header, packet_id, payload) =
     let buf, off =
