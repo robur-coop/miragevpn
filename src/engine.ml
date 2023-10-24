@@ -143,6 +143,15 @@ let secret config =
       | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)
       | Some `Outgoing -> Ok (cipher key1, hm hmac1, cipher key2, hm hmac2))
 
+let tls_crypt config =
+  match Config.find Tls_crypt_v2_client config with
+  | None -> Error (`Msg "no tls-crypt payload in config")
+  | Some ((their_key, their_hmac, my_key, my_hmac), wkc, force_cookie) ->
+    let cipher cs =
+      Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 32)
+    in
+    Ok ({ my_key = cipher my_key; my_hmac; their_key = cipher their_key; their_hmac }, wkc, force_cookie)
+
 let client config ts now rng =
   let open Result.Infix in
   let current_ts = ts () in
@@ -168,9 +177,9 @@ let client config ts now rng =
       Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
   | [] -> Error (`Msg "couldn't find remote in configuration"))
   >>= fun (action, state) ->
-  match (tls_auth config, secret config) with
-  | Error e, Error _ -> Error e
-  | Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
+  match (tls_auth config, tls_crypt config, secret config) with
+  | Error e, Error _, Error _ -> Error e
+  | Error _, Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
       (* in static key mode, only CBC is allowed *)
       assert (Config.get Cipher config = `AES_256_CBC);
       let keys =
@@ -206,7 +215,26 @@ let client config ts now rng =
         }
       in
       Ok (state, action)
-  | Ok tls_auth, _ ->
+  | Error _, Ok (tls_crypt, wkc, _force_cookie), _ ->
+    let session = init_session ~my_session_id:0L () in
+    let channel = new_channel 0 current_ts in
+    let state =
+      {
+        config;
+        state = Client_tls_crypt { state; tls_crypt = (tls_crypt, wkc) };
+        linger = Cstruct.empty;
+        rng;
+        ts;
+        now;
+        session;
+        channel;
+        lame_duck = None;
+        last_received = current_ts;
+        last_sent = current_ts;
+      }
+    in
+    Ok (state, action)
+  | Ok tls_auth, _, _ ->
       let session = init_session ~my_session_id:0L () in
       let channel = new_channel 0 current_ts in
       let state =
@@ -673,6 +701,19 @@ let init_channel how session tls_auth keyid now ts =
   let transport = { transport with out_packets } in
   (session, { channel with transport }, out)
 
+let init_channel_tls_crypt session wkc tls_crypt keyid now ts =
+  let channel = new_channel keyid ts in
+  let timestamp = ptime_to_ts_exn now in
+  let session, transport, header =
+    header session Packet.Tls_crypt.hmac_algorithm channel.transport timestamp
+  in
+  let transport, m_id = next_message_id transport in
+  let p = `Control (Packet.Hard_reset_client_v3, (header, m_id, wkc)) in
+  let out = encrypt_and_out session.protocol keyid tls_crypt p in
+  let out_packets = IM.add m_id (ts, out) transport.out_packets in
+  let transport = { transport with out_packets } in
+  (session, { channel with transport }, out)
+
 let incoming_control_server is_not_taken config rng session channel _now _ts
     _key op data =
   match (channel.channel_st, op) with
@@ -794,7 +835,7 @@ let incoming_control is_not_taken config rng state session channel now ts key op
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
   match state with
-  | Client_tls_auth _ ->
+  | Client_tls_auth _ | Client_tls_crypt _ ->
       let open Result.Infix in
       incoming_control_client config rng session channel now op data
       >>| fun (est, config', ch'', outs) -> (est, config', session, ch'', outs)
@@ -1555,7 +1596,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 out,
                                 act )
                           | _ -> assert false)))
-              | Packet.Ack, Client_tls_crypt { tls_crypt; _ } ->
+              | Packet.Ack, Client_tls_crypt { tls_crypt = (tls_crypt, _wkc); _ } ->
                 let* cleartext, off = Packet.Tls_crypt.decode_cleartext_header payload in
                 let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
                 let encrypted = Cstruct.shift payload off in
@@ -1589,7 +1630,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     Ok (set_ch state ch, out, act))
               | Packet.Hard_reset_client_v3, Client_tls_crypt { tls_crypt = _; _ } ->
                 failwith "Not implemented" (* TODO *)
-              | _control_op, Client_tls_crypt { tls_crypt; _ } ->
+              | _control_op, Client_tls_crypt { tls_crypt = (tls_crypt, _wkc); _ } ->
                 let* cleartext, off = Packet.Tls_crypt.decode_cleartext_header payload in
                 let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
                 let encrypted = Cstruct.shift payload off in
@@ -1645,7 +1686,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       mtu config compress
                     in
                     let session, transport, encs =
-                      failwith "TODO" (* TODO *) out' my_mtu
+                      wrap_tls_crypt_control (state.now ()) (state.ts ()) my_mtu
+                        state.session tls_crypt key ch.transport out'
                     in
                     let out = out @ encs
                     and ch = { ch with transport }
@@ -1687,7 +1729,6 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 out,
                                 act )
                         | _ -> assert false))
-              | _ -> failwith "not implemented" (* FIXME *)
         in
         multi linger (state, out, act)
   in
@@ -1791,8 +1832,38 @@ let resolve_connect_client config ts s ev =
       next_or_fail (-1) 0 >>| fun (state, action) -> (state, Some action)
   | _ -> Error (`Not_handled (remote, next_or_fail))
 
+let handshake_timeout next_or_fail client t s ts =
+  let open Result.Syntax in
+  match
+    match t.session.protocol, s with
+    | `Udp, Handshaking _ ->
+      Some (t.channel, fun channel -> { t with channel })
+    | `Udp, Rekeying ch ->
+      Some
+        ( ch,
+          fun channel -> { t with state = client (Rekeying channel) }
+        )
+    | _ -> None
+  with
+  | None -> Ok (t, [], None)
+  | Some (ch, set_ch) ->
+    (* TODO exponential back-off mentioned in openvpn man page *)
+    let tls_timeout = Config.get Tls_timeout t.config in
+    match
+      maybe_hand_timeout
+        (Config.get Handshake_window t.config)
+        ts ch.transport
+    with
+    | Ok () ->
+      let transport, out = retransmit tls_timeout ts t.channel.transport in
+      let channel = { ch with transport } in
+      Ok (set_ch channel, out, None)
+    | Error `Hand_timeout ->
+      let+ state, action = next_or_fail (-1) 0 in
+      ({ t with state = client state }, [], Some action)
+
 let handle_client_tls_auth t s tls_auth ev =
-  let open Result.Infix in
+  let open Result.Syntax in
   let now = t.now () and ts = t.ts () in
   let client state = Client_tls_auth { state; tls_auth } in
   match resolve_connect_client t.config ts s ev with
@@ -1810,41 +1881,17 @@ let handle_client_tls_auth t s tls_auth ev =
           let state = client (Handshaking (idx, ts)) in
           Ok ({ t with state; channel; session }, [ out ], None)
       | s, `Tick -> (
-          (match
-             match (t.session.protocol, s) with
-             | `Udp, Handshaking _ ->
-                 Some (t.channel, fun channel -> { t with channel })
-             | `Udp, Rekeying ch ->
-                 Some
-                   ( ch,
-                     fun channel -> { t with state = client (Rekeying channel) }
-                   )
-             | _ -> None
-           with
-          | None -> Ok (t, [], None)
-          | Some (ch, set_ch) -> (
-              (* TODO exponential back-off mentioned in openvpn man page *)
-              let tls_timeout = Config.get Tls_timeout t.config in
-              match
-                maybe_hand_timeout
-                  (Config.get Handshake_window t.config)
-                  ts ch.transport
-              with
-              | Ok () ->
-                  let transport, out = retransmit tls_timeout ts ch.transport in
-                  let channel = { ch with transport } in
-                  Ok (set_ch channel, out, None)
-              | Error `Hand_timeout ->
-                  next_or_fail (-1) 0 >>| fun (state, action) ->
-                  ({ t with state = client state }, [], Some action)))
-          >>= function
+          let* r =
+            handshake_timeout next_or_fail client t s ts
+          in
+          match r with
           | t, out, Some action -> Ok (t, out, Some action)
           | t, out, None -> (
               match maybe_ping_timeout t with
               | Some `Exit -> Ok (t, out, Some `Exit)
               | Some `Restart ->
-                  next_or_fail (-1) 0 >>| fun (state, action) ->
-                  ({ t with state = client state }, out, Some action)
+                let+ state, action = next_or_fail (-1) 0 in
+                ({ t with state = client state }, out, Some action)
               | None ->
                   let t', outs = timer t in
                   Ok (t', out @ outs, None)))
@@ -1852,6 +1899,44 @@ let handle_client_tls_auth t s tls_auth ev =
       | s, ev ->
           Result.error_msgf "handle_client: unexpected event %a in state %a"
             pp_event ev pp_client_state s)
+
+let handle_client_tls_crypt t s tls_crypt wkc ev =
+  let open Result.Syntax in
+  let now = t.now () and ts = t.ts () in
+  let client state = Client_tls_crypt { state; tls_crypt = (tls_crypt, wkc) } in
+  match resolve_connect_client t.config ts s ev with
+  | Ok (s, action) -> Ok ({ t with state = client s }, [], action)
+  | Error `Msg _ as e -> e
+  | Error `Not_handled (remote, next_or_fail) ->
+    match (s, ev) with
+    | Connecting (idx, _, _), `Connected ->
+      let my_session_id = Randomconv.int64 t.rng in
+      let protocol = match remote idx with _, _, proto -> proto in
+      let session = init_session ~my_session_id ~protocol () in
+      let session, channel, out =
+        init_channel_tls_crypt session wkc tls_crypt 0 now ts
+      in
+      let state = client (Handshaking (idx, ts)) in
+      Ok ({ t with state; channel; session }, [ out ], None)
+    | s, `Tick ->
+      let* res = handshake_timeout next_or_fail client t s ts in
+      (match res with
+       | t, out, Some action -> Ok (t, out, Some action)
+       | t, out, None ->
+         match maybe_ping_timeout t with
+         | Some `Exit -> Ok (t, out, Some `Exit)
+         | Some `Restart ->
+           let+ state, action = next_or_fail (-1) 0 in
+           ({ t with state = client state }, out, Some action)
+         | None ->
+           let t', outs = timer t in
+           Ok (t', out @ outs, None))
+
+    | _, `Data cs -> incoming t cs
+    | s, ev ->
+      Result.error_msgf "handle_client: unexpected event %a in state %a"
+        pp_event ev pp_client_state s
+
 
 (* timeouts from a server perspective:
    still TODO (similar to client, maybe in udp branch)
@@ -1922,7 +2007,8 @@ let handle_static_client t s keys ev =
               Ok ({ t with linger = Cstruct.empty }, [], acc)
             else
               match Packet.decode_protocol t.session.protocol linger with
-              | Error `Partial -> Ok ({ t with linger }, [], acc)
+              | Error `Partial -> Error `Partial
+              | Error `Tcp_partial -> Ok ({ t with linger }, [], acc)
               | Ok (cs, linger) ->
                   let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
                   incoming_data ~add_timestamp bad_mac keys hmac_algorithm
@@ -1942,3 +2028,5 @@ let handle t ?is_not_taken ev =
   | Client_static { state; keys } -> handle_static_client t state keys ev
   | Server_tls_auth { state; tls_auth = _ } ->
       handle_server ?is_not_taken t state ev
+  | Client_tls_crypt { state; tls_crypt = (tls_crypt, wkc) } ->
+    handle_client_tls_crypt t state tls_crypt wkc ev
