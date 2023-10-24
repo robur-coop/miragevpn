@@ -252,6 +252,8 @@ module Config : sig
       applied. *)
 end
 
+module Tls_crypt_v2 = Tls_crypt_v2
+
 type t
 (** The abstract type of an OpenVPN connection. *)
 

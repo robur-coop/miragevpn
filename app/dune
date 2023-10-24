@@ -30,16 +30,7 @@
  (libraries miragevpn logs logs.fmt fmt.tty))
 
 (executable
- (name tls_crypt_v2)
- (public_name tls-crypt-v2.tools)
- (package miragevpn)
- (modules tls_crypt_v2)
- (libraries
-  mirage-crypto-rng.unix
-  ptime.clock.os
-  ptime
-  hxd.core
-  hxd.string
-  fmt
-  base64
-  mirage-crypto))
+ (name key)
+ (modules key)
+ (public_name miragevpn.key)
+ (libraries mirage-crypto-rng.unix ptime.clock.os bos miragevpn cmdliner))
