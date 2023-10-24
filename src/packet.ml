@@ -386,7 +386,7 @@ module Tls_crypt = struct
     let prefix = encode_protocol proto (Cstruct.lenv [ op_buf; payload ]) in
     let r = Cstruct.concat [ prefix; op_buf; payload ] in
     (* packet, to_encrypt_offset, to_encrypt_length *)
-    (r, Cstruct.length prefix + encrypted_offset, len - encrypted_offset)
+    (r, Cstruct.length prefix + 1 + encrypted_offset, len - encrypted_offset)
 
   let decode_decrypted_header clear_hdr buf =
     let open Result.Syntax in
