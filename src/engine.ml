@@ -1191,7 +1191,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
    else Ok data)
   >>| fun data' ->
   if Cstruct.equal data' ping then (
-    Log.warn (fun m -> m "received ping!");
+    Log.debug (fun m -> m "received ping!");
     None)
   else Some data'
 
