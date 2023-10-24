@@ -289,6 +289,7 @@ module Tls_crypt = struct
     | `Data of Cstruct.t ]
   (* [`Control (op, cleartext_header, encrypted)] where [op <> Hard_reset_client_v3] *)
 
+  let hmac_algorithm = `SHA256
   let hmac_len = Mirage_crypto.Hash.SHA256.digest_size (* 32 *)
   let hmac_offset = 16
   let encrypted_offset = hmac_offset + hmac_len
@@ -326,6 +327,7 @@ module Tls_crypt = struct
     match p with
     | `Ack hdr -> fst (to_be_signed_header op hdr)
     | `Control (_, c) -> to_be_signed_control op c
+    | `Data _ -> assert false
 
   let encode_header hdr =
     let acks_len = packet_id_len * List.length hdr.ack_message_ids in
@@ -370,6 +372,7 @@ module Tls_crypt = struct
       match p with
       | `Ack ack -> encode_header ack
       | `Control (op, control) -> encode_control op control
+      | `Data _ -> assert false (* XXX *)
     in
     let op_buf =
       let b = Cstruct.create 1 in
