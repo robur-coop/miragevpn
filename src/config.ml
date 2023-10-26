@@ -1554,6 +1554,7 @@ let a_config_entry : line A.t =
          a_mssfix;
          a_inline;
          a_tls_version_min;
+         a_tls_version_max;
          a_keepalive;
          a_socks_proxy;
          a_auth_user_pass_verify;
