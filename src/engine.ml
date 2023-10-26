@@ -1656,7 +1656,19 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   else
                     Error (`Bad_mac (state, computed_hmac, (key, `Control (op, control))))
                 in
-                ( match expected_packet state.session ch.transport hdr None with
+                (* Workaround for hmac cookie *)
+                let session =
+                  match state.channel.channel_st, op with
+                  | Expect_reset, Hard_reset_server_v2 ->
+                    Log.warn (fun m -> m "Hard_reset_client_v2 data: %a"
+                                 Cstruct.hexdump_pp data);
+                    Log.warn (fun m -> m "fixing their_packet_id: %lx" hdr.packet_id);
+                    { state.session with their_packet_id = hdr.packet_id }
+                  | _ ->
+                    state.session
+                in
+                let state = { state with session } in
+                ( match expected_packet session ch.transport hdr None with
                   | Error e ->
                       (* XXX: only in udp mode? *)
                       Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
