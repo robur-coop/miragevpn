@@ -846,9 +846,10 @@ let incoming_control is_not_taken config rng state session channel now ts key op
   | Client_static _ ->
       Error (`Msg "client with static keys, no control packets expected")
 
-let expected_packet session transport hdr msg_id =
+let expected_packet session transport data =
   let open Result.Infix in
   (* expects monotonic packet + message id, session ids matching *)
+  let hdr = Packet.header data and msg_id = Packet.message_id data in
   (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
   opt_guard
     (Int64.equal session.my_session_id)
@@ -1452,13 +1453,14 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     Mirage_crypto.Hash.digest_size tls_auth.hmac_algorithm
                   in
                   let* ack = Packet.decode_ack ~hmac_len payload in
-                  let bad_mac hmac = `Bad_mac (state, hmac, (key, `Ack ack)) in
+                  let p = `Ack ack in
+                  let bad_mac hmac = `Bad_mac (state, hmac, (key, p)) in
                   match
                     let* () =
-                      check_control_integrity bad_mac key (`Ack ack)
+                      check_control_integrity bad_mac key p
                         tls_auth.hmac_algorithm tls_auth.their_hmac
                     in
-                    expected_packet state.session ch.transport ack None
+                    expected_packet state.session ch.transport p
                   with
                   | Error e ->
                       (* XXX: only in udp mode? *)
@@ -1474,19 +1476,17 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   let hmac_len =
                     Mirage_crypto.Hash.digest_size tls_auth.hmac_algorithm
                   in
-                  let* ((hdr, msg_id, data) as control) =
+                  let* ((_, _, data) as control) =
                     Packet.decode_control ~hmac_len payload
                   in
-                  let bad_mac hmac =
-                    `Bad_mac (state, hmac, (key, `Control (op, control)))
-                  in
+                  let p = `Control (op, control) in
+                  let bad_mac hmac = `Bad_mac (state, hmac, (key, p)) in
                   match
                     let* () =
-                      check_control_integrity bad_mac key
-                        (`Control (op, control))
+                      check_control_integrity bad_mac key p
                         tls_auth.hmac_algorithm tls_auth.their_hmac
                     in
-                    expected_packet state.session ch.transport hdr (Some msg_id)
+                    expected_packet state.session ch.transport p
                   with
                   | Error e ->
                       (* XXX: only in udp mode? *)
@@ -1608,7 +1608,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     encrypted
                 in
                 let* ack = Packet.Tls_crypt.decode_decrypted_ack cleartext decrypted in
-                let to_be_signed = Packet.Tls_crypt.to_be_signed key (`Ack ack) in
+                let p = `Ack ack in
+                let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
                 let computed_hmac =
                   Mirage_crypto.Hash.SHA256.hmac ~key:tls_crypt.their_hmac
                     to_be_signed
@@ -1618,9 +1619,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
                     Ok ()
                   else
-                    Error (`Bad_mac (state, computed_hmac, (key, `Ack ack)))
+                    Error (`Bad_mac (state, computed_hmac, (key, p)))
                 in
-                ( match expected_packet state.session ch.transport ack None with
+                ( match expected_packet state.session ch.transport p with
                   | Error e ->
                       (* XXX: only in udp mode? *)
                       Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
@@ -1641,10 +1642,11 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   Aes_ctr.decrypt ~key:tls_crypt.their_key ~ctr
                     encrypted
                 in
-                let* ((hdr, msg_id, data) as control) =
+                let* ((_, _, data) as control) =
                   Packet.Tls_crypt.decode_decrypted_control cleartext decrypted
                 in
-                let to_be_signed = Packet.Tls_crypt.to_be_signed key (`Control (op, control)) in
+                let p = `Control (op, control) in
+                let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
                 let computed_hmac =
                   Mirage_crypto.Hash.SHA256.hmac ~key:tls_crypt.their_hmac
                     to_be_signed
@@ -1654,12 +1656,13 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
                     Ok ()
                   else
-                    Error (`Bad_mac (state, computed_hmac, (key, `Control (op, control))))
+                    Error (`Bad_mac (state, computed_hmac, (key, p)))
                 in
                 (* Workaround for hmac cookie *)
                 let session =
                   match state.channel.channel_st, op with
                   | Expect_reset, Hard_reset_server_v2 ->
+                    let hdr = Packet.header p in
                     Log.warn (fun m -> m "Hard_reset_client_v2 data: %a"
                                  Cstruct.hexdump_pp data);
                     Log.warn (fun m -> m "fixing their_packet_id: %lx" hdr.packet_id);
@@ -1668,7 +1671,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     state.session
                 in
                 let state = { state with session } in
-                ( match expected_packet session ch.transport hdr (Some msg_id) with
+                ( match expected_packet session ch.transport p with
                   | Error e ->
                       (* XXX: only in udp mode? *)
                       Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);

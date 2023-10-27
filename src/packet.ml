@@ -199,8 +199,6 @@ let to_be_signed_control op (header, packet_id, payload) =
   Cstruct.BE.set_uint32 buf off packet_id;
   Cstruct.append buf payload
 
-let encode_data payload = (payload, Cstruct.length payload)
-
 let decode_protocol proto buf =
   let open Result.Infix in
   match proto with
