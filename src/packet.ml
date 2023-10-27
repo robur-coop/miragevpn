@@ -220,15 +220,6 @@ let decode_key_op proto buf =
   let+ op = int_to_operation op in
   (op, key, Cstruct.shift buf 1, linger)
 
-let decode ~hmac_len proto buf =
-  let open Result.Infix in
-  decode_key_op proto buf >>= fun (op, key, payload, rest) ->
-  (match op with
-  | Ack -> decode_header ~hmac_len payload >>| fun (ack, _) -> `Ack ack
-  | Data_v1 -> Ok (`Data payload)
-  | op' -> decode_control ~hmac_len payload >>| fun ctl -> `Control (op', ctl))
-  >>| fun res -> (key, res, rest)
-
 let operation = function
   | `Ack _ -> Ack
   | `Control (op, _) -> op
@@ -270,24 +261,12 @@ let to_be_signed key p =
   | `Data _ -> assert false
 
 module Tls_crypt = struct
-  (* Functions to implement:
-     - to_be_signed
-     - encode
-     - decode
-  *)
   type cleartext_header = {
     local_session : int64;
     packet_id : packet_id;
     timestamp : int32;
     hmac : Cstruct.t; (* always 32 bytes *)
   }
-
-  type clear_pkt =
-    [ `Ack of cleartext_header * Cstruct.t
-    | `Control of operation * cleartext_header * Cstruct.t
-    | `Hard_reset_client_v3 of cleartext_header * Cstruct.t * Cstruct.t
-    | `Data of Cstruct.t ]
-  (* [`Control (op, cleartext_header, encrypted)] where [op <> Hard_reset_client_v3] *)
 
   let hmac_algorithm = `SHA256
   let hmac_len = Mirage_crypto.Hash.SHA256.digest_size (* 32 *)
@@ -445,36 +424,6 @@ module Tls_crypt = struct
     and timestamp = Cstruct.BE.get_uint32 buf 12
     and hmac = Cstruct.sub buf 16 hmac_len in
     ({ local_session; packet_id; timestamp; hmac }, clear_hdr_len)
-
-  let decode_cleartext proto buf =
-    let open Result.Syntax in
-    let* op, key, payload, linger = decode_key_op proto buf in
-    let+ res =
-      match op with
-      | Data_v1 -> Ok (`Data payload)
-      | Hard_reset_client_v3 ->
-          let* clear, off = decode_cleartext_header payload in
-          let encrypted = Cstruct.shift payload off in
-          let+ () = guard (Cstruct.length encrypted >= 2) `Partial in
-          (* XXX: we could try deserialize wKc even further *)
-          let wkc_len =
-            Cstruct.BE.get_uint16 encrypted (Cstruct.length encrypted - 2)
-          in
-          let encrypted, wkc =
-            Cstruct.split encrypted (Cstruct.length encrypted - wkc_len)
-          in
-          `Hard_reset_client_v3 (clear, encrypted, wkc)
-      | op ->
-          let+ clear, off = decode_cleartext_header payload in
-          let encrypted = Cstruct.shift payload off in
-          let res =
-            match op with
-            | Ack -> `Ack (clear, encrypted)
-            | op -> `Control (op, clear, encrypted)
-          in
-          res
-    in
-    (key, res, linger)
 end
 
 type pkt =
