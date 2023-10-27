@@ -606,3 +606,23 @@ module Iv_proto = struct
   let bit = function Request_push -> 2 | Tls_key_export -> 3
   let byte xs = List.fold_left (fun b x -> b lor (1 lsl bit x)) 0 xs
 end
+
+let decode_early_negotiation_tlvs data =
+  let open Result.Syntax in
+  let rec go acc data =
+    if Cstruct.is_empty data then
+      Ok acc
+    else
+      let* () = guard (Cstruct.length data >= 4) `Partial in
+      let typ = Cstruct.BE.get_uint16 data 0
+      and len = Cstruct.BE.get_uint16 data 2 in
+      let* () = guard (Cstruct.length data >= 4 + len) `Partial in
+      if typ = 0x0001 (* EARLY_NEG_FLAGS *) then
+        let* () = guard (len = 2) (`Malformed "Bad EARLY_NEG_FLAGS") in
+        let flags = Cstruct.BE.get_uint16 data 4 in
+        go (acc || flags = 0x0001 (* RESEND_WKC *)) (Cstruct.shift data 6)
+      else
+        (* skip *)
+        go acc (Cstruct.shift data (4 + len))
+  in
+  go false data
