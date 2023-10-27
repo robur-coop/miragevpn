@@ -269,6 +269,8 @@ module Tls_crypt = struct
   let hmac_algorithm = `SHA256
   let hmac_len = Mirage_crypto.Hash.SHA256.digest_size (* 32 *)
   let hmac_offset = 16
+
+  (* [encrypted_offset] is the offset of the header payload that is encrypted *)
   let encrypted_offset = hmac_offset + hmac_len
   let clear_hdr_len = hdr_len hmac_len - 1 (* not including acked msg ids *)
 
@@ -363,7 +365,9 @@ module Tls_crypt = struct
     let prefix = encode_protocol proto (Cstruct.lenv [ op_buf; payload ]) in
     let r = Cstruct.concat [ prefix; op_buf; payload ] in
     (* packet, to_encrypt_offset, to_encrypt_length *)
-    (r, Cstruct.length prefix + 1 + encrypted_offset, len - encrypted_offset)
+    ( r,
+      Cstruct.length prefix + Cstruct.length op_buf + encrypted_offset,
+      len - encrypted_offset )
 
   let decode_decrypted_header clear_hdr buf =
     let open Result.Syntax in
