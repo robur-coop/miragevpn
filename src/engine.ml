@@ -1635,8 +1635,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       let state = { state with session }
                       and ch = { ch with transport } in
                       Ok (set_ch state ch, out, act))
-              | ( Packet.Hard_reset_client_v3,
-                  Client_tls_crypt _ ) ->
+              | Packet.Hard_reset_client_v3, Client_tls_crypt _ ->
                   Error (`No_transition (ch, op, payload))
               | _control_op, Client_tls_crypt { tls_crypt = tls_crypt, _wkc; _ }
                 -> (
