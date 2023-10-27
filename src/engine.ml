@@ -1474,7 +1474,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   let hmac_len =
                     Mirage_crypto.Hash.digest_size tls_auth.hmac_algorithm
                   in
-                  let* ((hdr, _, data) as control) =
+                  let* ((hdr, msg_id, data) as control) =
                     Packet.decode_control ~hmac_len payload
                   in
                   let bad_mac hmac =
@@ -1486,7 +1486,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         (`Control (op, control))
                         tls_auth.hmac_algorithm tls_auth.their_hmac
                     in
-                    expected_packet state.session ch.transport hdr None
+                    expected_packet state.session ch.transport hdr (Some msg_id)
                   with
                   | Error e ->
                       (* XXX: only in udp mode? *)
@@ -1641,7 +1641,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   Aes_ctr.decrypt ~key:tls_crypt.their_key ~ctr
                     encrypted
                 in
-                let* ((hdr, _, data) as control) =
+                let* ((hdr, msg_id, data) as control) =
                   Packet.Tls_crypt.decode_decrypted_control cleartext decrypted
                 in
                 let to_be_signed = Packet.Tls_crypt.to_be_signed key (`Control (op, control)) in
@@ -1668,7 +1668,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     state.session
                 in
                 let state = { state with session } in
-                ( match expected_packet session ch.transport hdr None with
+                ( match expected_packet session ch.transport hdr (Some msg_id) with
                   | Error e ->
                       (* XXX: only in udp mode? *)
                       Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
