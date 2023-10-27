@@ -304,8 +304,8 @@ module Tls_crypt = struct
     match p with
     | `Ack hdr -> fst (to_be_signed_header op hdr)
     | `Control (Hard_reset_client_v3, (hdr, msg_id, _wkc)) ->
-      (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
-      to_be_signed_control op (hdr, msg_id, Cstruct.empty)
+        (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
+        to_be_signed_control op (hdr, msg_id, Cstruct.empty)
     | `Control (_, c) -> to_be_signed_control op c
     | `Data _ -> assert false
 
@@ -385,16 +385,17 @@ module Tls_crypt = struct
       else None
     in
     let { local_session; packet_id; timestamp; hmac } = clear_hdr in
-    let res = {
-      local_session;
-      packet_id;
-      timestamp;
-      hmac;
-      ack_message_ids;
-      remote_session;
-    }
+    let res =
+      {
+        local_session;
+        packet_id;
+        timestamp;
+        hmac;
+        ack_message_ids;
+        remote_session;
+      }
     in
-    (res, 1 + arr_len * packet_id_len + rs_len)
+    (res, 1 + (arr_len * packet_id_len) + rs_len)
 
   let decode_decrypted_ack clear_hdr buf =
     let open Result.Syntax in

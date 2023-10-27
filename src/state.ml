@@ -269,7 +269,10 @@ type tls_crypt = {
 
 type state =
   | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
-  | Client_tls_crypt of { tls_crypt : tls_crypt * Cstruct.t; state : client_state }
+  | Client_tls_crypt of {
+      tls_crypt : tls_crypt * Cstruct.t;
+      state : client_state;
+    }
   | Client_static of { keys : keys; state : client_state }
   | Server_tls_auth of { tls_auth : tls_auth; state : server_state }
 
