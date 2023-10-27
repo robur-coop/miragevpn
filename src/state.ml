@@ -277,7 +277,8 @@ type state =
   | Server_tls_auth of { tls_auth : tls_auth; state : server_state }
 
 let pp_state ppf = function
-  | Client_tls_auth { state; _ } -> pp_client_state ppf state
+  | Client_tls_auth { state; _ } ->
+      Fmt.pf ppf "client tls-auth %a" pp_client_state state
   | Client_tls_crypt { state; _ } ->
       Fmt.pf ppf "client tls-crypt %a" pp_client_state state
   | Client_static { state; _ } ->
