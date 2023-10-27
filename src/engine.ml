@@ -1445,11 +1445,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         "Static client received control channel packet; \
                          ignoring.");
                   Ok (state, out, act)
-              | Packet.Hard_reset_client_v3, Client_tls_auth _ ->
-                  failwith "TODO" (* ignore? fail? *)
-              | Packet.Hard_reset_client_v3, Server_tls_auth { tls_auth; _ } ->
-                  let _ = tls_auth in
-                  failwith "TODO" (* TODO *)
+              | Packet.Hard_reset_client_v3, Client_tls_auth _
+              | Packet.Hard_reset_client_v3, Server_tls_auth _ ->
+                  Error (`No_transition (ch, op, payload))
               | ( Packet.Ack,
                   ( Client_tls_auth { tls_auth; _ }
                   | Server_tls_auth { tls_auth; _ } ) ) -> (
@@ -1638,8 +1636,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       and ch = { ch with transport } in
                       Ok (set_ch state ch, out, act))
               | ( Packet.Hard_reset_client_v3,
-                  Client_tls_crypt { tls_crypt = _; _ } ) ->
-                  failwith "Not implemented" (* TODO *)
+                  Client_tls_crypt _ ) ->
+                  Error (`No_transition (ch, op, payload))
               | _control_op, Client_tls_crypt { tls_crypt = tls_crypt, _wkc; _ }
                 -> (
                   let* cleartext, off =
