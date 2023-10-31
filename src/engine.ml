@@ -1025,7 +1025,12 @@ let maybe_init_rekey s =
   (* if there's a rekey in process we don't do anything *)
   let keyid =
     let n = succ s.channel.keyid mod 8 in
-    if n = 0 then 1 else n (* i have no clue why 0 is special... *)
+    if n = 0 then 1 else n
+    (* From src/openvpn/ssl_pkt.h: tls_session_get_tls_wrap():
+       OpenVPN has the hardcoded assumption in its protocol that
+       key-id 0 is always first session and renegotiations use key-id
+       1 to 7 and wrap around to 1 after that. So key-id > 0 is equivalent
+       to "this is a renegotiation" *)
   in
   let init_channel tls_auth =
     init_channel Packet.Soft_reset_v2 s.session tls_auth keyid (s.now ())
