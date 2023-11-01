@@ -83,18 +83,19 @@ let pp_header ppf hdr =
     hdr.remote_session
 
 let decode_header ~hmac_len buf =
-  let open Result.Infix in
-  guard (Cstruct.length buf >= hdr_len hmac_len) `Partial >>= fun () ->
+  let open Result.Syntax in
+  let* () = guard (Cstruct.length buf >= hdr_len hmac_len) `Partial in
   let local_session = Cstruct.BE.get_uint64 buf 0
   and hmac = Cstruct.sub buf 8 hmac_len
   and packet_id = Cstruct.BE.get_uint32 buf (hmac_len + 8)
   and timestamp = Cstruct.BE.get_uint32 buf (hmac_len + 12)
   and arr_len = Cstruct.get_uint8 buf (hmac_len + 16) in
   let rs = if arr_len = 0 then 0 else 8 in
-  guard
-    (Cstruct.length buf >= hdr_len hmac_len + (packet_id_len * arr_len) + rs)
-    `Partial
-  >>| fun () ->
+  let+ () =
+    guard
+      (Cstruct.length buf >= hdr_len hmac_len + (packet_id_len * arr_len) + rs)
+      `Partial
+  in
   let ack_message_id idx =
     Cstruct.BE.get_uint32 buf (hdr_len hmac_len + (packet_id_len * idx))
   in
@@ -179,9 +180,9 @@ let decode_ack ~hmac_len buf =
   hdr
 
 let decode_control ~hmac_len buf =
-  let open Result.Infix in
-  decode_header ~hmac_len buf >>= fun (header, off) ->
-  guard (Cstruct.length buf >= off + 4) `Partial >>| fun () ->
+  let open Result.Syntax in
+  let* header, off = decode_header ~hmac_len buf in
+  let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
   let message_id = Cstruct.BE.get_uint32 buf off
   and payload = Cstruct.shift buf (off + 4) in
   (header, message_id, payload)
@@ -200,12 +201,12 @@ let to_be_signed_control op (header, packet_id, payload) =
   Cstruct.append buf payload
 
 let decode_protocol proto buf =
-  let open Result.Infix in
+  let open Result.Syntax in
   match proto with
   | `Tcp ->
-      guard (Cstruct.length buf >= 2) `Tcp_partial >>= fun () ->
+      let* () = guard (Cstruct.length buf >= 2) `Tcp_partial in
       let plen = Cstruct.BE.get_uint16 buf 0 in
-      guard (Cstruct.length buf - 2 >= plen) `Tcp_partial >>| fun () ->
+      let+ () = guard (Cstruct.length buf - 2 >= plen) `Tcp_partial in
       (Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2))
   | `Udp -> Ok (buf, Cstruct.empty)
 
@@ -535,7 +536,7 @@ let maybe_string prefix buf off = function
       else Error (`Malformed (prefix ^ " is not null-terminated"))
 
 let decode_tls_data ?(with_premaster = false) buf =
-  let open Result.Infix in
+  let open Result.Syntax in
   let pre_master_start = 5 (* 4 (zero) + 1 (key_method) *) in
   let pre_master_len = if with_premaster then 48 else 0 in
   let random_len = 32 in
@@ -545,55 +546,61 @@ let decode_tls_data ?(with_premaster = false) buf =
        + pre_master_len (if its a client tls data) *)
     pre_master_start + 2 + random_len + random_len + pre_master_len
   in
-  guard (Cstruct.length buf >= opt_start) `Partial >>= fun () ->
-  guard
-    (Cstruct.BE.get_uint32 buf 0 = 0l)
-    (`Malformed "tls data must start with 32 bits set to 0")
-  >>= fun () ->
-  guard
-    (Cstruct.get_uint8 buf 4 = key_method)
-    (`Malformed "tls data key_method wrong")
-  >>= fun () ->
+  let* () = guard (Cstruct.length buf >= opt_start) `Partial in
+  let* () =
+    guard
+      (Cstruct.BE.get_uint32 buf 0 = 0l)
+      (`Malformed "tls data must start with 32 bits set to 0")
+  in
+  let* () =
+    guard
+      (Cstruct.get_uint8 buf 4 = key_method)
+      (`Malformed "tls data key_method wrong")
+  in
   let pre_master = Cstruct.sub buf pre_master_start pre_master_len in
   let random_start = pre_master_start + pre_master_len in
   let random1 = Cstruct.sub buf random_start random_len
   and random2 = Cstruct.sub buf (random_start + random_len) random_len in
   let opt_len = Cstruct.BE.get_uint16 buf (opt_start - 2) in
-  guard (Cstruct.length buf >= opt_start + opt_len) `Partial >>= fun () ->
-  maybe_string "TLS data options" buf opt_start opt_len >>= fun options ->
-  (if Cstruct.length buf = opt_start + opt_len then Ok (None, None)
-   else
-     (* more bytes - there's username and password (2 bytes len, value, 0x00) *)
-     let u_start = opt_start + opt_len in
-     guard (Cstruct.length buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial
-     >>= fun () ->
-     let u_len = Cstruct.BE.get_uint16 buf (opt_start + opt_len) in
-     guard (Cstruct.length buf >= u_start + 4 + u_len) `Partial >>= fun () ->
-     maybe_string "username" buf (u_start + 2) u_len >>= fun u ->
-     let p_start = u_start + 2 + u_len in
-     let p_len = Cstruct.BE.get_uint16 buf p_start in
-     guard (Cstruct.length buf >= p_start + 2 + u_len + p_len) `Partial
-     >>= fun () ->
-     maybe_string "password" buf (p_start + 2) p_len >>= fun p ->
-     let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
-     let peer_info_start = p_start + 2 + p_len in
-     (* dinosaure: if we don't have enough to have a peer-info (at least 2 bytes),
-        we just ignore it and return [None]. *)
-     (if Cstruct.length buf <= peer_info_start + 2 then Ok None
-      else
-        let data = Cstruct.shift buf peer_info_start in
-        let len = Cstruct.BE.get_uint16 data 0 in
-        let data = Cstruct.shift data 2 in
-        guard (Cstruct.length data >= len) `Partial >>= fun () ->
-        if Cstruct.length data > len then
-          Log.warn (fun m ->
-              m "slack at end of tls_data %S @.%a"
-                (Cstruct.to_string ~len data)
-                Cstruct.hexdump_pp data);
-        Ok (if len = 0 then None else Some (Cstruct.to_string ~len data)))
-     >>| fun peer_info ->
-     (user_pass, Option.map (String.split_on_char '\n') peer_info))
-  >>| fun (user_pass, peer_info) ->
+  let* () = guard (Cstruct.length buf >= opt_start + opt_len) `Partial in
+  let* options = maybe_string "TLS data options" buf opt_start opt_len in
+  let+ user_pass, peer_info =
+    if Cstruct.length buf = opt_start + opt_len then Ok (None, None)
+    else
+      (* more bytes - there's username and password (2 bytes len, value, 0x00) *)
+      let u_start = opt_start + opt_len in
+      let* () =
+        guard (Cstruct.length buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial
+      in
+      let u_len = Cstruct.BE.get_uint16 buf (opt_start + opt_len) in
+      let* () = guard (Cstruct.length buf >= u_start + 4 + u_len) `Partial in
+      let* u = maybe_string "username" buf (u_start + 2) u_len in
+      let p_start = u_start + 2 + u_len in
+      let p_len = Cstruct.BE.get_uint16 buf p_start in
+      let* () =
+        guard (Cstruct.length buf >= p_start + 2 + u_len + p_len) `Partial
+      in
+      let* p = maybe_string "password" buf (p_start + 2) p_len in
+      let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
+      let peer_info_start = p_start + 2 + p_len in
+      (* dinosaure: if we don't have enough to have a peer-info (at least 2 bytes),
+         we just ignore it and return [None]. *)
+      let+ peer_info =
+        if Cstruct.length buf <= peer_info_start + 2 then Ok None
+        else
+          let data = Cstruct.shift buf peer_info_start in
+          let len = Cstruct.BE.get_uint16 data 0 in
+          let data = Cstruct.shift data 2 in
+          let* () = guard (Cstruct.length data >= len) `Partial in
+          if Cstruct.length data > len then
+            Log.warn (fun m ->
+                m "slack at end of tls_data %S @.%a"
+                  (Cstruct.to_string ~len data)
+                  Cstruct.hexdump_pp data);
+          Ok (if len = 0 then None else Some (Cstruct.to_string ~len data))
+      in
+      (user_pass, Option.map (String.split_on_char '\n') peer_info)
+  in
   { pre_master; random1; random2; options; user_pass; peer_info }
 
 let push_request = Cstruct.of_string "PUSH_REQUEST\x00"

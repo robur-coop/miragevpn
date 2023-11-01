@@ -162,7 +162,7 @@ let tls_crypt config =
           force_cookie )
 
 let client config ts now rng =
-  let open Result.Infix in
+  let open Result.Syntax in
   let current_ts = ts () in
   let config =
     match Config.get Remote_random config with
@@ -179,13 +179,14 @@ let client config ts now rng =
         let remotes = Array.to_list remotes in
         Config.add Remote remotes config
   in
-  (match Config.get Remote config with
-  | (`Domain (name, ip_version), _port, _proto) :: _ ->
-      Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
-  | (`Ip ip, port, dp) :: _ ->
-      Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
-  | [] -> Error (`Msg "couldn't find remote in configuration"))
-  >>= fun (action, state) ->
+  let* action, state =
+    match Config.get Remote config with
+    | (`Domain (name, ip_version), _port, _proto) :: _ ->
+        Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
+    | (`Ip ip, port, dp) :: _ ->
+        Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
+    | [] -> Error (`Msg "couldn't find remote in configuration")
+  in
   match (tls_auth config, tls_crypt config, secret config) with
   | Error e, Error _, Error _ -> Error e
   | Error _, Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
@@ -264,11 +265,11 @@ let client config ts now rng =
       Ok (state, action)
 
 let server server_config server_ts server_now server_rng =
-  let open Result.Infix in
+  let open Result.Syntax in
   let port =
     match Config.find Port server_config with None -> 1194 | Some p -> p
   in
-  tls_auth server_config >>| fun tls_auth ->
+  let+ tls_auth = tls_auth server_config in
   (* TODO validate server configuration to contain stuff we need later *)
   (* what must be present: server, topology subnet, ping_interval, ping_timeout,
       ca, tls_cert, tls_key, _no_ comp_lzo *)
@@ -391,16 +392,17 @@ let incoming_tls tls data =
       | `Ok tls' -> Ok (tls', out, d))
 
 let incoming_tls_without_reply tls data =
-  let open Result.Infix in
-  incoming_tls tls data >>= function
+  let open Result.Syntax in
+  let* t = incoming_tls tls data in
+  match t with
   | tls', None, d -> Ok (tls', d)
   | _, Some _, _ -> Error (`Msg "expected no TLS reply")
 
 let maybe_kex_client rng config tls =
-  let open Result.Infix in
+  let open Result.Syntax in
   if Tls.Engine.can_handle_appdata tls then
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
-    Config.client_generate_connect_options config >>= fun options ->
+    let* options = Config.client_generate_connect_options config in
     let pull = Config.mem Pull config in
     let user_pass = Config.find Auth_user_pass config in
     let peer_info =
@@ -490,7 +492,7 @@ let kdf session cipher hmac_algorithm my_key_material their_key_material =
   { my_packet_id = 1l; their_packet_id = 1l; keys }
 
 let kex_server config session (my_key_material : my_key_material) tls data =
-  let open Result.Infix in
+  let open Result.Syntax in
   (* TODO verify username + password, respect incoming data, including NCP *)
   let options = Config.server_generate_connect_options config in
   let td =
@@ -503,28 +505,30 @@ let kex_server config session (my_key_material : my_key_material) tls data =
       peer_info = None;
     }
   in
-  Packet.decode_tls_data ~with_premaster:true data >>= fun their_tls_data ->
+  let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
   match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
   | None -> Error (`Msg "not yet established")
   | Some (tls', payload) ->
-      (match Config.find Ifconfig config with
-      | None ->
-          Ok (Push_request_sent (tls', my_key_material, their_tls_data), None)
-      | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
-          let ip_config =
-            let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-            { cidr; gateway = fst (server_ip config) }
-          in
-          let cipher = Config.get Cipher config
-          and hmac_algorithm = Config.get Auth config in
-          let keys_ctx =
-            kdf session cipher hmac_algorithm my_key_material their_tls_data
-          in
-          Ok (Established keys_ctx, Some ip_config)
-      | _ ->
-          Error
-            (`Msg "found Ifconfig without IPv4 addresses, not yet supported"))
-      >>| fun state -> (state, payload)
+      let+ state =
+        match Config.find Ifconfig config with
+        | None ->
+            Ok (Push_request_sent (tls', my_key_material, their_tls_data), None)
+        | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
+            let ip_config =
+              let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
+              { cidr; gateway = fst (server_ip config) }
+            in
+            let cipher = Config.get Cipher config
+            and hmac_algorithm = Config.get Auth config in
+            let keys_ctx =
+              kdf session cipher hmac_algorithm my_key_material their_tls_data
+            in
+            Ok (Established keys_ctx, Some ip_config)
+        | _ ->
+            Error
+              (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
+      in
+      (state, payload)
 
 let push_request tls =
   match Tls.Engine.send_application_data tls [ Packet.push_request ] with
@@ -603,13 +607,13 @@ let incoming_control_client config rng session channel now op data =
           [ (`Control, ch) ] )
   | TLS_handshake tls, Packet.Control ->
       (* we reply with ACK + maybe TLS response *)
-      let open Result.Infix in
-      incoming_tls tls data >>= fun (tls', tls_response, d) ->
+      let open Result.Syntax in
+      let* tls', tls_response, d = incoming_tls tls data in
       Log.debug (fun m ->
           m "TLS payload is %a"
             Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
             d);
-      maybe_kex_client rng config tls' >>| fun (channel_st, data) ->
+      let+ channel_st, data = maybe_kex_client rng config tls' in
       let out =
         match (tls_response, data) with
         | None, None ->
@@ -623,8 +627,8 @@ let incoming_control_client config rng session channel now op data =
       in
       (None, config, { channel with channel_st }, out)
   | TLS_established (tls, my_key_material), Packet.Control -> (
-      let open Result.Infix in
-      incoming_tls tls data >>= fun (tls', tls_resp, d) ->
+      let open Result.Syntax in
+      let* tls', tls_resp, d = incoming_tls tls data in
       let tls_out =
         match tls_resp with None -> [] | Some c -> [ (`Control, c) ]
       in
@@ -633,7 +637,7 @@ let incoming_control_client config rng session channel now op data =
           let channel_st = TLS_established (tls', my_key_material) in
           Ok (None, config, { channel with channel_st }, tls_out)
       | Some d -> (
-          Packet.decode_tls_data d >>= fun tls_data ->
+          let* tls_data = Packet.decode_tls_data d in
           let config =
             let merged =
               Config.client_merge_server_config config tls_data.Packet.options
@@ -673,7 +677,7 @@ let incoming_control_client config rng session channel now op data =
                     tls_out @ [ (`Ack, Cstruct.empty) ] )
               else
                 (* now we send a PUSH_REQUEST\0 and see what happens *)
-                push_request tls' >>| fun (tls'', out) ->
+                let+ tls'', out = push_request tls' in
                 let channel_st =
                   Push_request_sent (tls'', my_key_material, tls_data)
                 in
@@ -684,10 +688,10 @@ let incoming_control_client config rng session channel now op data =
                   { channel with channel_st },
                   tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] )))
   | Push_request_sent (tls, key, tls_data), Packet.Control ->
-      let open Result.Infix in
+      let open Result.Syntax in
       Log.debug (fun m -> m "in push request sent");
-      incoming_tls_without_reply tls data >>= fun (_tls', d) ->
-      maybe_push_reply config d >>| fun config' ->
+      let* _tls', d = incoming_tls_without_reply tls data in
+      let+ config' = maybe_push_reply config d in
       let cipher = Config.get Cipher config'
       and hmac_algorithm = Config.get Auth config' in
       let keys = kdf session cipher hmac_algorithm key tls_data in
@@ -749,8 +753,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       Ok (None, config, session, channel, [ (control_typ, Cstruct.empty) ])
   | TLS_handshake tls, Packet.Control ->
       (* we reply with ACK + maybe TLS response *)
-      let open Result.Infix in
-      incoming_tls tls data >>| fun (tls', tls_response, d) ->
+      let open Result.Syntax in
+      let+ tls', tls_response, d = incoming_tls tls data in
       Log.debug (fun m ->
           m "TLS handshake payload is %a"
             Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
@@ -769,73 +773,71 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       in
       (None, config, session, { channel with channel_st }, out)
   | TLS_established (tls, keys), Packet.Control ->
-      let open Result.Infix in
-      incoming_tls_without_reply tls data >>= fun (tls', d) ->
-      Option.to_result
-        ~none:(`Msg "TLS established, expected data, received nothing") d
-      >>= fun d ->
-      kex_server config session keys tls' d
-      >>| fun ((channel_st, ip_config), out) ->
+      let open Result.Syntax in
+      let* tls', d = incoming_tls_without_reply tls data in
+      let* d =
+        Option.to_result
+          ~none:(`Msg "TLS established, expected data, received nothing") d
+      in
+      let+ (channel_st, ip_config), out =
+        kex_server config session keys tls' d
+      in
       (* keys established, move forward to "expect push request (reply with push reply)" *)
       ( ip_config,
         config,
         session,
         { channel with channel_st },
         [ (`Control, out) ] )
-  | Push_request_sent (tls, key, tls_data), Packet.Control -> (
-      let
+  | Push_request_sent (tls, key, tls_data), Packet.Control ->
       (* TODO naming: this is actually server_stuff sent, awaiting push request *)
-      open
-        Result.Infix in
-      incoming_tls_without_reply tls data >>= fun (tls', d) ->
-      match d with
-      | None -> Error (`Msg "expected push request")
-      | Some data ->
-          if Cstruct.(equal Packet.push_request data) then
-            (* send push reply, register IP etc. *)
-            let server_ip = fst (server_ip config) in
-            next_free_ip config is_not_taken >>= fun (ip, cidr) ->
-            let ping =
-              match Config.get Ping_interval config with
-              | `Not_configured -> 10
-              | `Seconds n -> n
-            and restart =
-              match Config.get Ping_timeout config with
-              | `Restart n -> "ping-restart " ^ string_of_int (n / 2)
-              | `Exit n -> "ping-exit " ^ string_of_int (n / 2)
-            in
-            (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
-            let reply_things =
-              [
-                "";
-                (* need an initial , after PUSH_REPLY *)
-                "route-gateway " ^ Ipaddr.V4.to_string server_ip;
-                "topology subnet";
-                "ping " ^ string_of_int ping;
-                restart;
-                "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
-                ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
-              ]
-            in
-            let reply = String.concat "," reply_things in
-            push_reply tls' reply >>= fun (_tls'', out) ->
-            let cipher = Config.get Cipher config
-            and hmac_algorithm = Config.get Auth config in
-            let keys = kdf session cipher hmac_algorithm key tls_data in
-            let channel_st = Established keys in
-            let ip_config = { cidr; gateway = server_ip } in
-            let config' =
-              Config.add Ifconfig
-                (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
-                config
-            in
-            Ok
-              ( Some ip_config,
-                config',
-                session,
-                { channel with channel_st },
-                [ (`Control, out) ] )
-          else Error (`Msg "expected push request"))
+      let open Result.Syntax in
+      let* tls', d = incoming_tls_without_reply tls data in
+      let* data = Option.to_result ~none:(`Msg "expected push request") d in
+      if Cstruct.(equal Packet.push_request data) then
+        (* send push reply, register IP etc. *)
+        let server_ip = fst (server_ip config) in
+        let* ip, cidr = next_free_ip config is_not_taken in
+        let ping =
+          match Config.get Ping_interval config with
+          | `Not_configured -> 10
+          | `Seconds n -> n
+        and restart =
+          match Config.get Ping_timeout config with
+          | `Restart n -> "ping-restart " ^ string_of_int (n / 2)
+          | `Exit n -> "ping-exit " ^ string_of_int (n / 2)
+        in
+        (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
+        let reply_things =
+          [
+            "";
+            (* need an initial , after PUSH_REPLY *)
+            "route-gateway " ^ Ipaddr.V4.to_string server_ip;
+            "topology subnet";
+            "ping " ^ string_of_int ping;
+            restart;
+            "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
+            ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
+          ]
+        in
+        let reply = String.concat "," reply_things in
+        let* _tls'', out = push_reply tls' reply in
+        let cipher = Config.get Cipher config
+        and hmac_algorithm = Config.get Auth config in
+        let keys = kdf session cipher hmac_algorithm key tls_data in
+        let channel_st = Established keys in
+        let ip_config = { cidr; gateway = server_ip } in
+        let config' =
+          Config.add Ifconfig
+            (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
+            config
+        in
+        Ok
+          ( Some ip_config,
+            config',
+            session,
+            { channel with channel_st },
+            [ (`Control, out) ] )
+      else Error (`Msg "expected push request")
   | _, _ -> Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op
@@ -845,9 +847,11 @@ let incoming_control is_not_taken config rng state session channel now ts key op
         channel);
   match state with
   | Client_tls_auth _ | Client_tls_crypt _ ->
-      let open Result.Infix in
-      incoming_control_client config rng session channel now op data
-      >>| fun (est, config', ch'', outs) -> (est, config', session, ch'', outs)
+      let open Result.Syntax in
+      let+ est, config', ch'', outs =
+        incoming_control_client config rng session channel now op data
+      in
+      (est, config', session, ch'', outs)
   | Server_tls_auth _ ->
       incoming_control_server is_not_taken config rng session channel now ts key
         op data
@@ -855,31 +859,35 @@ let incoming_control is_not_taken config rng state session channel now ts key op
       Error (`Msg "client with static keys, no control packets expected")
 
 let expected_packet session transport data =
-  let open Result.Infix in
+  let open Result.Syntax in
   (* expects monotonic packet + message id, session ids matching *)
   let hdr = Packet.header data and msg_id = Packet.message_id data in
   (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
-  opt_guard
-    (Int64.equal session.my_session_id)
-    hdr.Packet.remote_session
-    (`Mismatch_my_session_id (transport, hdr))
-  >>= fun () ->
-  guard
-    (Int64.equal session.their_session_id 0L
-    || Int64.equal session.their_session_id hdr.Packet.local_session)
-    (`Mismatch_their_session_id (transport, hdr))
-  >>= fun () ->
+  let* () =
+    opt_guard
+      (Int64.equal session.my_session_id)
+      hdr.Packet.remote_session
+      (`Mismatch_my_session_id (transport, hdr))
+  in
+  let* () =
+    guard
+      (Int64.equal session.their_session_id 0L
+      || Int64.equal session.their_session_id hdr.Packet.local_session)
+      (`Mismatch_their_session_id (transport, hdr))
+  in
   (* TODO deal with it, properly: packets may be lost (e.g. udp)
      both from their side, and acks from our side *)
-  guard
-    (Int32.equal session.their_packet_id hdr.Packet.packet_id)
-    (`Non_monotonic_packet_id (transport, hdr))
-  >>= fun () ->
-  opt_guard
-    (Int32.equal transport.their_message_id)
-    msg_id
-    (`Non_monotonic_message_id (transport, msg_id, hdr))
-  >>| fun () ->
+  let* () =
+    guard
+      (Int32.equal session.their_packet_id hdr.Packet.packet_id)
+      (`Non_monotonic_packet_id (transport, hdr))
+  in
+  let+ () =
+    opt_guard
+      (Int32.equal transport.their_message_id)
+      msg_id
+      (`Non_monotonic_message_id (transport, msg_id, hdr))
+  in
   let session =
     {
       session with
@@ -1165,112 +1173,119 @@ let timer state =
 
 let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
     compress data =
-  let open Result.Infix in
-  (match ctx.keys with
-  | AES_CBC { their_key; their_hmac; _ } ->
-      (* spec described the layout as:
-         hmac <+> payload
-         where payload consists of IV <+> encrypted data
-         where plain data consists of packet_id [timestamp] [compress] data pad
+  let open Result.Syntax in
+  let* data =
+    match ctx.keys with
+    | AES_CBC { their_key; their_hmac; _ } ->
+        (* spec described the layout as:
+           hmac <+> payload
+           where payload consists of IV <+> encrypted data
+           where plain data consists of packet_id [timestamp] [compress] data pad
 
-         note that the timestamp is only used in static key mode, when
-         ~add_timestamp is provided and true.
-      *)
-      let open Mirage_crypto in
-      let module H = (val Mirage_crypto.Hash.module_of hmac_algorithm) in
-      let hmac, data = Cstruct.split data H.digest_size in
-      let computed_hmac = H.hmac ~key:their_hmac data in
-      guard (Cstruct.equal hmac computed_hmac) (err computed_hmac) >>= fun () ->
-      let iv, data = Cstruct.split data Packet.cipher_block_size in
-      let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
-      (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
-      let hdr_len = Packet.packet_id_len + if add_timestamp then 4 else 0 in
-      guard
-        (Cstruct.length dec >= hdr_len)
-        (Result.msgf "payload too short (need %d bytes): %a" hdr_len
-           Cstruct.hexdump_pp dec)
-      >>= fun () ->
-      (* TODO validate packet id and ordering *)
-      Log.debug (fun m ->
-          m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
-      (* TODO validate ts if provided (avoid replay) *)
-      unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
-  | AES_GCM { their_key; their_implicit_iv; _ } ->
-      let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
-      guard
-        (Cstruct.length data >= Packet.packet_id_len + tag_len)
-        (Result.msgf "payload too short (need %d bytes): %a"
-           (Packet.packet_id_len + tag_len)
-           Cstruct.hexdump_pp data)
-      >>= fun () ->
-      let packet_id, tag, payload =
-        let p_id, rest = Cstruct.split data Packet.packet_id_len in
-        let tag, payload = Cstruct.split rest tag_len in
-        (p_id, tag, payload)
+           note that the timestamp is only used in static key mode, when
+           ~add_timestamp is provided and true.
+        *)
+        let open Mirage_crypto in
+        let module H = (val Mirage_crypto.Hash.module_of hmac_algorithm) in
+        let hmac, data = Cstruct.split data H.digest_size in
+        let computed_hmac = H.hmac ~key:their_hmac data in
+        let* () =
+          guard (Cstruct.equal hmac computed_hmac) (err computed_hmac)
+        in
+        let iv, data = Cstruct.split data Packet.cipher_block_size in
+        let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
+        (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
+        let hdr_len = Packet.packet_id_len + if add_timestamp then 4 else 0 in
+        let* () =
+          guard
+            (Cstruct.length dec >= hdr_len)
+            (Result.msgf "payload too short (need %d bytes): %a" hdr_len
+               Cstruct.hexdump_pp dec)
+        in
+        (* TODO validate packet id and ordering *)
+        Log.debug (fun m ->
+            m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+        (* TODO validate ts if provided (avoid replay) *)
+        unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
+    | AES_GCM { their_key; their_implicit_iv; _ } ->
+        let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+        let* () =
+          guard
+            (Cstruct.length data >= Packet.packet_id_len + tag_len)
+            (Result.msgf "payload too short (need %d bytes): %a"
+               (Packet.packet_id_len + tag_len)
+               Cstruct.hexdump_pp data)
+        in
+        let packet_id, tag, payload =
+          let p_id, rest = Cstruct.split data Packet.packet_id_len in
+          let tag, payload = Cstruct.split rest tag_len in
+          (p_id, tag, payload)
+        in
+        let nonce = Cstruct.append packet_id their_implicit_iv in
+        let plain =
+          Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
+            ~key:their_key ~nonce ~adata:packet_id ~tag payload
+        in
+        (* TODO validate packet id and ordering *)
+        Log.debug (fun m ->
+            m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
+        Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
+    | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
+        let tag_len = Mirage_crypto.Chacha20.tag_size in
+        let* () =
+          guard
+            (Cstruct.length data >= Packet.packet_id_len + tag_len)
+            (Result.msgf "payload too short (need %d bytes): %a"
+               (Packet.packet_id_len + tag_len)
+               Cstruct.hexdump_pp data)
+        in
+        let packet_id, tag, payload =
+          let p_id, rest = Cstruct.split data Packet.packet_id_len in
+          let tag, payload = Cstruct.split rest tag_len in
+          (p_id, tag, payload)
+        in
+        let nonce = Cstruct.append packet_id their_implicit_iv in
+        let plain =
+          Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
+            ~adata:packet_id ~tag payload
+        in
+        (* TODO validate packet id and ordering *)
+        Log.debug (fun m ->
+            m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
+        Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
+  in
+  let+ data' =
+    if compress then
+      (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
+      let* () =
+        guard
+          (Cstruct.length data >= 1)
+          (`Msg "payload too short, need compression byte")
       in
-      let nonce = Cstruct.append packet_id their_implicit_iv in
-      let plain =
-        Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
-          ~key:their_key ~nonce ~adata:packet_id ~tag payload
-      in
-      (* TODO validate packet id and ordering *)
-      Log.debug (fun m ->
-          m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
-      Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
-  | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
-      let tag_len = Mirage_crypto.Chacha20.tag_size in
-      guard
-        (Cstruct.length data >= Packet.packet_id_len + tag_len)
-        (Result.msgf "payload too short (need %d bytes): %a"
-           (Packet.packet_id_len + tag_len)
-           Cstruct.hexdump_pp data)
-      >>= fun () ->
-      let packet_id, tag, payload =
-        let p_id, rest = Cstruct.split data Packet.packet_id_len in
-        let tag, payload = Cstruct.split rest tag_len in
-        (p_id, tag, payload)
-      in
-      let nonce = Cstruct.append packet_id their_implicit_iv in
-      let plain =
-        Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
-          ~adata:packet_id ~tag payload
-      in
-      (* TODO validate packet id and ordering *)
-      Log.debug (fun m ->
-          m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
-      Option.to_result ~none:(`Msg "AEAD decrypt failed") plain)
-  >>= fun data ->
-  (if compress then
-     (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
-     guard
-       (Cstruct.length data >= 1)
-       (`Msg "payload too short, need compression byte")
-     >>= fun () ->
-     let comp, data = Cstruct.split data 1 in
-     match Cstruct.get_uint8 comp 0 with
-     | 0xFA -> Ok data
-     | 0x66 ->
-         Lzo.uncompress_with_buffer (Cstruct.to_bigarray data)
-         >>| Cstruct.of_string
-         >>| fun lz ->
-         Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
-         lz
-     | comp ->
-         Result.error_msgf "unknown compression %#X in packet:@.%a" comp
-           Cstruct.hexdump_pp data
-   else Ok data)
-  >>| fun data' ->
+      let comp, data = Cstruct.split data 1 in
+      match Cstruct.get_uint8 comp 0 with
+      | 0xFA -> Ok data
+      | 0x66 ->
+          let+ lz = Lzo.uncompress_with_buffer (Cstruct.to_bigarray data) in
+          let lz = Cstruct.of_string lz in
+          Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
+          lz
+      | comp ->
+          Result.error_msgf "unknown compression %#X in packet:@.%a" comp
+            Cstruct.hexdump_pp data
+    else Ok data
+  in
   if Cstruct.equal data' ping then (
     Log.debug (fun m -> m "received ping!");
     None)
   else Some data'
 
 let check_control_integrity err key p hmac_algorithm hmac_key =
-  let open Result.Infix in
+  let open Result.Syntax in
   let computed_mac, packet_mac =
     (compute_hmac key p hmac_algorithm hmac_key, Packet.((header p).hmac))
   in
-  guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) >>| fun () ->
+  let+ () = guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) in
   Log.info (fun m -> m "mac good")
 
 let split_control mtu outs =
@@ -1814,7 +1829,7 @@ let retransmit timeout ts transport =
   ({ transport with out_packets }, out)
 
 let resolve_connect_client config ts s ev =
-  let open Result.Infix in
+  let open Result.Syntax in
   let remote, next_remote =
     let remotes = Config.get Remote config in
     let r idx = List.nth remotes idx in
@@ -1849,9 +1864,11 @@ let resolve_connect_client config ts s ev =
       let endp = match remote idx with _, port, dp -> (ip, port, dp) in
       Ok (Connecting (idx, ts, retry), Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
-      next_or_fail idx retry >>| fun (state, action) -> (state, Some action)
+      let+ state, action = next_or_fail idx retry in
+      (state, Some action)
   | Connecting (idx, _, retry), `Connection_failed ->
-      next_or_fail idx retry >>| fun (state, action) -> (state, Some action)
+      let+ state, action = next_or_fail idx retry in
+      (state, Some action)
   | Connecting (idx, initial_ts, retry), `Tick ->
       (* We are trying to establish a connection and a clock tick happens.
          We need to determine if {!Config.Connect_timeout} seconds has passed
@@ -1860,11 +1877,13 @@ let resolve_connect_client config ts s ev =
       let conn_timeout = Duration.of_sec Config.(get Connect_timeout config) in
       if Int64.sub ts initial_ts >= conn_timeout then (
         Log.err (fun m -> m "Connecting to remote #%d timed out" idx);
-        next_or_fail idx retry >>| fun (state, action) -> (state, Some action))
+        let+ state, action = next_or_fail idx retry in
+        (state, Some action))
       else Ok (s, None)
   | _, `Connection_failed ->
       (* re-start from scratch *)
-      next_or_fail (-1) 0 >>| fun (state, action) -> (state, Some action)
+      let+ state, action = next_or_fail (-1) 0 in
+      (state, Some action)
   | _ -> Error (`Not_handled (remote, next_or_fail))
 
 let handshake_timeout next_or_fail client t s ts =
@@ -1987,7 +2006,7 @@ let handle_server ?is_not_taken t s ev =
         pp_event ev pp_server_state s
 
 let handle_static_client t s keys ev =
-  let open Result.Infix in
+  let open Result.Syntax in
   let ts = t.ts () in
   let client state = Client_static { keys; state } in
   match resolve_connect_client t.config ts s ev with
@@ -2019,7 +2038,7 @@ let handle_static_client t s keys ev =
           match maybe_ping_timeout t with
           | Some `Exit -> Ok (t, [], Some `Exit)
           | Some `Restart ->
-              next_or_fail (-1) 0 >>| fun (state, action) ->
+              let+ state, action = next_or_fail (-1) 0 in
               ({ t with state = client state }, [], Some action)
           | None ->
               let t', outs = timer t in
@@ -2038,9 +2057,11 @@ let handle_static_client t s keys ev =
               | Error `Tcp_partial -> Ok ({ t with linger }, [], acc)
               | Ok (cs, linger) ->
                   let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
-                  incoming_data ~add_timestamp bad_mac keys hmac_algorithm
-                    compress cs
-                  >>= fun d -> process_one (merge_payload acc d) linger
+                  let* d =
+                    incoming_data ~add_timestamp bad_mac keys hmac_algorithm
+                      compress cs
+                  in
+                  process_one (merge_payload acc d) linger
           in
           process_one None (Cstruct.append t.linger cs)
       | s, ev ->

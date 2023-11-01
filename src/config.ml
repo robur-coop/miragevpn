@@ -254,14 +254,15 @@ module Conf_map = struct
   include Gmap.Make (K)
 
   let is_valid_config t =
-    let open Result.Infix in
+    let open Result.Syntax in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
     if not (mem Tls_mode t) then
-      Result.map_error
-        (fun err -> `Msg ("not a valid config: " ^ err))
-        (ensure_mem Cipher "config must specify 'cipher'")
-      >>= fun () ->
+      let* () =
+        Result.map_error
+          (fun err -> `Msg ("not a valid config: " ^ err))
+          (ensure_mem Cipher "config must specify 'cipher'")
+      in
       if get Cipher t <> `AES_256_CBC then
         Error (`Msg "only AES-256-CBC supported in static key mode")
       else Ok ()
@@ -269,63 +270,66 @@ module Conf_map = struct
 
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
-    let open Result.Infix in
-    is_valid_config t >>= fun () ->
+    let open Result.Syntax in
+    let* () = is_valid_config t in
     Result.map_error
       (fun err -> `Msg ("not a valid server config: " ^ err))
-      ( ensure_mem Bind "does not have a bind" >>= fun () ->
-        (match find Tls_mode t with
-        | None | Some `Client -> Error "config must specify 'tls-server'"
-        | Some `Server -> Ok ())
-        >>= fun () ->
-        match (find Tls_cert t, find Tls_key t) with
-        | Some _, Some _ -> Ok ()
-        | None, None -> Error "missing tls-cert and tls-key"
-        | Some _, None -> Error "missing tls-cert"
-        | None, Some _ -> Error "missing tls-key" (* ^-- TODO or has -pkcs12 *)
-      )
+      (let* () = ensure_mem Bind "does not have a bind" in
+       let* () =
+         match find Tls_mode t with
+         | None | Some `Client -> Error "config must specify 'tls-server'"
+         | Some `Server -> Ok ()
+       in
+       match (find Tls_cert t, find Tls_key t) with
+       | Some _, Some _ -> Ok ()
+       | None, None -> Error "missing tls-cert and tls-key"
+       | Some _, None -> Error "missing tls-cert"
+       | None, Some _ -> Error "missing tls-key" (* ^-- TODO or has -pkcs12 *))
 
   let is_valid_client_config t =
-    let open Result.Infix in
+    let open Result.Syntax in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let ensure_not k err = if not (mem k t) then Ok () else Error err in
-    is_valid_config t >>= fun () ->
+    let* () = is_valid_config t in
     Result.map_error
       (fun err -> `Msg ("not a valid client config: " ^ err))
-      ( ensure_mem Remote "does not have a remote" >>= fun () ->
-        let _todo = ensure_not in
-        (match (find Tls_mode t, find Secret t) with
-        | None, None | Some `Server, _ ->
-            Error "is a TLS server, not a TLS client"
-        | None, Some _ ->
-            Log.warn (fun m -> m "using non-forward secure static key mode");
-            Ok ()
-        | Some _, Some _ -> Error "both static secret and TLS mode specified"
-        | Some `Client, None -> (
-            match (find Auth_user_pass t, find Tls_cert t, find Tls_key t) with
-            | _, Some _, None -> Error "tls-cert provided, but no tls-key"
-            | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
-            | Some _, None, None -> Ok ()
-            | _, Some cert, Some key ->
-                let cert_pubkey = X509.Certificate.public_key cert in
-                let key_pubkey = X509.Private_key.public key in
-                if
-                  Cstruct.equal
-                    (X509.Public_key.fingerprint cert_pubkey)
-                    (X509.Public_key.fingerprint key_pubkey)
-                then Ok ()
-                else Error "key and cert do not match"
-            | None, None, None ->
-                Error
-                  "config has neither user/password, nor TLS client certificate"
-                (* ^-- TODO or has -pkcs12 *)))
-        >>= fun () ->
-        (if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
+      (let* () = ensure_mem Remote "does not have a remote" in
+       let _todo = ensure_not in
+       let* () =
+         match (find Tls_mode t, find Secret t) with
+         | None, None | Some `Server, _ ->
+             Error "is a TLS server, not a TLS client"
+         | None, Some _ ->
+             Log.warn (fun m -> m "using non-forward secure static key mode");
+             Ok ()
+         | Some _, Some _ -> Error "both static secret and TLS mode specified"
+         | Some `Client, None -> (
+             match (find Auth_user_pass t, find Tls_cert t, find Tls_key t) with
+             | _, Some _, None -> Error "tls-cert provided, but no tls-key"
+             | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
+             | Some _, None, None -> Ok ()
+             | _, Some cert, Some key ->
+                 let cert_pubkey = X509.Certificate.public_key cert in
+                 let key_pubkey = X509.Private_key.public key in
+                 if
+                   Cstruct.equal
+                     (X509.Public_key.fingerprint cert_pubkey)
+                     (X509.Public_key.fingerprint key_pubkey)
+                 then Ok ()
+                 else Error "key and cert do not match"
+             | None, None, None ->
+                 Error
+                   "config has neither user/password, nor TLS client \
+                    certificate"
+                 (* ^-- TODO or has -pkcs12 *))
+       in
+       let* () =
+         if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
            Error "remote-cert-tls is not SERVER?!"
-         else Ok ())
-        >>= fun () ->
-        ensure_not Tls_crypt_v2_server
-          "server tls-crypt-v2 key passed in tls-crypt-v2" )
+         else Ok ()
+       in
+       ensure_not Tls_crypt_v2_server
+         "server tls-crypt-v2 key passed in tls-crypt-v2")
 
   let pp_opt_direction ppf = function
     | None -> ()
@@ -1630,7 +1634,7 @@ let parse_inline str = function
   | `Tls_auth direction ->
       parse_string ~consume:Consume.All (a_tls_auth_payload direction) str
   | `Connection ->
-      let open Result.Infix in
+      let open Result.Syntax in
       (* TODO entries can sometimes be nested, like in <connection> blocks:
          The following OpenVPN options may be used inside of  a  <connection> block:
          bind,  connect-retry,  connect-retry-max,  connect-timeout,
@@ -1639,8 +1643,9 @@ let parse_inline str = function
          proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
       (* TODO basically a Connection block is a subset of Conf_map.t,
          we should use the same parser.*)
-      parse_string ~consume:Consume.All a_remote str
-      >>= fun (`Remote (host, port, proto)) ->
+      let* (`Remote (host, port, proto)) =
+        parse_string ~consume:Consume.All a_remote str
+      in
       (* TODO consult `Proto and `Proto_force *)
       let proto = match proto with None -> `Udp | Some x -> x in
       let port = match port with `Default_rport -> 1194 | `Port i -> i in
@@ -1742,21 +1747,24 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
           | Some _, None | None, Some _ ->
               Error "Conflicting [bind] directives."
           | Some v, Some v2 ->
-              let open Result.Infix in
-              (match (fst v, fst v2) with
-              (* coalesce port binding *)
-              | (Some _ as x), None -> Ok x
-              | None, (Some _ as x) -> Ok x
-              | v1, v2 when v1 = v2 -> Ok v1
-              | _ -> Error "conflicting [port] options in [bind] directives")
-              >>= fun (port : int option) ->
-              (match (snd v, snd v2) with
-              (* coalesce host/ip binding *)
-              | (Some _ as x), None -> Ok x
-              | None, (Some _ as x) -> Ok x
-              | v1, v2 when v1 = v2 -> Ok v1
-              | _ -> Error "conflicting [host] options in [bind] directives")
-              >>= fun (host : _ option) -> Ok (Some (Bind, Some (port, host))))
+              let open Result.Syntax in
+              let* (port : int option) =
+                match (fst v, fst v2) with
+                (* coalesce port binding *)
+                | (Some _ as x), None -> Ok x
+                | None, (Some _ as x) -> Ok x
+                | v1, v2 when v1 = v2 -> Ok v1
+                | _ -> Error "conflicting [port] options in [bind] directives"
+              in
+              let* (host : _ option) =
+                match (snd v, snd v2) with
+                (* coalesce host/ip binding *)
+                | (Some _ as x), None -> Ok x
+                | None, (Some _ as x) -> Ok x
+                | v1, v2 when v1 = v2 -> Ok v1
+                | _ -> Error "conflicting [host] options in [bind] directives"
+              in
+              Ok (Some (Bind, Some (port, host))))
       | Dev when fst v = fst v2 -> (
           (* verify that dev-type is the same, and let Dev stanza
              override an empty name.*)
@@ -1812,8 +1820,9 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
             (Fmt.str "conflicting keys: %a not in %a" pp (singleton k v) pp t))
 
 let resolve_add_conflict t (B (k, v)) =
-  let open Result.Infix in
-  resolve_conflict t k v >>| function Some (k, v) -> add k v t | None -> t
+  let open Result.Syntax in
+  let+ r = resolve_conflict t k v in
+  match r with Some (k, v) -> add k v t | None -> t
 
 let valid_server_options ~client:_ _server_t =
   Log.err (fun m -> m "TODO valid_server_options is not implemented");
@@ -1821,23 +1830,25 @@ let valid_server_options ~client:_ _server_t =
 
 let parse_next (effect : parser_effect) initial_state :
     (parser_state, 'err) result =
-  let open Result.Infix in
+  let open Result.Syntax in
   let rec loop (acc : Conf_map.t) : line list -> (parser_state, 'b) result =
     function
     | (hd : line) :: tl -> (
         (* TODO should make sure not to override without conflict resolution,
            ie use addb_unless_bound and so on... *)
         let multib ?(tl = tl) kv =
-          List.fold_left
-            (fun acc b ->
-              acc >>= fun acc ->
-              match resolve_add_conflict acc b with
-              | Ok _ as next -> next
-              | Error err ->
-                  Log.debug (fun m -> m "%S : %a" err pp acc);
-                  Error err)
-            (Ok acc) kv
-          >>= fun acc -> loop acc tl
+          let* acc =
+            List.fold_left
+              (fun acc b ->
+                let* acc = acc in
+                match resolve_add_conflict acc b with
+                | Ok _ as next -> next
+                | Error err ->
+                    Log.debug (fun m -> m "%S : %a" err pp acc);
+                    Error err)
+              (Ok acc) kv
+          in
+          loop acc tl
         in
         let retb ?tl b = multib ?tl [ b ] in
         match hd with
@@ -1846,10 +1857,12 @@ let parse_next (effect : parser_effect) initial_state :
             | Some (`File (effect_name, content))
               when String.equal effect_name wanted_name ->
                 (* TODO ensure returned B matches kind? *)
-                Result.map_error
-                  (fun x -> "failed parsing provided file: " ^ x)
-                  (parse_inline content kind)
-                >>= retb
+                let* r =
+                  Result.map_error
+                    (fun x -> "failed parsing provided file: " ^ x)
+                    (parse_inline content kind)
+                in
+                retb r
             | _ -> Ok (`Need_file (wanted_name, (hd :: tl, acc))))
         | `Need_inline kind -> (
             let looking_for = string_of_inlineable kind in
@@ -1862,19 +1875,22 @@ let parse_next (effect : parser_effect) initial_state :
             with
             | `Inline (_, x) :: inline_tl, other_tl ->
                 Log.debug (fun m -> m "consuming [inline] %s" looking_for);
-                parse_inline x kind >>= resolve_add_conflict acc >>= fun acc ->
+                let* thing = parse_inline x kind in
+                let* acc = resolve_add_conflict acc thing in
                 loop acc (other_tl @ inline_tl)
             | [], _ ->
                 (* TODO if we already have it in the map, we don't need to fail: *)
                 Error ("not found: needed [inline]: " ^ looking_for)
             | _ -> Error "TODO List.partition was wrong")
         | `Inline ("connection", x) ->
-            parse_inline x `Connection >>= resolve_add_conflict acc
-            >>= fun acc -> loop acc tl
+            let* thing = parse_inline x `Connection in
+            let* acc = resolve_add_conflict acc thing in
+            loop acc tl
         | `Inline ("secret", payload) ->
             (* If there's a "secret [inline] dir" earlier this doesn't trigger inshallah *)
-            parse_inline payload (`Secret None) >>= resolve_add_conflict acc
-            >>= fun acc -> loop acc tl
+            let* thing = parse_inline payload (`Secret None) in
+            let* acc = resolve_add_conflict acc thing in
+            loop acc tl
         | `Inline (fname, _) ->
             (* Except for "connection" all blocks must be warranted by an
                [inline] value in a matching directive. If we have one, we move
@@ -1991,10 +2007,11 @@ let parse_next (effect : parser_effect) initial_state :
             in
             match port with
             | `Default_rport ->
-                (consult_tl tl >>| function
-                 | None -> 1194 (* hardcoded default *)
-                 | Some port -> port)
-                >>= fun port -> retb (B (Remote, [ (host, port, proto) ]))
+                let* port =
+                  let+ p = consult_tl tl in
+                  Option.value ~default:1194 p (* hardcoded port *)
+                in
+                retb (B (Remote, [ (host, port, proto) ]))
             | `Port port -> retb (B (Remote, [ (host, port, proto) ])))
         | (`Dev _ | `Dev_type _) as current -> (
             (* there must be a corresponding `Dev or `Dev_type in [tl]*)
@@ -2040,55 +2057,63 @@ let parse_next (effect : parser_effect) initial_state :
   | `Need_file (_fn, (lines, acc)) -> loop acc lines
 
 let parse_begin config_str : (parser_state, 'err) result =
-  let open Result.Infix in
-  parse_internal config_str >>= fun lines ->
+  let open Result.Syntax in
+  let* lines = parse_internal config_str in
   parse_next None (`Partial (lines, empty))
 
 let parse ~string_of_file config_str : (Conf_map.t, [> `Msg of string ]) result
     =
-  let open Result.Infix in
+  let open Result.Syntax in
   let to_msg t = Result.map_error (fun s -> `Msg s) t in
   let rec loop = function
     | `Done conf -> Ok conf
-    | `Partial _ as t -> parse_next None t |> to_msg >>= loop
+    | `Partial _ as t ->
+        let* thing = parse_next None t |> to_msg in
+        loop thing
     | `Need_file (fn, t) ->
-        string_of_file fn >>= fun contents ->
-        parse_next (Some (`File (fn, contents))) (`Partial t) |> to_msg >>= loop
+        let* contents = string_of_file fn in
+        let* thing =
+          parse_next (Some (`File (fn, contents))) (`Partial t) |> to_msg
+        in
+        loop thing
   in
-  parse_begin config_str |> to_msg >>= fun initial ->
+  let* initial = parse_begin config_str |> to_msg in
   (loop initial
     : (_, [< `Msg of string ]) result
     :> (_, [> `Msg of string ]) result)
 
 let parse_client ~string_of_file config_str =
-  let open Result.Infix in
-  parse ~string_of_file config_str >>= fun parsed_conf ->
+  let open Result.Syntax in
+  let* parsed_conf = parse ~string_of_file config_str in
   (* apply default configuration entries, overriding with the parsed config: *)
   let merged =
     Conf_map.union
       { f = (fun _key _default parsed -> Some parsed) }
       Defaults.client parsed_conf
   in
-  is_valid_client_config merged >>| fun () -> merged
+  let+ () = is_valid_client_config merged in
+  merged
 
 let parse_server ~string_of_file config_str =
-  let open Result.Infix in
-  parse ~string_of_file config_str >>= fun parsed_conf ->
+  let open Result.Syntax in
+  let* parsed_conf = parse ~string_of_file config_str in
   (* apply default configuration entries, overriding with the parsed config: *)
   let merged =
     Conf_map.union
       { f = (fun _key _default parsed -> Some parsed) }
       Defaults.server parsed_conf
   in
-  is_valid_server_config merged >>| fun () -> merged
+  let+ () = is_valid_server_config merged in
+  merged
 
 let merge_push_reply client (push_config : string) =
-  let open Result.Infix in
-  String.split_on_char ',' push_config
-  |> String.concat "\n"
-  |> parse ~string_of_file:(fun _ ->
-         Result.error_msgf "string of file is not available")
-  >>= fun push_config ->
+  let open Result.Syntax in
+  let* push_config =
+    String.split_on_char ',' push_config
+    |> String.concat "\n"
+    |> parse ~string_of_file:(fun _ ->
+           Result.error_msgf "string of file is not available")
+  in
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
     (* whitelist keys we are willing to accept from server: *)
@@ -2162,8 +2187,8 @@ let client_generate_connect_options t =
   (* Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,\
      keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,\
      key-method 2" *)
-  let open Result.Infix in
-  Conf_map.is_valid_client_config t >>= fun () ->
+  let open Result.Syntax in
+  let* () = Conf_map.is_valid_client_config t in
   let excerpt =
     Conf_map.filter
       (function
