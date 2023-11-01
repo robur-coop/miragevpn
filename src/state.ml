@@ -258,13 +258,29 @@ type tls_auth = {
   their_hmac : Cstruct.t;
 }
 
+type tls_crypt_key = Mirage_crypto.Cipher_block.AES.CTR.key
+
+type tls_crypt = {
+  my_key : tls_crypt_key;
+  my_hmac : Cstruct.t;
+  their_key : tls_crypt_key;
+  their_hmac : Cstruct.t;
+}
+
 type state =
   | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
+  | Client_tls_crypt of {
+      tls_crypt : tls_crypt * Cstruct.t;
+      state : client_state;
+    }
   | Client_static of { keys : keys; state : client_state }
   | Server_tls_auth of { tls_auth : tls_auth; state : server_state }
 
 let pp_state ppf = function
-  | Client_tls_auth { state; _ } -> pp_client_state ppf state
+  | Client_tls_auth { state; _ } ->
+      Fmt.pf ppf "client tls-auth %a" pp_client_state state
+  | Client_tls_crypt { state; _ } ->
+      Fmt.pf ppf "client tls-crypt %a" pp_client_state state
   | Client_static { state; _ } ->
       Fmt.pf ppf "client static %a" pp_client_state state
   | Server_tls_auth { state; _ } -> pp_server_state ppf state
@@ -354,6 +370,13 @@ let channel_of_keyid keyid s =
           when channel.keyid = keyid ->
             let set s ch =
               let state = Client_tls_auth { tls_auth; state = Rekeying ch } in
+              { s with state }
+            in
+            Some (channel, set)
+        | Client_tls_crypt { state = Rekeying channel; tls_crypt }
+          when channel.keyid = keyid ->
+            let set s ch =
+              let state = Client_tls_crypt { tls_crypt; state = Rekeying ch } in
               { s with state }
             in
             Some (channel, set)
