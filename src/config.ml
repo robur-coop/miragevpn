@@ -271,6 +271,9 @@ module Conf_map = struct
       if get Cipher t <> `AES_256_CBC then
         Error (`Msg "only AES-256-CBC supported in static key mode")
       else Ok ()
+    else if mem Ca t && mem Peer_fingerprint t then
+      Error (`Msg "While --ca and --peer-fingerprint are not mutually exclusive \
+                   the semantics are unclear to us and thus not implemented")
     else Ok ()
 
   let cert_key_or_pkcs12 t =
