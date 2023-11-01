@@ -18,7 +18,8 @@ type inlineable =
   | `Tls_key
   | `Secret of [ `Incoming | `Outgoing ] option
   | `Tls_crypt
-  | `Tls_crypt_v2 of bool ]
+  | `Tls_crypt_v2 of bool
+  | `Peer_fingerprint ]
 
 let string_of_inlineable = function
   | `Auth_user_pass -> "auth-user-pass"
@@ -31,6 +32,7 @@ let string_of_inlineable = function
   | `Secret _ -> "secret"
   | `Tls_crypt -> "tls-crypt"
   | `Tls_crypt_v2 _ -> "tls-crypt-v2"
+  | `Peer_fingerprint -> "peer-fingerprint"
 
 type inline_or_path =
   [ `Need_inline of inlineable | `Path of string * inlineable ]
@@ -166,6 +168,7 @@ module Conf_map = struct
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
+    | Peer_fingerprint : Cstruct.t list k
     | Persist_key : flag k
     | Persist_tun : flag k
     | Ping_interval : [ `Not_configured | `Seconds of int ] k
@@ -428,6 +431,14 @@ module Conf_map = struct
         | `SHA512 -> "SHA512")
     in
     let pp_cipher ppf v = Fmt.string ppf (cipher_to_string (v :> cipher)) in
+    let pp_fingerprint ppf fp =
+      for i = 0 to Cstruct.length fp - 1 do
+        let a, b = Hex.of_char (Cstruct.get fp i) in
+        Fmt.pf ppf "%c%c" a b;
+        if i < Cstruct.length fp - 1 then
+          Fmt.pf ppf ":";
+      done
+    in
     match (k, v) with
     | Auth, h -> p () "auth %a" pp_digest_algorithm h
     | Auth_nocache, () -> p () "auth-nocache"
@@ -486,6 +497,9 @@ module Conf_map = struct
     | Mssfix, int -> p () "mssfix %d" int
     | Mute_replay_warnings, () -> p () "mute-replay-warnings"
     | Passtos, () -> p () "passtos"
+    | Peer_fingerprint, fps ->
+      p () "peer-fingerprint [inline]\n<peer-fingerprint>\n%a\n</peer-fingerprint>"
+        Fmt.(list ~sep:(any "\n") pp_fingerprint) fps
     | Persist_key, () -> p () "persist-key"
     | Persist_tun, () -> p () "persist-tun"
     | Pkcs12, p12 ->
@@ -873,6 +887,47 @@ let a_pkcs12_payload str =
   | Ok p12 -> Ok (B (Pkcs12, p12))
 
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
+
+let a_fingerprint =
+  (* We assume SHA256: 32 bytes, so 64 hex digits *)
+  let hex_digit =
+    any_char >>= function
+    | '0'..'9' | 'a'..'f' | 'A'..'F' as d -> return d
+    | d -> Fmt.kstr fail "invalid hex character %C" d
+  in
+  let hex_val = function
+    | '0'..'9' as c -> Char.code c - Char.code '0'
+    | 'a'..'f' as c -> 10 + Char.code c - Char.code 'a'
+    | 'A'..'F' as c -> 10 + Char.code c - Char.code 'A'
+    | _ -> assert false
+  in
+  let byte =
+    hex_digit >>= fun a ->
+    hex_digit >>| fun b ->
+    hex_val a lsl 4 + hex_val b
+  in
+  count 31 (byte <* char ':') >>= fun hd ->
+  byte >>| fun tl ->
+  let buf = Cstruct.create 32 in
+  List.iteri (Cstruct.set_uint8 buf) hd;
+  Cstruct.set_uint8 buf 31 tl;
+  buf
+
+let a_multi_fingerprint =
+  skip_many (a_whitespace_or_comment *> end_of_line) *>
+  many_till
+    (a_fingerprint <* end_of_line <*
+     skip_many (a_whitespace_or_comment *> end_of_line))
+    end_of_input
+  >>| fun fps ->
+  B (Peer_fingerprint, fps)
+
+let a_peer_fingerprint =
+  string "peer-fingerprint" *> a_whitespace *>
+  choice [
+    string "[inline]" *> return (`Need_inline `Peer_fingerprint);
+    choice [a_fingerprint; fail "Bad fingerprint"] >>| fun fp -> `Entry (B (Peer_fingerprint, [fp]))
+  ]
 
 let a_key_direction_option =
   choice
@@ -1616,6 +1671,7 @@ let a_config_entry : line A.t =
          a_lport;
          a_rport;
          a_pkcs12;
+         a_peer_fingerprint;
          a_flag;
          a_ca;
          a_cert;
@@ -1703,6 +1759,7 @@ let parse_inline ~file str = function
         else Result.map_error (function `Msg msg -> msg) (Base64.decode str)
       in
       a_pkcs12_payload data
+  | `Peer_fingerprint -> parse_string ~consume:Consume.All a_multi_fingerprint str
 
 let eq : eq =
   {

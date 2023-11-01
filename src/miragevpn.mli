@@ -86,6 +86,7 @@ module Config : sig
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
+    | Peer_fingerprint : Cstruct.t list k
     | Persist_key : flag k
     | Persist_tun : flag k
     | Ping_interval : [ `Not_configured | `Seconds of int ] k
