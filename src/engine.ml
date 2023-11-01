@@ -847,9 +847,11 @@ let incoming_control is_not_taken config rng state session channel now ts key op
         channel);
   match state with
   | Client_tls_auth _ | Client_tls_crypt _ ->
-      Result.map
-        (fun (est, config', ch'', outs) -> (est, config', session, ch'', outs))
-        (incoming_control_client config rng session channel now op data)
+      let open Result.Syntax in
+      let+ est, config', ch'', outs =
+        incoming_control_client config rng session channel now op data
+      in
+      (est, config', session, ch'', outs)
   | Server_tls_auth _ ->
       incoming_control_server is_not_taken config rng session channel now ts key
         op data
@@ -1264,10 +1266,8 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
       match Cstruct.get_uint8 comp 0 with
       | 0xFA -> Ok data
       | 0x66 ->
-          let+ lz =
-            Result.map Cstruct.of_string
-              (Lzo.uncompress_with_buffer (Cstruct.to_bigarray data))
-          in
+          let+ lz = Lzo.uncompress_with_buffer (Cstruct.to_bigarray data) in
+          let lz = Cstruct.of_string lz in
           Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
           lz
       | comp ->
@@ -1829,6 +1829,7 @@ let retransmit timeout ts transport =
   ({ transport with out_packets }, out)
 
 let resolve_connect_client config ts s ev =
+  let open Result.Syntax in
   let remote, next_remote =
     let remotes = Config.get Remote config in
     let r idx = List.nth remotes idx in
@@ -1863,13 +1864,11 @@ let resolve_connect_client config ts s ev =
       let endp = match remote idx with _, port, dp -> (ip, port, dp) in
       Ok (Connecting (idx, ts, retry), Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
-      Result.map
-        (fun (state, action) -> (state, Some action))
-        (next_or_fail idx retry)
+      let+ state, action = next_or_fail idx retry in
+      (state, Some action)
   | Connecting (idx, _, retry), `Connection_failed ->
-      Result.map
-        (fun (state, action) -> (state, Some action))
-        (next_or_fail idx retry)
+      let+ state, action = next_or_fail idx retry in
+      (state, Some action)
   | Connecting (idx, initial_ts, retry), `Tick ->
       (* We are trying to establish a connection and a clock tick happens.
          We need to determine if {!Config.Connect_timeout} seconds has passed
@@ -1878,15 +1877,13 @@ let resolve_connect_client config ts s ev =
       let conn_timeout = Duration.of_sec Config.(get Connect_timeout config) in
       if Int64.sub ts initial_ts >= conn_timeout then (
         Log.err (fun m -> m "Connecting to remote #%d timed out" idx);
-        Result.map
-          (fun (state, action) -> (state, Some action))
-          (next_or_fail idx retry))
+        let+ state, action = next_or_fail idx retry in
+        (state, Some action))
       else Ok (s, None)
   | _, `Connection_failed ->
       (* re-start from scratch *)
-      Result.map
-        (fun (state, action) -> (state, Some action))
-        (next_or_fail (-1) 0)
+      let+ state, action = next_or_fail (-1) 0 in
+      (state, Some action)
   | _ -> Error (`Not_handled (remote, next_or_fail))
 
 let handshake_timeout next_or_fail client t s ts =
@@ -2041,10 +2038,8 @@ let handle_static_client t s keys ev =
           match maybe_ping_timeout t with
           | Some `Exit -> Ok (t, [], Some `Exit)
           | Some `Restart ->
-              Result.map
-                (fun (state, action) ->
-                  ({ t with state = client state }, [], Some action))
-                (next_or_fail (-1) 0)
+              let+ state, action = next_or_fail (-1) 0 in
+              ({ t with state = client state }, [], Some action)
           | None ->
               let t', outs = timer t in
               Ok (t', outs, None))
