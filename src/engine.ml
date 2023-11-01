@@ -59,7 +59,7 @@ let next_message_id state =
   ( { state with my_message_id = Int32.succ state.my_message_id },
     state.my_message_id )
 
-let header session hmac_algorithm transport timestamp =
+let header session transport timestamp =
   let rec acked_message_ids id =
     if transport.their_message_id = id then []
     else id :: acked_message_ids (Int32.succ id)
@@ -70,16 +70,13 @@ let header session hmac_algorithm transport timestamp =
   in
   let packet_id = session.my_packet_id
   and last_acked_message_id = transport.their_message_id in
-  let hmac =
-    let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
-    Cstruct.create hmac_len
-  in
   let my_packet_id = Int32.succ packet_id in
   ( { session with my_packet_id },
     { transport with last_acked_message_id },
     {
       Packet.local_session = session.my_session_id;
-      hmac;
+      hmac = Cstruct.empty;
+      (* placeholder *)
       packet_id;
       timestamp;
       ack_message_ids;
@@ -95,13 +92,13 @@ let compute_hmac key p hmac_algorithm hmac_key =
   let tbs = Packet.to_be_signed key p in
   Mirage_crypto.Hash.mac hmac_algorithm ~key:hmac_key tbs
 
-let hmac_and_out protocol key { hmac_algorithm; my_hmac; _ } (p : Packet.pkt) =
+let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } ((key, p) : Packet.t) =
   let hmac = compute_hmac key p hmac_algorithm my_hmac in
   let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode protocol (key, p')
 
-let encrypt_and_out protocol key { my_key; my_hmac; _ } (p : Packet.pkt) =
+let encrypt_and_out protocol { my_key; my_hmac; _ } ((key, p) : Packet.t) =
   let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
   let hmac = Mirage_crypto.Hash.SHA256.hmac ~key:my_hmac to_be_signed in
   let iv = Cstruct.sub hmac 0 16 in
@@ -701,28 +698,12 @@ let incoming_control_client config rng session channel now op data =
       (Some ip_config, config', { channel with channel_st }, [])
   | _ -> Error (`No_transition (channel, op, data))
 
-let init_channel how session tls_auth keyid now ts =
+let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
   let channel = new_channel keyid ts in
   let timestamp = ptime_to_ts_exn now in
-  let session, transport, header =
-    header session tls_auth.hmac_algorithm channel.transport timestamp
-  in
+  let session, transport, header = header session channel.transport timestamp in
   let transport, m_id = next_message_id transport in
-  let p = `Control (how, (header, m_id, Cstruct.empty)) in
-  let out = hmac_and_out session.protocol channel.keyid tls_auth p in
-  let out_packets = IM.add m_id (ts, out) transport.out_packets in
-  let transport = { transport with out_packets } in
-  (session, { channel with transport }, out)
-
-let init_channel_tls_crypt session wkc tls_crypt keyid now ts =
-  let channel = new_channel keyid ts in
-  let timestamp = ptime_to_ts_exn now in
-  let session, transport, header =
-    header session Packet.Tls_crypt.hmac_algorithm channel.transport timestamp
-  in
-  let transport, m_id = next_message_id transport in
-  let p = `Control (Packet.Hard_reset_client_v3, (header, m_id, wkc)) in
-  let out = encrypt_and_out session.protocol keyid tls_crypt p in
+  let out = (keyid, `Control (how, (header, m_id, payload))) in
   let out_packets = IM.add m_id (ts, out) transport.out_packets in
   let transport = { transport with out_packets } in
   (session, { channel with transport }, out)
@@ -1105,26 +1086,32 @@ let maybe_init_rekey s =
        1 to 7 and wrap around to 1 after that. So key-id > 0 is equivalent
        to "this is a renegotiation" *)
   in
-  let init_channel tls_auth =
-    init_channel Packet.Soft_reset_v2 s.session tls_auth keyid (s.now ())
-      (s.ts ())
+  let init_channel () =
+    init_channel Packet.Soft_reset_v2 s.session keyid (s.now ()) (s.ts ())
   in
   match s.state with
   | Client_tls_auth { state = Ready; tls_auth } ->
-      let session, channel, out = init_channel tls_auth in
+      let session, channel, out = init_channel () in
       (* allocate new channel, send out a rst (and await a rst) *)
       let state = Client_tls_auth { state = Rekeying channel; tls_auth } in
+      let out = hmac_and_out s.session.protocol tls_auth out in
       ({ s with state; session }, [ out ])
   | Server_tls_auth { state = Server_ready; tls_auth } ->
-      let session, channel, out = init_channel tls_auth in
+      let session, channel, out = init_channel () in
       let state =
         Server_tls_auth { state = Server_rekeying channel; tls_auth }
       in
+      let out = hmac_and_out s.session.protocol tls_auth out in
+      ({ s with state; session }, [ out ])
+  | Client_tls_crypt { state = Ready; tls_crypt } ->
+      let session, channel, out = init_channel () in
+      let state = Client_tls_crypt { state = Rekeying channel; tls_crypt } in
+      let out = encrypt_and_out s.session.protocol (fst tls_crypt) out in
       ({ s with state; session }, [ out ])
   | Client_static _ ->
       (* there's no rekey mechanism in static mode *)
       (s, [])
-  | _ ->
+  | Client_tls_auth _ | Client_tls_crypt _ | Server_tls_auth _ ->
       Log.warn (fun m ->
           m "maybe init rekey, but not in client or server ready %a" pp_state
             s.state);
@@ -1320,24 +1307,24 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
           match typ with
           | `Ack ->
               let session, transport, header =
-                header session tls_auth.hmac_algorithm transport now_ts
+                header session transport now_ts
               in
               (session, transport, `Ack header)
           | (`Control | `Reset_server | `Reset) as typ ->
               let op = op_of_typ typ in
               let session, transport, header =
-                header session tls_auth.hmac_algorithm transport now_ts
+                header session transport now_ts
               in
               let transport, m_id = next_message_id transport in
               (session, transport, `Control (op, (header, m_id, out)))
         in
         (* hmac each outgoing frame and encode *)
-        let out = hmac_and_out session.protocol key tls_auth p in
+        let out = hmac_and_out session.protocol tls_auth (key, p) in
         let out_packets =
           match p with
           | `Ack _ -> transport.out_packets
           | `Control (_, (_, m_id, _)) ->
-              IM.add m_id (ts, out) transport.out_packets
+              IM.add m_id (ts, (key, p)) transport.out_packets
         in
         (session, { transport with out_packets }, out :: acc))
       (session, transport, []) outs
@@ -1355,23 +1342,23 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt key transport outs =
           match typ with
           | `Ack ->
               let session, transport, header =
-                header session Packet.Tls_crypt.hmac_algorithm transport now_ts
+                header session transport now_ts
               in
               (session, transport, `Ack header)
           | (`Control | `Reset_server | `Reset) as typ ->
               let op = op_of_typ typ in
               let session, transport, header =
-                header session Packet.Tls_crypt.hmac_algorithm transport now_ts
+                header session transport now_ts
               in
               let transport, m_id = next_message_id transport in
               (session, transport, `Control (op, (header, m_id, out)))
         in
-        let out = encrypt_and_out session.protocol key tls_crypt p in
+        let out = encrypt_and_out session.protocol tls_crypt (key, p) in
         let out_packets =
           match p with
           | `Ack _ -> transport.out_packets
           | `Control (_, (_, m_id, _)) ->
-              IM.add m_id (ts, out) transport.out_packets
+              IM.add m_id (ts, (key, p)) transport.out_packets
         in
         (session, { transport with out_packets }, out :: acc))
       (session, transport, []) outs
@@ -1926,15 +1913,19 @@ let handle_client_tls_auth t s tls_auth ev =
           let protocol = match remote idx with _, _, proto -> proto in
           let session = init_session ~my_session_id ~protocol () in
           let session, channel, out =
-            init_channel Packet.Hard_reset_client_v2 session tls_auth 0 now ts
+            init_channel Packet.Hard_reset_client_v2 session 0 now ts
           in
           let state = client (Handshaking (idx, ts)) in
+          let out = hmac_and_out t.session.protocol tls_auth out in
           Ok ({ t with state; channel; session }, [ out ], None)
       | s, `Tick -> (
-          let* r = handshake_timeout next_or_fail client t s ts in
-          match r with
-          | t, out, Some action -> Ok (t, out, Some action)
-          | t, out, None -> (
+          let* t, out, action_opt =
+            handshake_timeout next_or_fail client t s ts
+          in
+          let out = List.map (hmac_and_out t.session.protocol tls_auth) out in
+          match action_opt with
+          | Some action -> Ok (t, out, Some action)
+          | None -> (
               match maybe_ping_timeout t with
               | Some `Exit -> Ok (t, out, Some `Exit)
               | Some `Restart ->
@@ -1962,15 +1953,22 @@ let handle_client_tls_crypt t s tls_crypt wkc ev =
           let protocol = match remote idx with _, _, proto -> proto in
           let session = init_session ~my_session_id ~protocol () in
           let session, channel, out =
-            init_channel_tls_crypt session wkc tls_crypt 0 now ts
+            init_channel ~payload:wkc Packet.Hard_reset_client_v3 session 0 now
+              ts
           in
           let state = client (Handshaking (idx, ts)) in
+          let out = encrypt_and_out t.session.protocol tls_crypt out in
           Ok ({ t with state; channel; session }, [ out ], None)
       | s, `Tick -> (
-          let* res = handshake_timeout next_or_fail client t s ts in
-          match res with
-          | t, out, Some action -> Ok (t, out, Some action)
-          | t, out, None -> (
+          let* t, out, action_opt =
+            handshake_timeout next_or_fail client t s ts
+          in
+          let out =
+            List.map (encrypt_and_out t.session.protocol tls_crypt) out
+          in
+          match action_opt with
+          | Some action -> Ok (t, out, Some action)
+          | None -> (
               match maybe_ping_timeout t with
               | Some `Exit -> Ok (t, out, Some `Exit)
               | Some `Restart ->

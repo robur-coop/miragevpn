@@ -12,7 +12,7 @@ type transport = {
   their_message_id : int32;
       (* the first should be 0l, indicates the next to-be-received *)
   last_acked_message_id : int32;
-  out_packets : (int64 * Cstruct.t) IM.t;
+  out_packets : (int64 * Packet.t) IM.t;
 }
 
 let pp_transport ppf t =
