@@ -164,12 +164,6 @@ let to_be_signed_header ?(more = 0) op header =
   | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x);
   (buf, 18 + acks + rses)
 
-type control = header * packet_id * Cstruct.t
-
-let pp_control ppf (hdr, id, payload) =
-  Fmt.pf ppf "%a message-id %lu@.payload %d bytes" pp_header hdr id
-    (Cstruct.length payload)
-
 let decode_ack ~hmac_len buf =
   let open Result.Syntax in
   let+ hdr, off = decode_header ~hmac_len buf in
@@ -257,7 +251,6 @@ let to_be_signed key p =
   match p with
   | `Ack hdr -> fst (to_be_signed_header op hdr)
   | `Control (_, c) -> to_be_signed_control op c
-  | `Data _ -> assert false (* Not called with `Data _ *)
 
 module Tls_crypt = struct
   type cleartext_header = {
@@ -310,7 +303,6 @@ module Tls_crypt = struct
         (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
         to_be_signed_control op (hdr, msg_id, Cstruct.empty)
     | `Control (_, c) -> to_be_signed_control op c
-    | `Data _ -> assert false (* Not called with `Data _ *)
 
   let encode_header hdr =
     let acks_len = packet_id_len * List.length hdr.ack_message_ids in
@@ -355,7 +347,6 @@ module Tls_crypt = struct
       match p with
       | `Ack ack -> encode_header ack
       | `Control (op, control) -> encode_control op control
-      | `Data _ -> assert false (* Not called with `Data _ *)
     in
     let op_buf =
       let b = Cstruct.create 1 in
@@ -430,31 +421,26 @@ module Tls_crypt = struct
     ({ local_session; packet_id; timestamp; hmac }, clear_hdr_len)
 end
 
-type pkt =
-  [ `Ack of header | `Control of operation * control | `Data of Cstruct.t ]
+type ack = [ `Ack of header ]
+type control = [ `Control of operation * (header * packet_id * Cstruct.t) ]
+type t = int * [ ack | control | `Data of Cstruct.t ]
 
-type t = int * pkt
-
-let header = function
-  | `Ack hdr -> hdr
-  | `Control (_, (hdr, _, _)) -> hdr
-  | `Data _ -> assert false
+let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 
 let with_header hdr = function
   | `Ack _ -> `Ack hdr
   | `Control (op, (_, id, data)) -> `Control (op, (hdr, id, data))
-  | `Data data -> `Data data
 
 let message_id = function
   | `Ack _ -> None
   | `Control (_, (_, msg_id, _)) -> Some msg_id
-  | `Data _ -> assert false
 
 let pp ppf (key, p) =
   match p with
   | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
-  | `Control (op, c) ->
-      Fmt.pf ppf "key %d control %a: %a" key pp_operation op pp_control c
+  | `Control (op, (hdr, id, payload)) ->
+      Fmt.pf ppf "key %d control %a: %a message-id %lu@.payload %d bytes" key
+        pp_operation op pp_header hdr id (Cstruct.length payload)
   | `Data d -> Fmt.pf ppf "key %d data %d bytes" key (Cstruct.length d)
 
 type tls_data = {
