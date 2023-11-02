@@ -1416,7 +1416,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
   let rec multi buf (state, out, act) =
     match Packet.decode_key_op state.session.protocol buf with
     | (Error (`Unknown_operation _) | Error `Partial) as e -> e
-    | Error `Tcp_partial -> Ok ({ state with linger = buf }, out, act)
+    | Error `Tcp_partial ->
+        (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
+        Ok ({ state with linger = buf }, out, act)
     | Ok (op, key, payload, linger) ->
         let* state, out, act =
           match find_channel state key op with
@@ -2053,7 +2055,9 @@ let handle_static_client t s keys ev =
             else
               match Packet.decode_protocol t.session.protocol linger with
               | Error `Partial -> Error `Partial
-              | Error `Tcp_partial -> Ok ({ t with linger }, [], acc)
+              | Error `Tcp_partial ->
+                  (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
+                  Ok ({ t with linger }, [], acc)
               | Ok (cs, linger) ->
                   let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
                   let* d =
