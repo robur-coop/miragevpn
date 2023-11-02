@@ -257,7 +257,6 @@ let to_be_signed key p =
   match p with
   | `Ack hdr -> fst (to_be_signed_header op hdr)
   | `Control (_, c) -> to_be_signed_control op c
-  | `Data _ -> assert false (* Not called with `Data _ *)
 
 module Tls_crypt = struct
   type cleartext_header = {
@@ -310,7 +309,6 @@ module Tls_crypt = struct
         (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
         to_be_signed_control op (hdr, msg_id, Cstruct.empty)
     | `Control (_, c) -> to_be_signed_control op c
-    | `Data _ -> assert false (* Not called with `Data _ *)
 
   let encode_header hdr =
     let acks_len = packet_id_len * List.length hdr.ack_message_ids in
@@ -355,7 +353,6 @@ module Tls_crypt = struct
       match p with
       | `Ack ack -> encode_header ack
       | `Control (op, control) -> encode_control op control
-      | `Data _ -> assert false (* Not called with `Data _ *)
     in
     let op_buf =
       let b = Cstruct.create 1 in
@@ -430,25 +427,20 @@ module Tls_crypt = struct
     ({ local_session; packet_id; timestamp; hmac }, clear_hdr_len)
 end
 
-type pkt =
-  [ `Ack of header | `Control of operation * control | `Data of Cstruct.t ]
+type pkt_ack = [ `Ack of header ]
+type pkt_control = [ `Control of operation * control ]
+type pkt = [ pkt_ack | pkt_control | `Data of Cstruct.t ]
+type 'a t = int * ([< pkt ] as 'a)
 
-type t = int * pkt
-
-let header = function
-  | `Ack hdr -> hdr
-  | `Control (_, (hdr, _, _)) -> hdr
-  | `Data _ -> assert false
+let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 
 let with_header hdr = function
   | `Ack _ -> `Ack hdr
   | `Control (op, (_, id, data)) -> `Control (op, (hdr, id, data))
-  | `Data data -> `Data data
 
 let message_id = function
   | `Ack _ -> None
   | `Control (_, (_, msg_id, _)) -> Some msg_id
-  | `Data _ -> assert false
 
 let pp ppf (key, p) =
   match p with
