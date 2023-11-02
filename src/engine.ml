@@ -93,14 +93,14 @@ let compute_hmac key p hmac_algorithm hmac_key =
   Mirage_crypto.Hash.mac hmac_algorithm ~key:hmac_key tbs
 
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ }
-    ((key, p) : [< Packet.pkt_ack | Packet.pkt_control ] Packet.t) =
+    (key, (p : [< Packet.ack | Packet.control ])) =
   let hmac = compute_hmac key p hmac_algorithm my_hmac in
   let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode protocol (key, p')
 
 let encrypt_and_out protocol { my_key; my_hmac; _ }
-    ((key, p) : [< Packet.pkt_ack | Packet.pkt_control ] Packet.t) =
+    (key, (p : [< Packet.ack | Packet.control ])) =
   let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
   let hmac = Mirage_crypto.Hash.SHA256.hmac ~key:my_hmac to_be_signed in
   let iv = Cstruct.sub hmac 0 16 in
@@ -900,7 +900,7 @@ type error =
   | `Mismatch_my_session_id of transport * Packet.header
   | `Msg_id_required_in_fresh_key of transport * int * Packet.header
   | `Different_message_id_expected_fresh_key of transport * int * Packet.header
-  | `Bad_mac of t * Cstruct.t * Packet.pkt Packet.t
+  | `Bad_mac of t * Cstruct.t * Packet.t
   | `No_transition of channel * Packet.operation * Cstruct.t
   | `Tls of
     [ `Alert of Tls.Packet.alert_type | `Eof | `Fail of Tls.Engine.failure ]

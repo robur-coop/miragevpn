@@ -164,12 +164,6 @@ let to_be_signed_header ?(more = 0) op header =
   | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x);
   (buf, 18 + acks + rses)
 
-type control = header * packet_id * Cstruct.t
-
-let pp_control ppf (hdr, id, payload) =
-  Fmt.pf ppf "%a message-id %lu@.payload %d bytes" pp_header hdr id
-    (Cstruct.length payload)
-
 let decode_ack ~hmac_len buf =
   let open Result.Syntax in
   let+ hdr, off = decode_header ~hmac_len buf in
@@ -427,10 +421,9 @@ module Tls_crypt = struct
     ({ local_session; packet_id; timestamp; hmac }, clear_hdr_len)
 end
 
-type pkt_ack = [ `Ack of header ]
-type pkt_control = [ `Control of operation * control ]
-type pkt = [ pkt_ack | pkt_control | `Data of Cstruct.t ]
-type 'a t = int * ([< pkt ] as 'a)
+type ack = [ `Ack of header ]
+type control = [ `Control of operation * (header * packet_id * Cstruct.t) ]
+type t = int * [ ack | control | `Data of Cstruct.t ]
 
 let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 
@@ -445,8 +438,9 @@ let message_id = function
 let pp ppf (key, p) =
   match p with
   | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
-  | `Control (op, c) ->
-      Fmt.pf ppf "key %d control %a: %a" key pp_operation op pp_control c
+  | `Control (op, (hdr, id, payload)) ->
+      Fmt.pf ppf "key %d control %a: %a message-id %lu@.payload %d bytes" key
+        pp_operation op pp_header hdr id (Cstruct.length payload)
   | `Data d -> Fmt.pf ppf "key %d data %d bytes" key (Cstruct.length d)
 
 type tls_data = {
