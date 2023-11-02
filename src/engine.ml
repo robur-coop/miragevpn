@@ -76,7 +76,6 @@ let header session transport timestamp =
     {
       Packet.local_session = session.my_session_id;
       hmac = Cstruct.empty;
-      (* placeholder *)
       packet_id;
       timestamp;
       ack_message_ids;
