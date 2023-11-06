@@ -1404,6 +1404,15 @@ let find_channel state key op =
                   state =
                     Server_tls_auth { state = Server_rekeying ch; tls_auth };
                 } )
+      | Client_tls_crypt { state = Ready; tls_crypt }, Packet.Soft_reset_v2 ->
+          let channel = new_channel key (state.ts ()) in
+          Some
+            ( channel,
+              fun s ch ->
+                {
+                  s with
+                  state = Client_tls_crypt { state = Rekeying ch; tls_crypt };
+                } )
       | _ ->
           Log.warn (fun m ->
               m "ignoring unexpected packet %a in %a" Packet.pp_operation op pp
