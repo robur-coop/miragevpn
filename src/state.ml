@@ -49,8 +49,8 @@ type key_variant =
     }
 
 type keys = {
-  my_packet_id : int32;
-  their_packet_id : int32;
+  my_replay_id : int32;
+  their_replay_id : int32;
   keys : key_variant;
 }
 
@@ -60,7 +60,7 @@ let pp_keys ppf t =
     | AES_CBC _ -> "AES-CBC"
     | AES_GCM _ -> "AES-GCM"
     | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
-    t.my_packet_id t.their_packet_id
+    t.my_replay_id t.their_replay_id
 
 type channel_state =
   | Expect_reset
@@ -201,9 +201,9 @@ let next_free_ip config is_not_taken =
 
 type session = {
   my_session_id : int64;
-  my_packet_id : int32; (* this starts from 1l, indicates the next to-be-send *)
+  my_replay_id : int32; (* this starts from 1l, indicates the next to-be-send *)
   their_session_id : int64;
-  their_packet_id : int32;
+  their_replay_id : int32;
       (* the first should be 1l, indicates the next to-be-received *)
   compress : bool;
   protocol : [ `Tcp | `Udp ];
@@ -213,19 +213,19 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
     ?(protocol = `Tcp) () =
   {
     my_session_id;
-    my_packet_id = 1l;
+    my_replay_id = 1l;
     their_session_id;
-    their_packet_id = 1l;
+    their_replay_id = 1l;
     compress;
     protocol;
   }
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B@ protocol %a@ my session %Lu@ packet %lu@ their session \
-     %Lu@ packet %lu"
-    t.compress pp_proto t.protocol t.my_session_id t.my_packet_id
-    t.their_session_id t.their_packet_id
+    "compression %B@ protocol %a@ my session %Lu@ replay %lu@ their session \
+     %Lu@ replay %lu"
+    t.compress pp_proto t.protocol t.my_session_id t.my_replay_id
+    t.their_session_id t.their_replay_id
 
 type client_state =
   | Resolving of

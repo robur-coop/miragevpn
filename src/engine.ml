@@ -68,15 +68,15 @@ let header session transport timestamp =
   let remote_session =
     match ack_message_ids with [] -> None | _ -> Some session.their_session_id
   in
-  let packet_id = session.my_packet_id
+  let replay_id = session.my_replay_id
   and last_acked_message_id = transport.their_message_id in
-  let my_packet_id = Int32.succ packet_id in
-  ( { session with my_packet_id },
+  let my_replay_id = Int32.succ replay_id in
+  ( { session with my_replay_id },
     { transport with last_acked_message_id },
     {
       Packet.local_session = session.my_session_id;
       hmac = Cstruct.empty;
-      packet_id;
+      replay_id;
       timestamp;
       ack_message_ids;
       remote_session;
@@ -200,7 +200,7 @@ let client config ts now rng =
               their_hmac;
             }
         in
-        { my_packet_id = 1l; their_packet_id = 1l; keys }
+        { my_replay_id = 1l; their_replay_id = 1l; keys }
       in
       let compress =
         match Config.find Comp_lzo config with None -> false | Some () -> true
@@ -487,7 +487,7 @@ let kdf session cipher hmac_algorithm my_key_material their_key_material =
             their_implicit_iv;
           }
   in
-  { my_packet_id = 1l; their_packet_id = 1l; keys }
+  { my_replay_id = 1l; their_replay_id = 1l; keys }
 
 let kex_server config session (my_key_material : my_key_material) tls data =
   let open Result.Syntax in
@@ -861,7 +861,7 @@ let expected_packet session transport data =
      both from their side, and acks from our side *)
   let* () =
     guard
-      (Int32.equal session.their_packet_id hdr.Packet.packet_id)
+      (Int32.equal session.their_replay_id hdr.Packet.replay_id)
       (`Non_monotonic_packet_id (transport, hdr))
   in
   let+ () =
@@ -874,7 +874,7 @@ let expected_packet session transport data =
     {
       session with
       their_session_id = hdr.Packet.local_session;
-      their_packet_id = Int32.succ hdr.Packet.packet_id;
+      their_replay_id = Int32.succ hdr.Packet.replay_id;
     }
   in
   let their_message_id =
@@ -960,7 +960,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
   *)
   let packet_id =
     let buf = Cstruct.create Packet.packet_id_len in
-    Cstruct.BE.set_uint32 buf 0 ctx.my_packet_id;
+    Cstruct.BE.set_uint32 buf 0 ctx.my_replay_id;
     buf
   in
   let compression =
@@ -972,7 +972,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     else Cstruct.empty
   in
   let data = Cstruct.append compression data in
-  ( { ctx with my_packet_id = Int32.succ ctx.my_packet_id },
+  ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
     match ctx.keys with
     | AES_CBC { my_key; my_hmac; _ } ->
         (* the wire format of CBC data packets is:
@@ -1019,7 +1019,7 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
   let out = Packet.encode protocol (key, `Data payload) in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
-        (Cstruct.length out) ctx.my_packet_id);
+        (Cstruct.length out) ctx.my_replay_id);
   (ctx, out)
 
 let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
@@ -1028,7 +1028,7 @@ let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
   let out = Cstruct.append prefix payload in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
-        (Cstruct.length payload) ctx.my_packet_id);
+        (Cstruct.length payload) ctx.my_replay_id);
   (ctx, out)
 
 let outgoing s data =
@@ -1684,8 +1684,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                             m "Hard_reset_client_v2 data: %a" Cstruct.hexdump_pp
                               data);
                         Log.warn (fun m ->
-                            m "fixing their_packet_id: %lx" hdr.packet_id);
-                        { state.session with their_packet_id = hdr.packet_id }
+                            m "fixing their_packet_id: %lx" hdr.replay_id);
+                        { state.session with their_replay_id = hdr.replay_id }
                     | _ -> state.session
                   in
                   let state = { state with session } in

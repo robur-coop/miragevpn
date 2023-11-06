@@ -67,7 +67,7 @@ let guard f e = if f then Ok () else Error e
 type header = {
   local_session : int64;
   hmac : Cstruct.t; (* usually 16 or 20 bytes *)
-  packet_id : packet_id;
+  replay_id : packet_id;
   timestamp : int32;
   (* uint8 array length *)
   ack_message_ids : packet_id list;
@@ -75,8 +75,8 @@ type header = {
 }
 
 let pp_header ppf hdr =
-  Fmt.pf ppf "local %Lu packet_id %ld timestamp %ld hmac %a ack %a remote %a"
-    hdr.local_session hdr.packet_id hdr.timestamp Cstruct.hexdump_pp hdr.hmac
+  Fmt.pf ppf "local %Lu replay_id %ld timestamp %ld hmac %a ack %a remote %a"
+    hdr.local_session hdr.replay_id hdr.timestamp Cstruct.hexdump_pp hdr.hmac
     Fmt.(list ~sep:(any ", ") uint32)
     hdr.ack_message_ids
     Fmt.(option ~none:(any " ") uint64)
@@ -87,7 +87,7 @@ let decode_header ~hmac_len buf =
   let* () = guard (Cstruct.length buf >= hdr_len hmac_len) `Partial in
   let local_session = Cstruct.BE.get_uint64 buf 0
   and hmac = Cstruct.sub buf 8 hmac_len
-  and packet_id = Cstruct.BE.get_uint32 buf (hmac_len + 8)
+  and replay_id = Cstruct.BE.get_uint32 buf (hmac_len + 8)
   and timestamp = Cstruct.BE.get_uint32 buf (hmac_len + 12)
   and arr_len = Cstruct.get_uint8 buf (hmac_len + 16) in
   let rs = if arr_len = 0 then 0 else 8 in
@@ -110,7 +110,7 @@ let decode_header ~hmac_len buf =
   ( {
       local_session;
       hmac;
-      packet_id;
+      replay_id;
       timestamp;
       ack_message_ids;
       remote_session;
@@ -124,7 +124,7 @@ let encode_header hdr =
   let buf = Cstruct.create (hdr_len hmac_len + rsid + id_arr_len) in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session;
   Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
-  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.packet_id;
+  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.replay_id;
   Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp;
   Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_message_ids);
   List.iteri
@@ -147,7 +147,7 @@ let to_be_signed_header ?(more = 0) op header =
   and rses = match header.remote_session with None -> 0 | Some _ -> 8 in
   let buflen = packet_id_len + 4 + 1 + 8 + 1 + acks + rses + more in
   let buf = Cstruct.create buflen in
-  Cstruct.BE.set_uint32 buf 0 header.packet_id;
+  Cstruct.BE.set_uint32 buf 0 header.replay_id;
   Cstruct.BE.set_uint32 buf 4 header.timestamp;
   Cstruct.set_uint8 buf 8 op;
   Cstruct.BE.set_uint64 buf 9 header.local_session;
@@ -255,7 +255,7 @@ let to_be_signed key p =
 module Tls_crypt = struct
   type cleartext_header = {
     local_session : int64;
-    packet_id : packet_id;
+    replay_id : packet_id;
     timestamp : int32;
     hmac : Cstruct.t; (* always 32 bytes *)
   }
@@ -276,7 +276,7 @@ module Tls_crypt = struct
     let buf = Cstruct.create buflen in
     Cstruct.set_uint8 buf 0 op;
     Cstruct.BE.set_uint64 buf 1 header.local_session;
-    Cstruct.BE.set_uint32 buf 9 header.packet_id;
+    Cstruct.BE.set_uint32 buf 9 header.replay_id;
     Cstruct.BE.set_uint32 buf 13 header.timestamp;
     Cstruct.set_uint8 buf 17 (List.length header.ack_message_ids);
     let enc_ack idx ack = Cstruct.BE.set_uint32 buf (18 + (4 * idx)) ack in
@@ -311,7 +311,7 @@ module Tls_crypt = struct
     let buf = Cstruct.create (clear_hdr_len + 1 + acks_len + rsid_len) in
     Cstruct.BE.set_uint64 buf 0 hdr.local_session;
     (* annoyingly the replay packet id and hmac are swapped from the tls-auth header *)
-    Cstruct.BE.set_uint32 buf 8 hdr.packet_id;
+    Cstruct.BE.set_uint32 buf 8 hdr.replay_id;
     Cstruct.BE.set_uint32 buf 12 hdr.timestamp;
     Cstruct.blit hdr.hmac 0 buf 16 hmac_len;
     Cstruct.set_uint8 buf (16 + hmac_len) (List.length hdr.ack_message_ids);
@@ -380,11 +380,11 @@ module Tls_crypt = struct
         Some (Cstruct.BE.get_uint64 buf (1 + (packet_id_len * arr_len)))
       else None
     in
-    let { local_session; packet_id; timestamp; hmac } = clear_hdr in
+    let { local_session; replay_id; timestamp; hmac } = clear_hdr in
     let res =
       {
         local_session;
-        packet_id;
+        replay_id;
         timestamp;
         hmac;
         ack_message_ids;
@@ -415,10 +415,10 @@ module Tls_crypt = struct
     (* header up till acked message ids *)
     let+ () = guard (Cstruct.length buf >= clear_hdr_len) `Partial in
     let local_session = Cstruct.BE.get_uint64 buf 0
-    and packet_id = Cstruct.BE.get_uint32 buf 8
+    and replay_id = Cstruct.BE.get_uint32 buf 8
     and timestamp = Cstruct.BE.get_uint32 buf 12
     and hmac = Cstruct.sub buf 16 hmac_len in
-    ({ local_session; packet_id; timestamp; hmac }, clear_hdr_len)
+    ({ local_session; replay_id; timestamp; hmac }, clear_hdr_len)
 end
 
 type ack = [ `Ack of header ]
