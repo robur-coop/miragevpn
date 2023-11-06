@@ -1413,7 +1413,17 @@ let find_channel state key op =
                   s with
                   state = Client_tls_crypt { state = Rekeying ch; tls_crypt };
                 } )
-      | _ ->
+      | ( ( Client_static _ | Client_tls_auth _ | Client_tls_crypt _
+          | Server_tls_auth _ ),
+          Packet.Soft_reset_v2 ) ->
+          Log.warn (fun m ->
+              m "ignoring soft_reset_v2 in non-ready state %a" pp state);
+          None
+      | ( ( Client_static _ | Client_tls_auth _ | Client_tls_crypt _
+          | Server_tls_auth _ ),
+          Packet.(
+            ( Control | Ack | Data_v1 | Hard_reset_client_v2
+            | Hard_reset_server_v2 | Hard_reset_client_v3 )) ) ->
           Log.warn (fun m ->
               m "ignoring unexpected packet %a in %a" Packet.pp_operation op pp
                 state);
