@@ -7,24 +7,24 @@ type my_key_material = {
 module IM = Map.Make (Int32)
 
 type transport = {
-  my_message_id : int32;
+  my_sequence_number : int32;
       (* this starts from 0l, indicates the next to-be-send *)
-  their_message_id : int32;
+  their_sequence_number : int32;
       (* the first should be 0l, indicates the next to-be-received *)
-  last_acked_message_id : int32;
+  last_acked_sequence_number : int32;
   out_packets : (int64 * (int * Packet.control)) IM.t;
 }
 
 let pp_transport ppf t =
-  Fmt.pf ppf "my message %lu@ their message %lu@ (acked %lu)@ out %d"
-    t.my_message_id t.their_message_id t.last_acked_message_id
+  Fmt.pf ppf "my packet %lu@ their packet %lu@ (acked %lu)@ out %d"
+    t.my_sequence_number t.their_sequence_number t.last_acked_sequence_number
     (IM.cardinal t.out_packets)
 
 let init_transport =
   {
-    my_message_id = 0l;
-    their_message_id = 0l;
-    last_acked_message_id = 0l;
+    my_sequence_number = 0l;
+    their_sequence_number = 0l;
+    last_acked_sequence_number = 0l;
     out_packets = IM.empty;
   }
 
@@ -326,11 +326,11 @@ let mtu config compress =
     Option.value ~default:`SHA1 (Config.find Auth config)
     |> Mirage_crypto.Hash.digest_size
   in
-  (* padding, done on packet_id + [timestamp] + compress + data *)
+  (* padding, done on replay_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
     Packet.packet_id_len
-    + (* packet id *)
+    + (* sequence id *)
     (if static_key_mode then 4 else 0)
     +
     (* time stamp in static key mode *)

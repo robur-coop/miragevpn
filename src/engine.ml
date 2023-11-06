@@ -55,30 +55,34 @@ let tls_version config =
 let guard p e = if p then Ok () else Error e
 let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
 
-let next_message_id state =
-  ( { state with my_message_id = Int32.succ state.my_message_id },
-    state.my_message_id )
+let next_sequence_number state =
+  ( { state with my_sequence_number = Int32.succ state.my_sequence_number },
+    state.my_sequence_number )
 
 let header session transport timestamp =
   let rec acked_message_ids id =
-    if transport.their_message_id = id then []
+    if transport.their_sequence_number = id then []
     else id :: acked_message_ids (Int32.succ id)
   in
-  let ack_message_ids = acked_message_ids transport.last_acked_message_id in
+  let ack_sequence_numbers =
+    acked_message_ids transport.last_acked_sequence_number
+  in
   let remote_session =
-    match ack_message_ids with [] -> None | _ -> Some session.their_session_id
+    match ack_sequence_numbers with
+    | [] -> None
+    | _ -> Some session.their_session_id
   in
   let replay_id = session.my_replay_id
-  and last_acked_message_id = transport.their_message_id in
+  and last_acked_sequence_number = transport.their_sequence_number in
   let my_replay_id = Int32.succ replay_id in
   ( { session with my_replay_id },
-    { transport with last_acked_message_id },
+    { transport with last_acked_sequence_number },
     {
       Packet.local_session = session.my_session_id;
       hmac = Cstruct.empty;
       replay_id;
       timestamp;
-      ack_message_ids;
+      ack_sequence_numbers;
       remote_session;
     } )
 
@@ -703,9 +707,9 @@ let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
   let channel = new_channel keyid ts in
   let timestamp = ptime_to_ts_exn now in
   let session, transport, header = header session channel.transport timestamp in
-  let transport, m_id = next_message_id transport in
-  let out = (keyid, `Control (how, (header, m_id, payload))) in
-  let out_packets = IM.add m_id (ts, out) transport.out_packets in
+  let transport, sn = next_sequence_number transport in
+  let out = (keyid, `Control (how, (header, sn, payload))) in
+  let out_packets = IM.add sn (ts, out) transport.out_packets in
   let transport = { transport with out_packets } in
   (session, { channel with transport }, out)
 
@@ -862,13 +866,13 @@ let expected_packet session transport data =
   let* () =
     guard
       (Int32.equal session.their_replay_id hdr.Packet.replay_id)
-      (`Non_monotonic_packet_id (transport, hdr))
+      (`Non_monotonic_replay_id (transport, hdr))
   in
   let+ () =
     opt_guard
-      (Int32.equal transport.their_message_id)
+      (Int32.equal transport.their_sequence_number)
       msg_id
-      (`Non_monotonic_message_id (transport, msg_id, hdr))
+      (`Non_monotonic_sequence_number (transport, msg_id, hdr))
   in
   let session =
     {
@@ -877,24 +881,24 @@ let expected_packet session transport data =
       their_replay_id = Int32.succ hdr.Packet.replay_id;
     }
   in
-  let their_message_id =
+  let their_sequence_number =
     match msg_id with
-    | None -> transport.their_message_id
+    | None -> transport.their_sequence_number
     | Some x -> Int32.succ x
   in
   let out_packets =
     List.fold_left
       (fun m id -> IM.remove id m)
-      transport.out_packets hdr.Packet.ack_message_ids
+      transport.out_packets hdr.Packet.ack_sequence_numbers
   in
-  let transport = { transport with their_message_id; out_packets } in
+  let transport = { transport with their_sequence_number; out_packets } in
   (session, transport)
 
 type error =
   [ Packet.error
   | Lzo.error
-  | `Non_monotonic_packet_id of transport * Packet.header
-  | `Non_monotonic_message_id of transport * int32 option * Packet.header
+  | `Non_monotonic_replay_id of transport * Packet.header
+  | `Non_monotonic_sequence_number of transport * int32 option * Packet.header
   | `Mismatch_their_session_id of transport * Packet.header
   | `Mismatch_my_session_id of transport * Packet.header
   | `Msg_id_required_in_fresh_key of transport * int * Packet.header
@@ -908,11 +912,11 @@ type error =
 let pp_error ppf = function
   | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
   | #Lzo.error as e -> Fmt.pf ppf "lzo %a" Lzo.pp_error e
-  | `Non_monotonic_packet_id (state, hdr) ->
-      Fmt.pf ppf "non monotonic packet id in %a@ (state %a)" Packet.pp_header
-        hdr pp_transport state
-  | `Non_monotonic_message_id (state, msg_id, hdr) ->
-      Fmt.pf ppf "non monotonic message id %a in %a@ (state %a)"
+  | `Non_monotonic_replay_id (state, hdr) ->
+      Fmt.pf ppf "non monotonic replay packet id in %a@ (state %a)"
+        Packet.pp_header hdr pp_transport state
+  | `Non_monotonic_sequence_number (state, msg_id, hdr) ->
+      Fmt.pf ppf "non monotonic sequence number %a in %a@ (state %a)"
         Fmt.(option ~none:(any "no") int32)
         msg_id Packet.pp_header hdr pp_transport state
   | `Mismatch_their_session_id (state, hdr) ->
@@ -958,7 +962,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let packet_id =
+  let replay_id =
     let buf = Cstruct.create Packet.packet_id_len in
     Cstruct.BE.set_uint32 buf 0 ctx.my_replay_id;
     buf
@@ -976,7 +980,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     match ctx.keys with
     | AES_CBC { my_key; my_hmac; _ } ->
         (* the wire format of CBC data packets is:
-           hmac (IV enc(packet_id [timestamp] [compression] data pad))
+           hmac (IV enc(replay_id [timestamp] [compression] data pad))
            where:
            - hmac over the entire encrypted payload
              - timestamp only used in static key mode (32bit, seconds since unix epoch)
@@ -989,7 +993,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
             add_timestamp;
           ts_buf
         in
-        let hdr = Cstruct.append packet_id ts in
+        let hdr = Cstruct.append replay_id ts in
         let iv = rng Packet.cipher_block_size
         and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
         let open Mirage_crypto in
@@ -998,19 +1002,19 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
         let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
         Cstruct.append hmac payload
     | AES_GCM { my_key; my_implicit_iv; _ } ->
-        let nonce = Cstruct.append packet_id my_implicit_iv in
+        let nonce = Cstruct.append replay_id my_implicit_iv in
         let enc, tag =
           Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag
-            ~key:my_key ~nonce ~adata:packet_id data
+            ~key:my_key ~nonce ~adata:replay_id data
         in
-        Cstruct.concat [ packet_id; tag; enc ]
+        Cstruct.concat [ replay_id; tag; enc ]
     | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
-        let nonce = Cstruct.append packet_id my_implicit_iv in
+        let nonce = Cstruct.append replay_id my_implicit_iv in
         let enc, tag =
           Mirage_crypto.Chacha20.authenticate_encrypt_tag ~key:my_key ~nonce
-            ~adata:packet_id data
+            ~adata:replay_id data
         in
-        Cstruct.concat [ packet_id; tag; enc ] )
+        Cstruct.concat [ replay_id; tag; enc ] )
 
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
@@ -1168,7 +1172,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         (* spec described the layout as:
            hmac <+> payload
            where payload consists of IV <+> encrypted data
-           where plain data consists of packet_id [timestamp] [compress] data pad
+           where plain data consists of replay_id [timestamp] [compress] data pad
 
            note that the timestamp is only used in static key mode, when
            ~add_timestamp is provided and true.
@@ -1182,7 +1186,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         in
         let iv, data = Cstruct.split data Packet.cipher_block_size in
         let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
-        (* dec is: uint32 packet id followed by (lzo-compressed) data and padding *)
+        (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.packet_id_len + if add_timestamp then 4 else 0 in
         let* () =
           guard
@@ -1190,9 +1194,9 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (Result.msgf "payload too short (need %d bytes): %a" hdr_len
                Cstruct.hexdump_pp dec)
         in
-        (* TODO validate packet id and ordering *)
+        (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
-            m "received packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+            m "received replay packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
         (* TODO validate ts if provided (avoid replay) *)
         unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
     | AES_GCM { their_key; their_implicit_iv; _ } ->
@@ -1204,19 +1208,20 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
                (Packet.packet_id_len + tag_len)
                Cstruct.hexdump_pp data)
         in
-        let packet_id, tag, payload =
-          let p_id, rest = Cstruct.split data Packet.packet_id_len in
+        let replay_id, tag, payload =
+          let sn, rest = Cstruct.split data Packet.packet_id_len in
           let tag, payload = Cstruct.split rest tag_len in
-          (p_id, tag, payload)
+          (sn, tag, payload)
         in
-        let nonce = Cstruct.append packet_id their_implicit_iv in
+        let nonce = Cstruct.append replay_id their_implicit_iv in
         let plain =
           Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
-            ~key:their_key ~nonce ~adata:packet_id ~tag payload
+            ~key:their_key ~nonce ~adata:replay_id ~tag payload
         in
-        (* TODO validate packet id and ordering *)
+        (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
-            m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
+            m "received replay packet id is %lu"
+              (Cstruct.BE.get_uint32 replay_id 0));
         Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
     | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.Chacha20.tag_size in
@@ -1227,19 +1232,20 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
                (Packet.packet_id_len + tag_len)
                Cstruct.hexdump_pp data)
         in
-        let packet_id, tag, payload =
-          let p_id, rest = Cstruct.split data Packet.packet_id_len in
+        let replay_id, tag, payload =
+          let sn, rest = Cstruct.split data Packet.packet_id_len in
           let tag, payload = Cstruct.split rest tag_len in
-          (p_id, tag, payload)
+          (sn, tag, payload)
         in
-        let nonce = Cstruct.append packet_id their_implicit_iv in
+        let nonce = Cstruct.append replay_id their_implicit_iv in
         let plain =
           Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
-            ~adata:packet_id ~tag payload
+            ~adata:replay_id ~tag payload
         in
-        (* TODO validate packet id and ordering *)
+        (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
-            m "received packet id is %lu" (Cstruct.BE.get_uint32 packet_id 0));
+            m "received replay packet id is %lu"
+              (Cstruct.BE.get_uint32 replay_id 0));
         Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
   in
   let+ data' =
@@ -1316,16 +1322,16 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
               let session, transport, header =
                 header session transport now_ts
               in
-              let transport, m_id = next_message_id transport in
-              (session, transport, `Control (op, (header, m_id, out)))
+              let transport, sn = next_sequence_number transport in
+              (session, transport, `Control (op, (header, sn, out)))
         in
         (* hmac each outgoing frame and encode *)
         let out = hmac_and_out session.protocol tls_auth (key, p) in
         let out_packets =
           match p with
           | `Ack _ -> transport.out_packets
-          | `Control (_, (_, m_id, _)) as p ->
-              IM.add m_id (ts, (key, p)) transport.out_packets
+          | `Control (_, (_, sn, _)) as p ->
+              IM.add sn (ts, (key, p)) transport.out_packets
         in
         (session, { transport with out_packets }, out :: acc))
       (session, transport, []) outs
@@ -1351,15 +1357,15 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt key transport outs =
               let session, transport, header =
                 header session transport now_ts
               in
-              let transport, m_id = next_message_id transport in
-              (session, transport, `Control (op, (header, m_id, out)))
+              let transport, sn = next_sequence_number transport in
+              (session, transport, `Control (op, (header, sn, out)))
         in
         let out = encrypt_and_out session.protocol tls_crypt (key, p) in
         let out_packets =
           match p with
           | `Ack _ -> transport.out_packets
-          | `Control (_, (_, m_id, _)) as p ->
-              IM.add m_id (ts, (key, p)) transport.out_packets
+          | `Control (_, (_, sn, _)) as p ->
+              IM.add sn (ts, (key, p)) transport.out_packets
         in
         (session, { transport with out_packets }, out :: acc))
       (session, transport, []) outs
@@ -1684,7 +1690,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                             m "Hard_reset_client_v2 data: %a" Cstruct.hexdump_pp
                               data);
                         Log.warn (fun m ->
-                            m "fixing their_packet_id: %lx" hdr.replay_id);
+                            m "fixing their_replay_id: %lx" hdr.replay_id);
                         { state.session with their_replay_id = hdr.replay_id }
                     | _ -> state.session
                   in
