@@ -1396,9 +1396,9 @@ let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) needs_wkc key
         Cstruct.blit proto 0 out 0 (Cstruct.length proto);
         (session, transport, Some out, rest)
     | true, _ ->
-        Log.warn (fun m ->
+        Log.err (fun m ->
             m "wrap_tls_crypt_control: expected control to append wkc");
-        (session, transport, None, outs)
+        assert false
     | false, _ -> (session, transport, None, outs)
   in
   (* we split the remainder control packets *)
