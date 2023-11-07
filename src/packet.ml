@@ -25,6 +25,7 @@ type operation =
   | Hard_reset_client_v2
   | Hard_reset_server_v2
   | Hard_reset_client_v3
+  | Control_wkc
 
 let operation_to_int, int_to_operation =
   let ops =
@@ -36,6 +37,7 @@ let operation_to_int, int_to_operation =
       (Hard_reset_client_v2, 7);
       (Hard_reset_server_v2, 8);
       (Hard_reset_client_v3, 10);
+      (Control_wkc, 11);
     ]
   in
   let rev_ops = List.map (fun (a, b) -> (b, a)) ops in
@@ -54,7 +56,8 @@ let pp_operation ppf op =
     | Data_v1 -> "data v1"
     | Hard_reset_client_v2 -> "hard reset client v2"
     | Hard_reset_server_v2 -> "hard reset server v2"
-    | Hard_reset_client_v3 -> "hard reset client v3")
+    | Hard_reset_client_v3 -> "hard reset client v3"
+    | Control_wkc -> "control wkc")
 
 type packet_id = int32 (* 4 or 8 bytes -- latter in pre-shared key mode *)
 
@@ -592,11 +595,11 @@ let decode_tls_data ?(with_premaster = false) buf =
 let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
 let push_reply = Cstruct.of_string "PUSH_REPLY"
 
+(* We only support one flag, so we return [bool] *)
 let decode_early_negotiation_tlvs data =
   let open Result.Syntax in
   let rec go acc data =
-    if Cstruct.is_empty data then
-      Ok acc
+    if Cstruct.is_empty data then Ok acc
     else
       let* () = guard (Cstruct.length data >= 4) `Partial in
       let typ = Cstruct.BE.get_uint16 data 0
@@ -606,8 +609,7 @@ let decode_early_negotiation_tlvs data =
         let* () = guard (len = 2) (`Malformed "Bad EARLY_NEG_FLAGS") in
         let flags = Cstruct.BE.get_uint16 data 4 in
         go (acc || flags = 0x0001 (* RESEND_WKC *)) (Cstruct.shift data 6)
-      else
-        (* skip *)
+      else (* skip *)
         go acc (Cstruct.shift data (4 + len))
   in
   go false data
