@@ -575,7 +575,9 @@ let incoming_control_client config rng session channel now op data =
   match (channel.channel_st, op) with
   | Expect_reset, (Packet.Hard_reset_server_v2 | Packet.Soft_reset_v2) ->
       (* for rekey we receive a soft_reset -- a bit alien that we don't send soft_reset *)
-      (* we reply with ACK + TLS client hello! *)
+      (* we reply with embedded ACK + TLS client hello! *)
+      (* NOTE: For tls-crypt-v2 hmac cookies it is important we don't send a
+         dedicated ACK as we need to ensure the Control_wkc arrives first *)
       let tls, ch =
         let authenticator =
           match Config.find Ca config with
@@ -1852,6 +1854,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 act )
                           | _ -> assert false))))
         in
+        (* Invariant: [linger] is always empty for UDP *)
         if Cstruct.is_empty linger then Ok (state, out, act)
         else multi linger (state, out, act)
   in
