@@ -404,12 +404,16 @@ let maybe_kex_client rng config tls =
     let pull = Config.mem Pull config in
     let user_pass = Config.find Auth_user_pass config in
     let peer_info =
-      let ciphers =
-        String.concat ":"
-          (List.map Config.aead_cipher_to_string
-             (Config.get Data_ciphers config))
+      let ciphers = Config.get Data_ciphers config in
+      let maybe_iv_ncp_2 =
+        if List.mem `AES_128_GCM ciphers && List.mem `AES_256_GCM ciphers then
+          [ "IV_NCP=2" ]
+        else []
       in
-      Some [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers; "IV_NCP=2" ]
+      let ciphers =
+        String.concat ":" (List.map Config.aead_cipher_to_string ciphers)
+      in
+      Some (maybe_iv_ncp_2 @ [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers ])
     in
     let peer_info =
       match peer_info with
