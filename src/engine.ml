@@ -1364,7 +1364,7 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
   in
   (session, transport, List.rev outs)
 
-let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) hmac_cookie key
+let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) needs_wkc key
     transport outs =
   let now_ts = ptime_to_ts_exn now in
   let acks = bytes_of_acks transport in
@@ -1372,7 +1372,7 @@ let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) hmac_cookie key
      packet, the Control_wkc has room for the /cleartext/ wkc, and fix the
      packet length afterwards *)
   let session, transport, maybe_out, outs =
-    match (hmac_cookie, outs) with
+    match (needs_wkc, outs) with
     | true, (`Control, data) :: rest ->
         let l = min (mtu - Cstruct.length wkc) (Cstruct.length data) in
         let data, data' = Cstruct.split data l in
@@ -1746,7 +1746,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     Packet.Tls_crypt.decode_decrypted_control cleartext
                       decrypted
                   in
-                  let* hmac_cookie_supported =
+                  let* needs_wkc =
                     match op with
                     | Hard_reset_server_v2 ->
                         Packet.decode_early_negotiation_tlvs data
@@ -1804,8 +1804,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       in
                       let session, transport, encs =
                         wrap_tls_crypt_control (state.now ()) (state.ts ())
-                          my_mtu state.session (tls_crypt, wkc)
-                          hmac_cookie_supported key ch.transport out'
+                          my_mtu state.session (tls_crypt, wkc) needs_wkc key
+                          ch.transport out'
                       in
                       let out = out @ encs
                       and ch = { ch with transport }
