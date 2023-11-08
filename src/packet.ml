@@ -57,9 +57,13 @@ let pp_operation ppf op =
     | Hard_reset_client_v3 -> "hard reset client v3")
 
 let id_len = 4
+let session_id_len = 8
 let cipher_block_size = 16
 let aead_nonce = 12
-let hdr_len hmac_len = 8 + hmac_len + id_len + 4 + 1
+
+let hdr_len hmac_len =
+  session_id_len + hmac_len + id_len + 4 (* timestamp *) + 1 (* operation *)
+
 let guard f e = if f then Ok () else Error e
 
 type header = {
@@ -140,7 +144,12 @@ let to_be_signed_header ?(more = 0) op header =
     | [] -> 0
     | x -> List.length x * id_len
   and rses = match header.remote_session with None -> 0 | Some _ -> 8 in
-  let buflen = id_len + 4 + 1 + 8 + 1 + acks + rses + more in
+  let buflen =
+    id_len + 4 (* timestamp *) + 1
+    (* operation *) + session_id_len
+    + 1 (* ack list length *) + acks
+    + rses + more
+  in
   let buf = Cstruct.create buflen in
   Cstruct.BE.set_uint32 buf 0 header.replay_id;
   Cstruct.BE.set_uint32 buf 4 header.timestamp;
@@ -269,7 +278,12 @@ module Tls_crypt = struct
     (* op_key ++ session_id ++ replay_id ++ timestamp ++ ack_len ++ acks ++ remote_session ++ sequence_number *)
     let acks_len = List.length header.ack_sequence_numbers * id_len
     and rses_len = if Option.is_some header.remote_session then 8 else 0 in
-    let buflen = 1 + 8 + id_len + 4 + 1 + acks_len + rses_len + more in
+    let buflen =
+      1 (* operation *) + session_id_len
+      + id_len + 4 (* timestamp *) + 1
+      (* length of ack list *) + acks_len
+      + rses_len + more
+    in
     let buf = Cstruct.create buflen in
     Cstruct.set_uint8 buf 0 op;
     Cstruct.BE.set_uint64 buf 1 header.local_session;
