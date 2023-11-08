@@ -60,12 +60,12 @@ let next_sequence_number state =
     state.my_sequence_number )
 
 let header session transport timestamp =
-  let rec acked_message_ids id =
+  let rec acked_sequence_numbers id =
     if transport.their_sequence_number = id then []
-    else id :: acked_message_ids (Int32.succ id)
+    else id :: acked_sequence_numbers (Int32.succ id)
   in
   let ack_sequence_numbers =
-    acked_message_ids transport.last_acked_sequence_number
+    acked_sequence_numbers transport.last_acked_sequence_number
   in
   let remote_session =
     match ack_sequence_numbers with
@@ -846,8 +846,8 @@ let incoming_control is_not_taken config rng state session channel now ts key op
 
 let expected_packet session transport data =
   let open Result.Syntax in
-  (* expects monotonic packet + message id, session ids matching *)
-  let hdr = Packet.header data and msg_id = Packet.message_id data in
+  (* expects monotonic packet + sequence number, session ids matching *)
+  let hdr = Packet.header data and sn = Packet.sequence_number data in
   (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
   let* () =
     opt_guard
@@ -871,8 +871,8 @@ let expected_packet session transport data =
   let+ () =
     opt_guard
       (Int32.equal transport.their_sequence_number)
-      msg_id
-      (`Non_monotonic_sequence_number (transport, msg_id, hdr))
+      sn
+      (`Non_monotonic_sequence_number (transport, sn, hdr))
   in
   let session =
     {
@@ -882,7 +882,7 @@ let expected_packet session transport data =
     }
   in
   let their_sequence_number =
-    match msg_id with
+    match sn with
     | None -> transport.their_sequence_number
     | Some x -> Int32.succ x
   in
@@ -901,8 +901,6 @@ type error =
   | `Non_monotonic_sequence_number of transport * int32 option * Packet.header
   | `Mismatch_their_session_id of transport * Packet.header
   | `Mismatch_my_session_id of transport * Packet.header
-  | `Msg_id_required_in_fresh_key of transport * int * Packet.header
-  | `Different_message_id_expected_fresh_key of transport * int * Packet.header
   | `Bad_mac of t * Cstruct.t * Packet.t
   | `No_transition of channel * Packet.operation * Cstruct.t
   | `Tls of
@@ -915,24 +913,16 @@ let pp_error ppf = function
   | `Non_monotonic_replay_id (state, hdr) ->
       Fmt.pf ppf "non monotonic replay packet id in %a@ (state %a)"
         Packet.pp_header hdr pp_transport state
-  | `Non_monotonic_sequence_number (state, msg_id, hdr) ->
+  | `Non_monotonic_sequence_number (state, sn, hdr) ->
       Fmt.pf ppf "non monotonic sequence number %a in %a@ (state %a)"
         Fmt.(option ~none:(any "no") int32)
-        msg_id Packet.pp_header hdr pp_transport state
+        sn Packet.pp_header hdr pp_transport state
   | `Mismatch_their_session_id (state, hdr) ->
       Fmt.pf ppf "mismatched their session id in %a@ (state %a)"
         Packet.pp_header hdr pp_transport state
   | `Mismatch_my_session_id (state, hdr) ->
       Fmt.pf ppf "mismatched my session id in %a@ (state %a)" Packet.pp_header
         hdr pp_transport state
-  | `Msg_id_required_in_fresh_key (state, key, hdr) ->
-      Fmt.pf ppf "no message id in a fresh key (%d) message %a@ (state %a)" key
-        Packet.pp_header hdr pp_transport state
-  | `Different_message_id_expected_fresh_key (state, key, hdr) ->
-      Fmt.pf ppf
-        "different message id expected for fresh key (%d) message %a@ (state \
-         %a)"
-        key Packet.pp_header hdr pp_transport state
   | `Bad_mac (state, computed, data) ->
       Fmt.pf ppf "bad mac: computed %a data %a@ (state %a)" Cstruct.hexdump_pp
         computed Packet.pp data pp state

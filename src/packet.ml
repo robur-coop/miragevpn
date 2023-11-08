@@ -177,9 +177,9 @@ let decode_control ~hmac_len buf =
   let open Result.Syntax in
   let* header, off = decode_header ~hmac_len buf in
   let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
-  let message_id = Cstruct.BE.get_uint32 buf off
+  let sequence_number = Cstruct.BE.get_uint32 buf off
   and payload = Cstruct.shift buf (off + 4) in
-  (header, message_id, payload)
+  (header, sequence_number, payload)
 
 let encode_control (header, sequence_number, payload) =
   let hdr_buf, len = encode_header header in
@@ -266,10 +266,12 @@ module Tls_crypt = struct
 
   (* [encrypted_offset] is the offset of the header payload that is encrypted *)
   let encrypted_offset = hmac_offset + hmac_len
-  let clear_hdr_len = hdr_len hmac_len - 1 (* not including acked msg ids *)
+
+  let clear_hdr_len =
+    hdr_len hmac_len - 1 (* not including acked sequence numbers *)
 
   let to_be_signed_header ?(more = 0) op header =
-    (* op_key ++ session_id ++ sequence_number ++ timestamp ++ ack_len ++ acks ++ remote_session ++ msg_id *)
+    (* op_key ++ session_id ++ replay_id ++ timestamp ++ ack_len ++ acks ++ remote_session ++ sequence_number *)
     let acks_len = List.length header.ack_sequence_numbers * packet_id_len
     and rses_len = if Option.is_some header.remote_session then 8 else 0 in
     let buflen = 1 + 8 + packet_id_len + 4 + 1 + acks_len + rses_len + more in
@@ -299,9 +301,9 @@ module Tls_crypt = struct
     let op = op_key (operation p) key in
     match p with
     | `Ack hdr -> fst (to_be_signed_header op hdr)
-    | `Control (Hard_reset_client_v3, (hdr, msg_id, _wkc)) ->
+    | `Control (Hard_reset_client_v3, (hdr, sn, _wkc)) ->
         (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
-        to_be_signed_control op (hdr, msg_id, Cstruct.empty)
+        to_be_signed_control op (hdr, sn, Cstruct.empty)
     | `Control (_, c) -> to_be_signed_control op c
 
   let encode_header hdr =
@@ -371,10 +373,10 @@ module Tls_crypt = struct
         (Cstruct.length buf >= 1 + (packet_id_len * arr_len) + rs_len)
         `Partial
     in
-    let ack_message_id idx =
+    let ack_sequence_number idx =
       Cstruct.BE.get_uint32 buf (1 + (packet_id_len * idx))
     in
-    let ack_sequence_numbers = List.init arr_len ack_message_id in
+    let ack_sequence_numbers = List.init arr_len ack_sequence_number in
     let remote_session =
       if rs_len > 0 then
         Some (Cstruct.BE.get_uint64 buf (1 + (packet_id_len * arr_len)))
@@ -406,13 +408,13 @@ module Tls_crypt = struct
     let open Result.Syntax in
     let* hdr, off = decode_decrypted_header clear_hdr buf in
     let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
-    let message_id = Cstruct.BE.get_uint32 buf off
+    let sequence_number = Cstruct.BE.get_uint32 buf off
     and payload = Cstruct.shift buf (off + 4) in
-    (hdr, message_id, payload)
+    (hdr, sequence_number, payload)
 
   let decode_cleartext_header buf =
     let open Result.Syntax in
-    (* header up till acked message ids *)
+    (* header up till acked sequence numbers *)
     let+ () = guard (Cstruct.length buf >= clear_hdr_len) `Partial in
     let local_session = Cstruct.BE.get_uint64 buf 0
     and replay_id = Cstruct.BE.get_uint32 buf 8
@@ -431,16 +433,16 @@ let with_header hdr = function
   | `Ack _ -> `Ack hdr
   | `Control (op, (_, id, data)) -> `Control (op, (hdr, id, data))
 
-let message_id = function
+let sequence_number = function
   | `Ack _ -> None
-  | `Control (_, (_, msg_id, _)) -> Some msg_id
+  | `Control (_, (_, sn, _)) -> Some sn
 
 let pp ppf (key, p) =
   match p with
   | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
   | `Control (op, (hdr, id, payload)) ->
-      Fmt.pf ppf "key %d control %a: %a message-id %lu@.payload %d bytes" key
-        pp_operation op pp_header hdr id (Cstruct.length payload)
+      Fmt.pf ppf "key %d control %a: %a sequence-number %lu@.payload %d bytes"
+        key pp_operation op pp_header hdr id (Cstruct.length payload)
   | `Data d -> Fmt.pf ppf "key %d data %d bytes" key (Cstruct.length d)
 
 type tls_data = {
