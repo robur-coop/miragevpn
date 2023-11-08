@@ -459,7 +459,7 @@ let kdf session cipher hmac_algorithm my_key_material their_key_material =
           }
     | `AES_128_GCM ->
         let my_key, my_implicit_iv, their_key, their_implicit_iv =
-          maybe_swap (extract 16 (Packet.aead_nonce - Packet.packet_id_len))
+          maybe_swap (extract 16 (Packet.aead_nonce - Packet.id_len))
         in
         AES_GCM
           {
@@ -470,7 +470,7 @@ let kdf session cipher hmac_algorithm my_key_material their_key_material =
           }
     | `AES_256_GCM ->
         let my_key, my_implicit_iv, their_key, their_implicit_iv =
-          maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
+          maybe_swap (extract 32 (Packet.aead_nonce - Packet.id_len))
         in
         AES_GCM
           {
@@ -481,7 +481,7 @@ let kdf session cipher hmac_algorithm my_key_material their_key_material =
           }
     | `CHACHA20_POLY1305 ->
         let my_key, my_implicit_iv, their_key, their_implicit_iv =
-          maybe_swap (extract 32 (Packet.aead_nonce - Packet.packet_id_len))
+          maybe_swap (extract 32 (Packet.aead_nonce - Packet.id_len))
         in
         CHACHA20_POLY1305
           {
@@ -953,7 +953,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
      the ~add_timestamp argument is only used in static key mode
   *)
   let replay_id =
-    let buf = Cstruct.create Packet.packet_id_len in
+    let buf = Cstruct.create Packet.id_len in
     Cstruct.BE.set_uint32 buf 0 ctx.my_replay_id;
     buf
   in
@@ -1177,7 +1177,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let iv, data = Cstruct.split data Packet.cipher_block_size in
         let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
-        let hdr_len = Packet.packet_id_len + if add_timestamp then 4 else 0 in
+        let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
         let* () =
           guard
             (Cstruct.length dec >= hdr_len)
@@ -1193,13 +1193,12 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
         let* () =
           guard
-            (Cstruct.length data >= Packet.packet_id_len + tag_len)
+            (Cstruct.length data >= Packet.id_len + tag_len)
             (Result.msgf "payload too short (need %d bytes): %a"
-               (Packet.packet_id_len + tag_len)
-               Cstruct.hexdump_pp data)
+               (Packet.id_len + tag_len) Cstruct.hexdump_pp data)
         in
         let replay_id, tag, payload =
-          let sn, rest = Cstruct.split data Packet.packet_id_len in
+          let sn, rest = Cstruct.split data Packet.id_len in
           let tag, payload = Cstruct.split rest tag_len in
           (sn, tag, payload)
         in
@@ -1217,13 +1216,12 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let tag_len = Mirage_crypto.Chacha20.tag_size in
         let* () =
           guard
-            (Cstruct.length data >= Packet.packet_id_len + tag_len)
+            (Cstruct.length data >= Packet.id_len + tag_len)
             (Result.msgf "payload too short (need %d bytes): %a"
-               (Packet.packet_id_len + tag_len)
-               Cstruct.hexdump_pp data)
+               (Packet.id_len + tag_len) Cstruct.hexdump_pp data)
         in
         let replay_id, tag, payload =
-          let sn, rest = Cstruct.split data Packet.packet_id_len in
+          let sn, rest = Cstruct.split data Packet.id_len in
           let tag, payload = Cstruct.split rest tag_len in
           (sn, tag, payload)
         in

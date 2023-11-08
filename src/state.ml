@@ -329,21 +329,16 @@ let mtu config compress =
   (* padding, done on replay_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
-    Packet.packet_id_len
-    + (* sequence id *)
-    (if static_key_mode then 4 else 0)
-    +
+    Packet.id_len (* sequence number *)
+    + (if static_key_mode then 4 else 0)
     (* time stamp in static key mode *)
-    if compress then 1 else 0
+    + if compress then 1 else 0
   in
   let hdrs =
     2
-    + (* hdr: 2 byte length *)
-    (if static_key_mode then 0 else 1)
-    + (* 1 byte op + key *)
-    Packet.cipher_block_size
-    + (* IV *)
-    hmac_len
+    (* hdr: 2 byte length *) + (if static_key_mode then 0 else 1)
+    (* 1 byte op + key *) + Packet.cipher_block_size
+    (* IV *) + hmac_len
   in
   (* now we know: tun_mtu - hdrs is space we have for data *)
   let data = tun_mtu - hdrs in
