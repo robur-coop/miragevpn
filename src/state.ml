@@ -7,24 +7,24 @@ type my_key_material = {
 module IM = Map.Make (Int32)
 
 type transport = {
-  my_message_id : int32;
+  my_sequence_number : int32;
       (* this starts from 0l, indicates the next to-be-send *)
-  their_message_id : int32;
+  their_sequence_number : int32;
       (* the first should be 0l, indicates the next to-be-received *)
-  last_acked_message_id : int32;
+  last_acked_sequence_number : int32;
   out_packets : (int64 * (int * Packet.control)) IM.t;
 }
 
 let pp_transport ppf t =
-  Fmt.pf ppf "my message %lu@ their message %lu@ (acked %lu)@ out %d"
-    t.my_message_id t.their_message_id t.last_acked_message_id
+  Fmt.pf ppf "my packet %lu@ their packet %lu@ (acked %lu)@ out %d"
+    t.my_sequence_number t.their_sequence_number t.last_acked_sequence_number
     (IM.cardinal t.out_packets)
 
 let init_transport =
   {
-    my_message_id = 0l;
-    their_message_id = 0l;
-    last_acked_message_id = 0l;
+    my_sequence_number = 0l;
+    their_sequence_number = 0l;
+    last_acked_sequence_number = 0l;
     out_packets = IM.empty;
   }
 
@@ -49,8 +49,8 @@ type key_variant =
     }
 
 type keys = {
-  my_packet_id : int32;
-  their_packet_id : int32;
+  my_replay_id : int32;
+  their_replay_id : int32;
   keys : key_variant;
 }
 
@@ -60,7 +60,7 @@ let pp_keys ppf t =
     | AES_CBC _ -> "AES-CBC"
     | AES_GCM _ -> "AES-GCM"
     | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
-    t.my_packet_id t.their_packet_id
+    t.my_replay_id t.their_replay_id
 
 type channel_state =
   | Expect_reset
@@ -201,9 +201,9 @@ let next_free_ip config is_not_taken =
 
 type session = {
   my_session_id : int64;
-  my_packet_id : int32; (* this starts from 1l, indicates the next to-be-send *)
+  my_replay_id : int32; (* this starts from 1l, indicates the next to-be-send *)
   their_session_id : int64;
-  their_packet_id : int32;
+  their_replay_id : int32;
       (* the first should be 1l, indicates the next to-be-received *)
   compress : bool;
   protocol : [ `Tcp | `Udp ];
@@ -213,19 +213,19 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
     ?(protocol = `Tcp) () =
   {
     my_session_id;
-    my_packet_id = 1l;
+    my_replay_id = 1l;
     their_session_id;
-    their_packet_id = 1l;
+    their_replay_id = 1l;
     compress;
     protocol;
   }
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B@ protocol %a@ my session %Lu@ packet %lu@ their session \
-     %Lu@ packet %lu"
-    t.compress pp_proto t.protocol t.my_session_id t.my_packet_id
-    t.their_session_id t.their_packet_id
+    "compression %B@ protocol %a@ my session %Lu@ replay %lu@ their session \
+     %Lu@ replay %lu"
+    t.compress pp_proto t.protocol t.my_session_id t.my_replay_id
+    t.their_session_id t.their_replay_id
 
 type client_state =
   | Resolving of
@@ -326,24 +326,19 @@ let mtu config compress =
     Option.value ~default:`SHA1 (Config.find Auth config)
     |> Mirage_crypto.Hash.digest_size
   in
-  (* padding, done on packet_id + [timestamp] + compress + data *)
+  (* padding, done on replay_id + [timestamp] + compress + data *)
   let static_key_mode = Config.mem Secret config in
   let not_yet_padded_payload =
-    Packet.packet_id_len
-    + (* packet id *)
-    (if static_key_mode then 4 else 0)
-    +
+    Packet.id_len (* sequence number *)
+    + (if static_key_mode then 4 else 0)
     (* time stamp in static key mode *)
-    if compress then 1 else 0
+    + if compress then 1 else 0
   in
   let hdrs =
     2
-    + (* hdr: 2 byte length *)
-    (if static_key_mode then 0 else 1)
-    + (* 1 byte op + key *)
-    Packet.cipher_block_size
-    + (* IV *)
-    hmac_len
+    (* hdr: 2 byte length *) + (if static_key_mode then 0 else 1)
+    (* 1 byte op + key *) + Packet.cipher_block_size
+    (* IV *) + hmac_len
   in
   (* now we know: tun_mtu - hdrs is space we have for data *)
   let data = tun_mtu - hdrs in
