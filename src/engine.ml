@@ -1511,6 +1511,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
         (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
         Ok ({ state with linger = buf }, out, act)
     | Ok (op, key, payload, linger) ->
+        let state = { state with linger } in
         let* state, out, act =
           match find_channel state key op with
           | None ->
