@@ -1542,14 +1542,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         | xs -> xs
                       in
                       (* now prepare outgoing packets *)
-                      let my_mtu =
-                        let compress =
-                          match Config.find Comp_lzo config with
-                          | None -> false
-                          | Some () -> true
-                        in
-                        mtu config compress
-                      in
+                      let my_mtu = mtu config state.session in
                       let session, transport, encs =
                         wrap_hmac_control (state.now ()) (state.ts ()) my_mtu
                           state.session tls_auth key ch.transport out'
@@ -1569,7 +1562,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 | Some () -> true
                               in
                               let session = { state.session with compress }
-                              and mtu = mtu config compress in
+                              and mtu = mtu config state.session in
                               let act = Some (`Established (ip_config, mtu)) in
                               ( {
                                   state with
@@ -1596,10 +1589,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 act )
                           | Server_tls_auth
                               { state = Server_handshaking; tls_auth } ->
-                              let compress = false in
                               (* TODO? *)
                               let act =
-                                let mtu = mtu config compress in
+                                let mtu = mtu config state.session in
                                 `Established (ip_config, mtu)
                               in
                               ( {
@@ -1732,14 +1724,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         | xs -> xs
                       in
                       (* now prepare outgoing packets *)
-                      let my_mtu =
-                        let compress =
-                          match Config.find Comp_lzo config with
-                          | None -> false
-                          | Some () -> true
-                        in
-                        mtu config compress
-                      in
+                      let my_mtu = mtu config state.session in
                       let session, transport, encs =
                         wrap_tls_crypt_control (state.now ()) (state.ts ())
                           my_mtu state.session tls_crypt key ch.transport out'
@@ -1759,7 +1744,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 | Some () -> true
                               in
                               let session = { state.session with compress }
-                              and mtu = mtu config compress in
+                              and mtu = mtu config state.session in
                               let act = Some (`Established (ip_config, mtu)) in
                               ( {
                                   state with
@@ -2037,7 +2022,7 @@ let handle_static_client t s keys ev =
       | Connecting (idx, _, _), `Connected -> (
           match Config.get Ifconfig t.config with
           | V4 my_ip, V4 their_ip ->
-              let mtu = Config.get Tun_mtu t.config in
+              let mtu = mtu t.config t.session in
               let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
               let est = `Established ({ cidr; gateway = their_ip }, mtu) in
               let protocol = match remote idx with _, _, proto -> proto in
