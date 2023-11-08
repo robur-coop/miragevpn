@@ -1,0 +1,20 @@
+(rule
+  (copy# ../src/packet.ml packet.ml))
+
+(rule
+  (copy# ../src/result.ml result.ml))
+
+(library
+  (name result)
+  (modules result)
+  (libraries fmt))
+
+(library
+  (name packet)
+  (modules packet)
+  (libraries result fmt logs cstruct mirage-crypto))
+
+(test
+  (name packet_tests)
+  (modules packet_tests)
+  (libraries alcotest packet fmt logs logs.fmt cstruct base64 mirage-crypto))
