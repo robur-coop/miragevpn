@@ -5,7 +5,7 @@ It uses TLS to establish a (mutually) authenticated connection, over which mater
 
 The goal of this project is to provide:
 - A pure library implementing the protocol logic, and the OpenVPN config file format to enable interoperabilty and a smooth transition for existing deployments.
-- A [MirageOS](https://mirage.io) unikernel that acts as an OpenVPN-compatible client.
+- A [MirageOS](https://mirage.io) unikernel that acts as an OpenVPN-compatible client and server.
 
 Our goal is not to implement the complete protocol, but rather a small useful subset with modern crypto and the latest key exchange methods, without deprecated or redundant features
 (embodying the philosophy of [nqsb-tls](https://nqsb.io)).  An initial draft of the network setup is depicted in the diagram below:
@@ -14,7 +14,7 @@ Our goal is not to implement the complete protocol, but rather a small useful su
 
 Since OpenVPN is not detailed in a protocol specificaton specified, apart from comments in the header files, we have written a specification document in Markdown, still work in progress:
 
-  - [spec.md](https://git.robur.coop/robur/openvpn-spec/src/branch/master/spec.md)
+  - [spec.md](https://git.robur.coop/robur/openvpn-spec/src/branch/main/openvpn.md)
 
 Our OpenVPN configuration parser can be tested with an OpenVPN configuration file:
 
@@ -71,6 +71,12 @@ A notable difference from OpenVPN configuration parser is that we treat relative
  location, and not relative to the current working directory. OpenVPN supports
  a `--cd` argument, which we do not.
 
+You can check compatibility with your configuration file by executing
+```shell
+dune build
+./_build/default/app/openvpn_config_parser.exe MY-CONFIG-FILE.CONF
+```
+
 ## Discrepancies between MirageVPN and OpenVPN
 
 The "verify-x509-name <host> name" in OpenVPN checks by default only the
@@ -78,198 +84,8 @@ commonName of the subject in the X.509 certificate. MirageVPN validates the
 provided host against the set of hostnames in the certificate, namely the union
 of the commonName and the DNS entries in the SubjectAlternativeName extension.
 
-## Supported config directives
+## Funding
 
-Here is a list of configuration directives supported by this parser.
+This project was funded in 2019 for six months by the [German federal ministry for education and research](https://www.bmbf.de) via the [Prototypefund](https://prototypefund.de) - the amount was 47500 EUR.
 
-**NB: These are supported by the _parser_, not necessarily supported
-by the _unikernel_ or _client_ executables. TODO document that subset somewhere,
-and maybe check upon initialization that we understand all the options given?**
-
-Directives that call for an external file to be read (or can be
- supplied inline with the `[inline]` stanza):
-```
-auth-nocache
-auth-user-pass FILE-PATH
-ca FILE-PATH
-cert FILE-PATH
-connection FILE-PATH
-key FILE-PATH
-pkcs12 FILE-PATH
-secret FILE-PATH
-
-tls-auth FILE-PATH
-tls-auth FILE-PATH 0
-tls-auth FILE-PATH 1
-# the 0/1 here is the keydirection: 0 for CN_OUTGOING; 1 for CN_INCOMING
-
-tls-crypt-v2 FILE-PATH [force-cookie|allow-noncookie]
-```
-
-Other supported directives:
-```
-nobind
-bind
-lport PORT
-local HOSTNAME
-local IP
-
-cipher CIPHER
-
-comp-lzo
-
-dev null
-dev tun
-dev tap
-dev tunNAME
-dev tapNAME
-
-dhcp-option disable-nbt
-dhcp-option domain DOMAIN
-dhcp-option ntp IP
-dhcp-option dns IP
-
-hand-window SECONDS
-tran-window SECONDS
-
-ping SECONDS
-# Send a control channel ping after SECONDS of inactivity.
-# Defaults to 0, which means no pings will be sent.
-
-ping-exit SECONDS
-ping-restart SECONDS
-
-mssfix SIZE
-link-mtu SIZE
-tun-mtu SIZE
-
-float
-ifconfig-nowarn
-mute-replay-warnings
-passtos
-persist-key
-persist-tun
-remote-random
-auth-retry nointeract
-
-proto tcp
-proto tcp-server
-proto tcp-client
-proto tcp4
-proto tcp4-server
-proto tcp4-client
-proto tcp6
-proto tcp6-server
-proto tcp6-client
-proto udp
-proto udp4
-proto udp6
-
-pull
-client
-tls-client
-tls-server
-
-remote-cert-tls server
-remote-cert-tls client
-
-reneg-bytes BYTES
-reneg-pkts PACKET-COUNT
-reneg-sec SECONDS
-# renegotiate data channel key after N items > sent-items + received-items
-
-replay-window LOW-SECONDS HIGH-SECONDS
-
-connect-retry LOW-SECONDS HIGH-SECONDS
-keepalive LOW-SECONDS HIGH-SECONDS
-
-connect-retry-max unlimited
-connect-retry-max TIMES
-# Configures the maximum amount of times to retry each remote/connection
-# before giving up. Defaults to "unlimited".
-
-connect-timeout SECONDS
-# a.k.a. --server-poll-timeout SECONDS
-# defaults to: connect-timeout 120
-
-resolv-retry infinite
-resolv-retry SECONDS
-# defaults to: resolv-retry infinite
-
-route-delay N-SECONDS W-SECONDS
-# TODO describe these
-
-route NETWORK [NETMASK [GATEWAY [METRIC]]]
-# specification of network/netmask/gateway/metric is implemented.
-# NETWORK: "net_gateway" or "remote_host" or or "vpn_gateway" or an IP address.
-# NETMASK: "default" or CIDR format ("A.B.C.D/PREFIX")
-# GATEWAY: "default" or an IP address.
-# METRIC:  may be "default" or an integer between 0 and 255, inclusively.
-
-route-gateway [default|dhcp|IP]
-
-route-metric METRIC
-# METRIC: may be "default" or an integer between 0 and 255, inclusively.
-
-route-nopull
-# this is still ignored
-
-tls-timeout SECONDS
-# resend control data packets after not receivin an ACK for SECONDS
-# TODO should this only apply to UDP?
-
-tls-version-min [1.0|1.1|1.2|1.3] [or-highest]
-tls-version-max [1.0|1.1|1.2|1.3]
-
-tls-cipher <TLS 1.0, 1.1, 1.2 cipher-names>
-tls-ciphersuite <TLS 1.3 ciphersuite-names>
-
-verify-x509-name [hostname] name
-
-topology [net30|p2p|subnet]
-
-verb LEVEL
-```
-
-## Ignored directives
-
-The following directives are ignored. Either because they were not deemed
- useful, or because we have not had a use for them yet:
-
-```
-inactive
-ip-win32
-log
-rcvbuf
-redirect-gateway
-remote-cert-ku
-rport
-sndbuf
-socket-flags
-
-up
-# string containing shell command to run ?
-
-dh
-# TODO path to a PEM file
-
-port
-# TODO influences Bind and Remote
-
-socks-proxy
-
-dhcp-option
-# DHCP options not listed in "Supported directives" above are ignored.
-
-engine ENGINE-NAME
-# select OpenSSL hw crypto backend; we don't use OpenSSL and so this doesn't
-# make sense to parse.
-```
-
-## Unimplemented directives
-
-```
-allow-recursive-routing
-
-ping-timer-rem
-```
+In 2023, we received funding from European Union in the Next Generation Internet project ([NGI assure](https://www.assure.ngi.eu/), via [NLnet](https://nlnet.nl). The scope was updating to the current protocol version (tls-crypt-v2 etc.), a QubesOS client, a server implementation, and more documentation. The amount was 49500 EUR.
