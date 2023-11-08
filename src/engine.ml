@@ -988,9 +988,11 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
           ts_buf
         in
         let hdr = Cstruct.append replay_id ts in
-        let iv = rng Packet.cipher_block_size
-        and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
         let open Mirage_crypto in
+        let iv = rng Cipher_block.AES.CBC.block_size
+        and data =
+          pad Cipher_block.AES.CBC.block_size (Cstruct.append hdr data)
+        in
         let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
         let payload = Cstruct.append iv enc in
         let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
@@ -1178,7 +1180,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard (Cstruct.equal hmac computed_hmac) (err computed_hmac)
         in
-        let iv, data = Cstruct.split data Packet.cipher_block_size in
+        let iv, data = Cstruct.split data Cipher_block.AES.CBC.block_size in
         let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
@@ -1192,7 +1194,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         Log.debug (fun m ->
             m "received replay packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
+        unpad Cipher_block.AES.CBC.block_size (Cstruct.shift dec hdr_len)
     | AES_GCM { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
         let* () =

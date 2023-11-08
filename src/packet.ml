@@ -58,7 +58,6 @@ let pp_operation ppf op =
 
 let id_len = 4
 let session_id_len = 8
-let cipher_block_size = 16
 let aead_nonce = 12
 
 let hdr_len hmac_len =
