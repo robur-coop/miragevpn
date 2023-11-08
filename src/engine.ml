@@ -53,7 +53,9 @@ let tls_version config =
   | None, Some b -> Some (tls_lowest_version, b)
 
 let guard p e = if p then Ok () else Error e
-let opt_guard p x e = match x with None -> Ok () | Some x -> guard (p x) e
+
+let opt_guard p x e =
+  Option.value ~default:(Ok ()) (Option.map (fun x -> guard (p x) e) x)
 
 let next_sequence_number state =
   ( { state with my_sequence_number = Int32.succ state.my_sequence_number },
@@ -268,9 +270,7 @@ let client config ts now rng =
 
 let server server_config server_ts server_now server_rng =
   let open Result.Syntax in
-  let port =
-    match Config.find Port server_config with None -> 1194 | Some p -> p
-  in
+  let port = Option.value ~default:1194 (Config.find Port server_config) in
   let+ tls_auth = tls_auth server_config in
   (* TODO validate server configuration to contain stuff we need later *)
   (* what must be present: server, topology subnet, ping_interval, ping_timeout,
@@ -317,13 +317,14 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
      - XOR the md5 and sha1 output
   *)
   let sids =
-    match sids with
-    | None -> Cstruct.empty
-    | Some (c, s) ->
-        let buf = Cstruct.create 16 in
-        Cstruct.BE.set_uint64 buf 0 c;
-        Cstruct.BE.set_uint64 buf 8 s;
-        buf
+    Option.value ~default:Cstruct.empty
+      (Option.map
+         (fun (c, s) ->
+           let buf = Cstruct.create 16 in
+           Cstruct.BE.set_uint64 buf 0 c;
+           Cstruct.BE.set_uint64 buf 8 s;
+           buf)
+         sids)
   in
   let seed =
     Cstruct.(concat [ of_string label; client_random; server_random; sids ])
@@ -429,13 +430,13 @@ let maybe_kex_client rng config tls =
     let td =
       { Packet.pre_master; random1; random2; options; user_pass; peer_info }
     and my_key_material = { State.pre_master; random1; random2 } in
-    match
-      Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ]
-    with
-    | None -> Error (`Msg "Tls.send application data failed for tls_data")
-    | Some (tls', payload) ->
-        let client_state = TLS_established (tls', my_key_material) in
-        Ok (client_state, Some payload)
+    let+ tls', payload =
+      Option.to_result
+        ~none:(`Msg "Tls.send application data failed for tls_data")
+        (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
+    in
+    let client_state = TLS_established (tls', my_key_material) in
+    (client_state, Some payload)
   else Ok (TLS_handshake tls, None)
 
 let kdf session cipher hmac_algorithm my_key_material their_key_material =
@@ -512,34 +513,34 @@ let kex_server config session (my_key_material : my_key_material) tls data =
     }
   in
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
-  match Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ] with
-  | None -> Error (`Msg "not yet established")
-  | Some (tls', payload) ->
-      let+ state =
-        match Config.find Ifconfig config with
-        | None ->
-            Ok (Push_request_sent (tls', my_key_material, their_tls_data), None)
-        | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
-            let ip_config =
-              let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-              { cidr; gateway = fst (server_ip config) }
-            in
-            let cipher = Config.get Cipher config
-            and hmac_algorithm = Config.get Auth config in
-            let keys_ctx =
-              kdf session cipher hmac_algorithm my_key_material their_tls_data
-            in
-            Ok (Established keys_ctx, Some ip_config)
-        | _ ->
-            Error
-              (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
-      in
-      (state, payload)
+  let* tls', payload =
+    Option.to_result ~none:(`Msg "not yet established")
+      (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
+  in
+  let+ state =
+    match Config.find Ifconfig config with
+    | None ->
+        Ok (Push_request_sent (tls', my_key_material, their_tls_data), None)
+    | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
+        let ip_config =
+          let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
+          { cidr; gateway = fst (server_ip config) }
+        in
+        let cipher = Config.get Cipher config
+        and hmac_algorithm = Config.get Auth config in
+        let keys_ctx =
+          kdf session cipher hmac_algorithm my_key_material their_tls_data
+        in
+        Ok (Established keys_ctx, Some ip_config)
+    | _ ->
+        Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
+  in
+  (state, payload)
 
 let push_request tls =
-  match Tls.Engine.send_application_data tls [ Packet.push_request ] with
-  | None -> Error (`Msg "Tls.send application data failed for push request")
-  | Some (tls', payload) -> Ok (tls', payload)
+  Option.to_result
+    ~none:(`Msg "Tls.send application data failed for push request")
+    (Tls.Engine.send_application_data tls [ Packet.push_request ])
 
 let push_reply tls data =
   (* a trailing 0 byte.. (Cstruct.create 1) *)
@@ -547,9 +548,9 @@ let push_reply tls data =
     Cstruct.concat
       [ Packet.push_reply; Cstruct.of_string data; Cstruct.create 1 ]
   in
-  match Tls.Engine.send_application_data tls [ repl ] with
-  | None -> Error (`Msg "Tls.send application data failed for push request")
-  | Some (tls', payload) -> Ok (tls', payload)
+  Option.to_result
+    ~none:(`Msg "Tls.send application data failed for push request")
+    (Tls.Engine.send_application_data tls [ repl ])
 
 let maybe_push_reply config = function
   | Some data ->
@@ -636,7 +637,7 @@ let incoming_control_client config rng session channel now op data =
       let open Result.Syntax in
       let* tls', tls_resp, d = incoming_tls tls data in
       let tls_out =
-        match tls_resp with None -> [] | Some c -> [ (`Control, c) ]
+        Option.to_list (Option.map (fun c -> (`Control, c)) tls_resp)
       in
       match d with
       | None ->
@@ -759,7 +760,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         else TLS_handshake tls'
       in
       let out =
-        match tls_response with None -> [] | Some c -> [ (`Control, c) ]
+        Option.to_list (Option.map (fun c -> (`Control, c)) tls_response)
       in
       (None, config, session, { channel with channel_st }, out)
   | TLS_established (tls, keys), Packet.Control ->
@@ -886,9 +887,8 @@ let expected_packet session transport data =
     }
   in
   let their_sequence_number =
-    match sn with
-    | None -> transport.their_sequence_number
-    | Some x -> Int32.succ x
+    Option.value ~default:transport.their_sequence_number
+      (Option.map Int32.succ sn)
   in
   let out_packets =
     List.fold_left
@@ -1378,7 +1378,7 @@ let merge_payload a b =
 
 let find_channel state key op =
   match channel_of_keyid key state with
-  | Some (ch, set_ch) -> Some (ch, set_ch)
+  | Some _ as c -> c
   | None -> (
       Log.warn (fun m -> m "no channel found! %d" key);
       match (state.state, op) with
@@ -1793,7 +1793,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
     multi (Cstruct.append state.linger buf) (state, [], None)
   in
   let act' =
-    match act with Some (`Payload a) -> Some (`Payload (List.rev a)) | y -> y
+    Option.map (function `Payload a -> `Payload (List.rev a) | y -> y) act
   in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
