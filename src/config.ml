@@ -130,9 +130,6 @@ module Conf_map = struct
          Expose it in the mli interface.
          Must add a docstring comment detailing which config entry the
          key corresponds to, and its semantics if there can be any doubt.
-     - README.md:
-         - Document the existence of this option
-         - Remove it from Ignored Directives and/or Unimplemented Directives
   *)
   type 'a k =
     | Auth : Mirage_crypto.Hash.hash k
