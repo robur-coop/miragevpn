@@ -371,11 +371,9 @@ let control_mtu config state session =
         (* AES_CTR and SHA256 *)
         Mirage_crypto.Hash.SHA256.digest_size
   in
-  let max_acks = 8 in
   let pre = 1 (* key / op *) + if session.protocol = `Tcp then 2 else 0 in
   let hdr = Packet.hdr_len mac_len in
-  tun_mtu - pre - hdr - (max_acks * 4)
-  + Packet.session_id_len (* optional remote session *)
+  tun_mtu - pre - hdr
 
 let channel_of_keyid keyid s =
   if s.channel.keyid = keyid then
