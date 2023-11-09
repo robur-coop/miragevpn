@@ -313,7 +313,7 @@ let pp ppf t =
 
 let compress s = s.session.compress
 
-let mtu config session =
+let data_mtu config session =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
   let tun_mtu =
     match Config.find Tun_mtu config with
@@ -353,6 +353,41 @@ let mtu config session =
         + if session.protocol = `Tcp then 2 else 0
       in
       tun_mtu - hdr
+
+let control_mtu config state session =
+  (* we assume to have a tun interface and the server send us a tun-mtu *)
+  let tun_mtu =
+    match Config.find Tun_mtu config with
+    | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
+    | Some x -> x
+  and compress = session.compress in
+  match state with
+  | Client_static _ -> assert false
+  | Client_tls_auth _ | Server_tls_auth _ ->
+      (* here, the hash is used from auth *)
+      let hmac = Config.get Auth config |> Mirage_crypto.Hash.digest_size in
+      let not_yet_padded_payload = Packet.id_len + if compress then 1 else 0 in
+      let hdrs =
+        hmac + 1 (* key /op *) + if session.protocol = `Tcp then 2 else 0
+      in
+      let data = tun_mtu - hdrs in
+      (* data is pad ( not_yet_padded_payload + x ) - i.e. we're looking for the
+         closest bs-1 number, and subtract not_yet_padded_payload *)
+      let block_size = Mirage_crypto.Cipher_block.AES.CBC.block_size in
+      let pad =
+        let res = data mod block_size in
+        if res = pred block_size then 0 else succ res
+      in
+      let r = data - pad - not_yet_padded_payload in
+      assert (r > 0);
+      r
+  | Client_tls_crypt _ ->
+      (* there's the cleartext header *)
+      let hdr = Packet.Tls_crypt.clear_hdr_len in
+      (* AES_CTR and SHA256 *)
+      let iv = 16 in
+      tun_mtu - hdr - iv - 1
+      (* key /op *) - if session.protocol = `Tcp then 2 else 0
 
 let channel_of_keyid keyid s =
   if s.channel.keyid = keyid then
