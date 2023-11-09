@@ -988,9 +988,11 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
           ts_buf
         in
         let hdr = Cstruct.append replay_id ts in
-        let iv = rng Packet.cipher_block_size
-        and data = pad Packet.cipher_block_size (Cstruct.append hdr data) in
         let open Mirage_crypto in
+        let iv = rng Cipher_block.AES.CBC.block_size
+        and data =
+          pad Cipher_block.AES.CBC.block_size (Cstruct.append hdr data)
+        in
         let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
         let payload = Cstruct.append iv enc in
         let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
@@ -1178,7 +1180,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard (Cstruct.equal hmac computed_hmac) (err computed_hmac)
         in
-        let iv, data = Cstruct.split data Packet.cipher_block_size in
+        let iv, data = Cstruct.split data Cipher_block.AES.CBC.block_size in
         let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
@@ -1192,7 +1194,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         Log.debug (fun m ->
             m "received replay packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad Packet.cipher_block_size (Cstruct.shift dec hdr_len)
+        unpad Cipher_block.AES.CBC.block_size (Cstruct.shift dec hdr_len)
     | AES_GCM { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
         let* () =
@@ -1274,20 +1276,32 @@ let check_control_integrity err key p hmac_algorithm hmac_key =
   let+ () = guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) in
   Log.info (fun m -> m "mac good")
 
-let split_control mtu outs =
-  List.concat_map
-    (function
-      | `Control, data ->
-          let rec datas acc data =
-            if Cstruct.is_empty data then List.rev acc
-            else
-              let l = min mtu (Cstruct.length data) in
-              let data, data' = Cstruct.split data l in
-              datas (data :: acc) data'
-          in
-          List.map (fun data -> (`Control, data)) (datas [] data)
-      | ((`Ack | `Reset_server | `Reset), _) as p -> [ p ])
-    outs
+let split_control ~acks mtu outs =
+  (* only the first control/ack packet is carrying acks *)
+  List.rev
+    (fst
+       (List.fold_left
+          (fun (acc, idx) -> function
+            | `Control, data ->
+                let first_mtu = if idx = 0 then mtu - acks else mtu in
+                let outs =
+                  if first_mtu < Cstruct.length data then
+                    let rec datas acc data =
+                      if Cstruct.is_empty data then acc
+                      else
+                        let l = min mtu (Cstruct.length data) in
+                        let data, rest = Cstruct.split data l in
+                        datas (data :: acc) rest
+                    in
+                    let data1, rdata = Cstruct.split data first_mtu in
+                    datas [ data1 ] rdata
+                  else [ data ]
+                in
+                (List.map (fun data -> (`Control, data)) outs @ acc, succ idx)
+            | ((`Ack | `Reset_server | `Reset), _) as p ->
+                (* we could assert that it always fits into a single packet *)
+                (p :: acc, succ idx))
+          ([], 0) outs))
 
 let op_of_typ = function
   | `Ack -> Packet.Ack
@@ -1295,9 +1309,20 @@ let op_of_typ = function
   | `Reset_server -> Packet.Hard_reset_server_v2
   | `Reset -> Packet.Soft_reset_v2
 
+let bytes_of_acks transport =
+  let amount =
+    Int32.to_int
+      (Int32.sub transport.their_sequence_number
+         transport.last_acked_sequence_number)
+  in
+  if amount > 0 then
+    (amount * Packet.id_len) + Packet.session_id_len (* remote session *)
+  else amount
+
 let wrap_hmac_control now ts mtu session tls_auth key transport outs =
   let now_ts = ptime_to_ts_exn now in
-  let outs = split_control mtu outs in
+  let acks = bytes_of_acks transport in
+  let outs = split_control ~acks mtu outs in
   let session, transport, outs =
     List.fold_left
       (fun (session, transport, acc) (typ, out) ->
@@ -1332,7 +1357,8 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
 
 let wrap_tls_crypt_control now ts mtu session tls_crypt key transport outs =
   let now_ts = ptime_to_ts_exn now in
-  let outs = split_control mtu outs in
+  let acks = bytes_of_acks transport in
+  let outs = split_control ~acks mtu outs in
   let session, transport, outs =
     List.fold_left
       (fun (session, transport, acc) (typ, out) ->
@@ -1541,12 +1567,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       in
                       (* now prepare outgoing packets *)
                       let my_mtu =
-                        let compress =
-                          match Config.find Comp_lzo config with
-                          | None -> false
-                          | Some () -> true
-                        in
-                        mtu config compress
+                        control_mtu config state.state state.session
                       in
                       let session, transport, encs =
                         wrap_hmac_control (state.now ()) (state.ts ()) my_mtu
@@ -1567,7 +1588,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 | Some () -> true
                               in
                               let session = { state.session with compress }
-                              and mtu = mtu config compress in
+                              and mtu = data_mtu config state.session in
                               let act = Some (`Established (ip_config, mtu)) in
                               ( {
                                   state with
@@ -1594,10 +1615,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 act )
                           | Server_tls_auth
                               { state = Server_handshaking; tls_auth } ->
-                              let compress = false in
                               (* TODO? *)
                               let act =
-                                let mtu = mtu config compress in
+                                let mtu = data_mtu config state.session in
                                 `Established (ip_config, mtu)
                               in
                               ( {
@@ -1731,12 +1751,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       in
                       (* now prepare outgoing packets *)
                       let my_mtu =
-                        let compress =
-                          match Config.find Comp_lzo config with
-                          | None -> false
-                          | Some () -> true
-                        in
-                        mtu config compress
+                        control_mtu config state.state state.session
                       in
                       let session, transport, encs =
                         wrap_tls_crypt_control (state.now ()) (state.ts ())
@@ -1757,7 +1772,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 | Some () -> true
                               in
                               let session = { state.session with compress }
-                              and mtu = mtu config compress in
+                              and mtu = data_mtu config state.session in
                               let act = Some (`Established (ip_config, mtu)) in
                               ( {
                                   state with
@@ -2035,7 +2050,7 @@ let handle_static_client t s keys ev =
       | Connecting (idx, _, _), `Connected -> (
           match Config.get Ifconfig t.config with
           | V4 my_ip, V4 their_ip ->
-              let mtu = Config.get Tun_mtu t.config in
+              let mtu = data_mtu t.config t.session in
               let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
               let est = `Established ({ cidr; gateway = their_ip }, mtu) in
               let protocol = match remote idx with _, _, proto -> proto in

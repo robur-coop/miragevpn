@@ -313,44 +313,67 @@ let pp ppf t =
 
 let compress s = s.session.compress
 
-(* TODO this depends on the cipher used.. *)
-let mtu config compress =
+let data_mtu config session =
+  (* we assume to have a tun interface and the server send us a tun-mtu *)
+  let tun_mtu =
+    match Config.find Tun_mtu config with
+    | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
+    | Some x -> x
+  and compress = session.compress in
+  match Config.get Cipher config with
+  | `AES_256_CBC ->
+      let static_key_mode = Config.mem Secret config in
+      let ts = if static_key_mode then 4 (* timestamp *) else 0 in
+      let block_size = Mirage_crypto.Cipher_block.AES.CBC.block_size in
+      let hmac = Config.get Auth config |> Mirage_crypto.Hash.digest_size in
+      let not_yet_padded_payload =
+        Packet.id_len + ts + if compress then 1 else 0
+      in
+      let hdrs =
+        block_size (* IV *) + hmac
+        + (if static_key_mode then 0 else 1)
+        (* key /op *) + if session.protocol = `Tcp then 2 else 0
+      in
+      let data = tun_mtu - hdrs in
+      (* data is pad ( not_yet_padded_payload + x ) - i.e. we're looking for the
+         closest bs-1 number, and subtract not_yet_padded_payload *)
+      let pad =
+        let res = data mod block_size in
+        if res = pred block_size then 0 else succ res
+      in
+      let r = data - pad - not_yet_padded_payload in
+      assert (r > 0);
+      r
+  | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ->
+      let tag_size = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+      assert (Mirage_crypto.Chacha20.tag_size = tag_size);
+      let hdr =
+        Packet.id_len + tag_size + 1
+        (* key / op *) + (if compress then 1 else 0)
+        + if session.protocol = `Tcp then 2 else 0
+      in
+      tun_mtu - hdr
+
+let control_mtu config state session =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
   let tun_mtu =
     match Config.find Tun_mtu config with
     | None -> 1500 (* TODO "client_merge_server_config" should do this! *)
     | Some x -> x
   in
-  let hmac_len =
-    (* TODO we now always have a Auth value in config -- revisit (also in light of #36) *)
-    Option.value ~default:`SHA1 (Config.find Auth config)
-    |> Mirage_crypto.Hash.digest_size
+  let mac_len =
+    match state with
+    | Client_static _ -> assert false
+    | Client_tls_auth _ | Server_tls_auth _ ->
+        (* here, the hash is used from auth *)
+        Config.get Auth config |> Mirage_crypto.Hash.digest_size
+    | Client_tls_crypt _ ->
+        (* AES_CTR and SHA256 *)
+        Mirage_crypto.Hash.SHA256.digest_size
   in
-  (* padding, done on replay_id + [timestamp] + compress + data *)
-  let static_key_mode = Config.mem Secret config in
-  let not_yet_padded_payload =
-    Packet.id_len (* sequence number *)
-    + (if static_key_mode then 4 else 0)
-    (* time stamp in static key mode *)
-    + if compress then 1 else 0
-  in
-  let hdrs =
-    2
-    (* hdr: 2 byte length *) + (if static_key_mode then 0 else 1)
-    (* 1 byte op + key *) + Packet.cipher_block_size
-    (* IV *) + hmac_len
-  in
-  (* now we know: tun_mtu - hdrs is space we have for data *)
-  let data = tun_mtu - hdrs in
-  (* data is pad ( not_yet_padded_payload + x ) - i.e. we're looking for the
-     closest bs-1 number, and subtract not_yet_padded_payload *)
-  let left = data mod Packet.cipher_block_size in
-  let r =
-    if left = pred Packet.cipher_block_size then data - not_yet_padded_payload
-    else data - succ left - not_yet_padded_payload
-  in
-  assert (r > 0);
-  r
+  let pre = 1 (* key / op *) + if session.protocol = `Tcp then 2 else 0 in
+  let hdr = Packet.hdr_len mac_len in
+  tun_mtu - pre - hdr
 
 let channel_of_keyid keyid s =
   if s.channel.keyid = keyid then
