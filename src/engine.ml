@@ -1287,7 +1287,7 @@ let split_control ~acks mtu outs =
                 let outs =
                   if first_mtu < Cstruct.length data then
                     let rec datas acc data =
-                      if Cstruct.is_empty data then List.rev acc
+                      if Cstruct.is_empty data then acc
                       else
                         let l = min mtu (Cstruct.length data) in
                         let data, rest = Cstruct.split data l in
