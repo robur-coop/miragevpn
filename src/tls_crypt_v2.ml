@@ -31,6 +31,7 @@ end
 let _TLS_CRYPT_V2_CLIENT_KEY_LEN = 2048 / 8
 let _TLS_CRYPT_V2_MAX_WKC_LEN = 1024
 let _TLS_CRYPT_V2_TAG_SIZE = 256 / 8
+let _TLS_CRYPT_V2_MAX_METADATA_LEN = _TLS_CRYPT_V2_MAX_WKC_LEN - (_TLS_CRYPT_V2_CLIENT_KEY_LEN + _TLS_CRYPT_V2_TAG_SIZE + 2)
 
 let pem_of_lines ~name seq =
   match List.of_seq seq with
@@ -73,7 +74,7 @@ end = struct
       with exn ->
         error_msgf "Invalid AES-CTR secret key: %S" (Printexc.to_string exn)
 
-  let to_cstruct x = x
+  let unsafe_to_cstruct x = x
   let to_string t = Cstruct.to_string t
 
   let cipher_key cs =
@@ -103,7 +104,10 @@ module Metadata = struct
   type t = User of string | Timestamp of Ptime.t
 
   let timestamp now = Timestamp now
-  let user str = User str
+  let user str =
+    if String.length str >= _TLS_CRYPT_V2_MAX_METADATA_LEN then
+      invalid_arg "Tls_crypt_v2.Metadata.user";
+   User str
 
   let to_cstruct = function
     | User str ->
@@ -164,7 +168,7 @@ end = struct
     let b64 = Key.to_base64 server_key in
     let lines =
       "-----BEGIN OpenVPN tls-crypt-v2 server key-----"
-      :: String.split_at 65 b64
+      :: String.split_at 64 b64
       @ [ "-----END OpenVPN tls-crypt-v2 server key-----"; "" ]
     in
     List.to_seq lines
@@ -246,7 +250,7 @@ end = struct
     let net_len = Cstruct.BE.get_uint16 cs (Cstruct.length cs - 2) in
     let* () =
       guard ~msg:"Can not locate tls-crypt-v2 wrapped client key" @@ fun () ->
-      Cstruct.length cs >= net_len
+      Cstruct.length cs = net_len
     in
     let wkc = Cstruct.sub cs (Cstruct.length cs - net_len) net_len in
     let* () =
