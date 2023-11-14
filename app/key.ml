@@ -97,7 +97,9 @@ let metadata =
   let parser str =
     match (String.split_on_char ':' str, Ptime.of_rfc3339 str) with
     | "user" :: str, _ ->
-        Ok (Tls_crypt_v2.Metadata.user (String.concat ":" str))
+        ( match Base64.decode (String.concat ":" str) with
+        | Ok str -> Ok (Tls_crypt_v2.Metadata.user str)
+        | Error (`Msg _) -> error_msgf "Invalid base64 user metadata" )
     | "timestamp" :: str, _ -> (
         let exn _ = error_msgf "" in
         catch ~exn @@ fun () ->
@@ -148,7 +150,8 @@ let term_genkey =
   in
   let metadata =
     let doc =
-      "Metadata which can be attached to a $(i,client) tls-crypt-v2 key"
+      "Metadata which can be attached to a $(i,client) tls-crypt-v2 key. The format is: \
+       $(b,'user:<base64-encoded-string>') or $(b,'timestamp:<unix-timestamp>')."
     in
     Arg.(value & opt (some metadata) None & info [ "metadata" ] ~doc)
   in
