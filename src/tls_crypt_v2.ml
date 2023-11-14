@@ -175,6 +175,8 @@ end
 and Client : sig
   type t
 
+  val server_key : t -> Key.t
+  val client_key : t -> Key.t
   val unwrap : key:Server.t -> Cstruct.t -> (t, [> `Msg of string ]) result
   val wrap : key:Server.t -> t -> Cstruct.t
 
@@ -187,6 +189,9 @@ and Client : sig
   val save : key:Server.t -> Client.t -> string Seq.t
 end = struct
   type t = Key.t * Key.t * Metadata.t
+
+  let server_key (k, _, _) = k
+  let client_key (k, _, _) = k
 
   let unwrap ~key:server_key cs =
     let ( let* ) = Result.bind in

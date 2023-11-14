@@ -35,6 +35,8 @@ module Client : sig
 
   val unwrap : key:Server.t -> Cstruct.t -> (t, [> `Msg of string ]) result
   val wrap : key:Server.t -> t -> Cstruct.t
+  val server_key : t -> Key.t
+  val client_key : t -> Key.t
 
   val load :
     key:Server.t -> lines:string Seq.t -> (t, [> `Msg of string ]) result
