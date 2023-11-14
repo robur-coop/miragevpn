@@ -50,7 +50,7 @@ module Key : sig
   type t
 
   val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
-  val to_cstruct : t -> Cstruct.t
+  val unsafe_to_cstruct : t -> Cstruct.t
   val to_string : t -> string
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
   val hmac : t -> Cstruct.t
@@ -280,8 +280,8 @@ end = struct
     (a, b, metadata)
 
   let wrap ~key:server_key (a, b, metadata) =
-    let a = Key.to_cstruct a in
-    let b = Key.to_cstruct b in
+    let a = Key.unsafe_to_cstruct a in
+    let b = Key.unsafe_to_cstruct b in
     let cs = Cstruct.concat [ a; b ] in
     let metadata = Metadata.to_cstruct metadata in
     let net_len =
@@ -311,7 +311,7 @@ end = struct
   let save ~key:server_key client_key =
     let kc =
       let a, b, _ = client_key in
-      Cstruct.concat [ Key.to_cstruct a; Key.to_cstruct b ]
+      Cstruct.concat [ Key.unsafe_to_cstruct a; Key.unsafe_to_cstruct b ]
     in
     let wkc = wrap ~key:server_key client_key in
     let payload = Cstruct.concat [ kc; wkc ] in

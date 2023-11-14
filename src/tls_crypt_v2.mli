@@ -2,7 +2,7 @@ module Key : sig
   type t
 
   val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
-  val to_cstruct : t -> Cstruct.t
+  val unsafe_to_cstruct : t -> Cstruct.t
   val to_string : t -> string
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
   val hmac : t -> Cstruct.t
