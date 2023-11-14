@@ -61,27 +61,25 @@ module Key : sig
 end = struct
   type t = Cstruct.t (* cipher (64 bytes) + hmac (64 bytes) *)
 
+  let len_of_secret_aes_ctr_key =
+    Array.to_list Mirage_crypto.Cipher_block.AES.CTR.key_sizes
+    |> List.filter ((>) 128) (* ∀x. 128 > x <=> ∀x. x <= 128 *)
+    |> List.fold_left max 0
+
+  (* NOTE: it's a bit paranoid but we ensure that [mirage-crypto] exposes values
+     which fit with an OpenVPN key (128 bytes). *)
+  let () = assert (len_of_secret_aes_ctr_key > 0)
+
   let of_cstruct cs =
     if Cstruct.length cs <> 128 then error_msgf "Invalid tls-crypt-v2 key"
-    else
-      let len =
-        Array.fold_left max 0 Mirage_crypto.Cipher_block.AES.CTR.key_sizes
-      in
-      try
-        let secret = Cstruct.sub cs 0 len in
-        let _ = Mirage_crypto.Cipher_block.AES.CTR.of_secret secret in
-        Ok cs
-      with exn ->
-        error_msgf "Invalid AES-CTR secret key: %S" (Printexc.to_string exn)
+    else Ok cs
 
   let unsafe_to_cstruct x = x
   let to_string t = Cstruct.to_string t
 
   let cipher_key cs =
-    let len =
-      Array.fold_left max 0 Mirage_crypto.Cipher_block.AES.CTR.key_sizes
-    in
-    Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 len)
+    Mirage_crypto.Cipher_block.AES.CTR.of_secret
+      (Cstruct.sub cs 0 len_of_secret_aes_ctr_key)
 
   let hmac cs = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
   let equal a b = Eqaf_cstruct.equal a b
