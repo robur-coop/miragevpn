@@ -344,38 +344,45 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
   and sha = p_hash Mirage_crypto.Hash.SHA1.(hmac, digest_size) s2 in
   Mirage_crypto.Uncommon.Cs.xor md5 sha
 
-let derive_keys session (my_key_material : State.my_key_material)
+let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
     (their_key_material : Packet.tls_data) =
   (* are we the server? *)
   let server = Cstruct.is_empty my_key_material.pre_master in
-  let ( pre_master,
-        client_random,
-        server_random,
-        client_random',
-        server_random',
-        sids ) =
-    if server then
-      ( their_key_material.pre_master,
-        their_key_material.random1,
-        my_key_material.random1,
-        their_key_material.random2,
-        my_key_material.random2,
-        (session.their_session_id, session.my_session_id) )
-    else
-      ( my_key_material.pre_master,
-        my_key_material.random1,
-        their_key_material.random1,
-        my_key_material.random2,
-        their_key_material.random2,
-        (session.my_session_id, session.their_session_id) )
-  in
-  let master_key =
-    prf ~label:"OpenVPN master secret" ~secret:pre_master ~client_random
-      ~server_random 48
-  in
+  let length = 4 * 64 in
   let keys =
-    prf ~label:"OpenVPN key expansion" ~secret:master_key
-      ~client_random:client_random' ~server_random:server_random' ~sids (4 * 64)
+    match tls_ekm with
+    | None ->
+        let ( pre_master,
+              client_random,
+              server_random,
+              client_random',
+              server_random',
+              sids ) =
+          if server then
+            ( their_key_material.pre_master,
+              their_key_material.random1,
+              my_key_material.random1,
+              their_key_material.random2,
+              my_key_material.random2,
+              (session.their_session_id, session.my_session_id) )
+          else
+            ( my_key_material.pre_master,
+              my_key_material.random1,
+              their_key_material.random1,
+              my_key_material.random2,
+              their_key_material.random2,
+              (session.my_session_id, session.their_session_id) )
+        in
+        let master_key =
+          prf ~label:"OpenVPN master secret" ~secret:pre_master ~client_random
+            ~server_random 48
+        in
+        prf ~label:"OpenVPN key expansion" ~secret:master_key
+          ~client_random:client_random' ~server_random:server_random' ~sids
+          length
+    | Some tls -> (
+        let epoch = Result.get_ok (Tls.Engine.epoch tls) in
+        Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-datakeys" length)
   in
   (server, keys)
 
@@ -421,11 +428,14 @@ let maybe_kex_client rng config tls =
       Some (maybe_iv_ncp_2 @ [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers ])
     in
     let peer_info =
-      match peer_info with
-      | Some peer_info when pull ->
-          Some ("IV_PROTO=4" (* IV_PROTO_REQUEST_PUSH *) :: peer_info)
-      | Some peer_info -> Some ("IV_PROTO=0" :: peer_info)
-      | None -> None
+      let iv_proto =
+        Packet.Iv_proto.(
+          Tls_key_export :: (if pull then [ Request_push ] else []))
+      in
+      Option.map
+        (fun pi ->
+          ("IV_PROTO=" ^ string_of_int (Packet.Iv_proto.byte iv_proto)) :: pi)
+        peer_info
     in
     let td =
       { Packet.pre_master; random1; random2; options; user_pass; peer_info }
@@ -439,8 +449,11 @@ let maybe_kex_client rng config tls =
     (client_state, Some payload)
   else Ok (TLS_handshake tls, None)
 
-let kdf session cipher hmac_algorithm my_key_material their_key_material =
-  let server, keys = derive_keys session my_key_material their_key_material in
+let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+    their_key_material =
+  let server, keys =
+    derive_keys ~tls_ekm session my_key_material their_key_material
+  in
   let maybe_swap (a, b, c, d) = if server then (c, d, a, b) else (a, b, c, d) in
   let extract klen hlen =
     ( Cstruct.sub keys 0 klen,
@@ -527,9 +540,13 @@ let kex_server config session (my_key_material : my_key_material) tls data =
           { cidr; gateway = fst (server_ip config) }
         in
         let cipher = Config.get Cipher config
-        and hmac_algorithm = Config.get Auth config in
+        and hmac_algorithm = Config.get Auth config
+        and tls_ekm =
+          Option.map (fun `Tls_ekm -> tls) (Config.find Key_derivation config)
+        in
         let keys_ctx =
-          kdf session cipher hmac_algorithm my_key_material their_tls_data
+          kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+            their_tls_data
         in
         Ok (Established keys_ctx, Some ip_config)
     | _ ->
@@ -665,9 +682,15 @@ let incoming_control_client config rng session channel now op data =
           | Some _ ->
               let ip_config = ip_from_config config in
               let cipher = Config.get Cipher config
-              and hmac_algorithm = Config.get Auth config in
+              and hmac_algorithm = Config.get Auth config
+              and tls_ekm =
+                Option.map
+                  (fun `Tls_ekm -> tls)
+                  (Config.find Key_derivation config)
+              in
               let keys =
-                kdf session cipher hmac_algorithm my_key_material tls_data
+                kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+                  tls_data
               in
               let channel_st = Established keys in
               Ok (Some ip_config, config, { channel with channel_st }, tls_out)
@@ -700,8 +723,11 @@ let incoming_control_client config rng session channel now op data =
       let* _tls', d = incoming_tls_without_reply tls data in
       let+ config' = maybe_push_reply config d in
       let cipher = Config.get Cipher config'
-      and hmac_algorithm = Config.get Auth config' in
-      let keys = kdf session cipher hmac_algorithm key tls_data in
+      and hmac_algorithm = Config.get Auth config'
+      and tls_ekm =
+        Option.map (fun `Tls_ekm -> tls) (Config.find Key_derivation config')
+      in
+      let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
       let channel_st = Established keys in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
@@ -811,10 +837,13 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
           ]
         in
         let reply = String.concat "," reply_things in
-        let* _tls'', out = push_reply tls' reply in
+        let* tls'', out = push_reply tls' reply in
         let cipher = Config.get Cipher config
-        and hmac_algorithm = Config.get Auth config in
-        let keys = kdf session cipher hmac_algorithm key tls_data in
+        and hmac_algorithm = Config.get Auth config
+        and tls_ekm =
+          Option.map (fun `Tls_ekm -> tls'') (Config.find Key_derivation config)
+        in
+        let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
         let channel_st = Established keys in
         let ip_config = { cidr; gateway = server_ip } in
         let config' =

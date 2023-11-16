@@ -79,6 +79,7 @@ module Config : sig
         (**  TODO --ifconfig parameters which are IP addresses can also be  speci‐
               fied as a DNS or /etc/hosts file resolvable name.*)
     | Ifconfig_nowarn : flag k
+    | Key_derivation : [ `Tls_ekm ] k
     | Link_mtu : int k
         (** MTU of the network interface used to receive/transmit encrypted packets,
         e.g. the network interface that connects OpenVPN client and server. *)
