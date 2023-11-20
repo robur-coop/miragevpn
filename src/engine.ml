@@ -309,13 +309,6 @@ let pp_tls_error ppf = function
       Fmt.pf ppf "failure from our side %s" (Tls.Engine.string_of_failure f)
 
 let prf ?sids ~label ~secret ~client_random ~server_random len =
-  (* This is the same as TLS_1_0 / TLS_1_1
-     (copied from ocaml-tls/lib/handshake_crypto.ml):
-     - split secret into upper and lower half
-     - compute md5 hmac (with upper half) and sha1 hmac (with lower half)
-       - iterate until len reached: H seed ++ H (n-1 ++ seed)
-     - XOR the md5 and sha1 output
-  *)
   let sids =
     Option.value ~default:Cstruct.empty
       (Option.map
@@ -326,23 +319,10 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
            buf)
          sids)
   in
-  let seed =
-    Cstruct.(concat [ of_string label; client_random; server_random; sids ])
-  in
-  let p_hash (hmac, hmac_len) key =
-    let rec expand a to_go =
-      let res = hmac ~key (Cstruct.append a seed) in
-      if to_go > hmac_len then
-        Cstruct.append res (expand (hmac ~key a) (to_go - hmac_len))
-      else Cstruct.sub res 0 to_go
-    in
-    expand (hmac ~key seed) len
-  in
-  let halve secret = Cstruct.split secret (Cstruct.length secret / 2) in
-  let s1, s2 = halve secret in
-  let md5 = p_hash Mirage_crypto.Hash.MD5.(hmac, digest_size) s1
-  and sha = p_hash Mirage_crypto.Hash.SHA1.(hmac, digest_size) s2 in
-  Mirage_crypto.Uncommon.Cs.xor md5 sha
+  let seed = Cstruct.concat [ client_random; server_random; sids ] in
+  Tls.Handshake_crypto.pseudo_random_function `TLS_1_0
+    `RSA_WITH_AES_256_GCM_SHA384 (* cipher, does not matter for TLS 1.0 *) len
+    secret label seed
 
 let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
     (their_key_material : Packet.tls_data) =
@@ -380,9 +360,9 @@ let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
         prf ~label:"OpenVPN key expansion" ~secret:master_key
           ~client_random:client_random' ~server_random:server_random' ~sids
           length
-    | Some tls -> (
+    | Some tls ->
         let epoch = Result.get_ok (Tls.Engine.epoch tls) in
-        Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-datakeys" length)
+        Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-datakeys" length
   in
   (server, keys)
 
