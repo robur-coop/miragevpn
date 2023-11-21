@@ -7,7 +7,7 @@ bug-reports:  "https://github.com/robur-coop/miragevpn/issues"
 doc:          "https://github.com/robur-coop/miragevpn/doc"
 author:       ["robur"]
 maintainer:   ["robur"]
-license:      "AGPL"
+license:      "BSD-2-Clause"
 
 build: [
   ["dune" "subst" ] {dev}
