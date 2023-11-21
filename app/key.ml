@@ -151,14 +151,14 @@ let term_genkey =
   let metadata =
     let doc =
       "Metadata which can be attached to a $(i,client) tls-crypt-v2 key. The format is: \
-       $(b,'user:<base64-encoded-string>') or $(b,'timestamp:<unix-timestamp>')."
+       $(b,'user:<base64-encoded-string>'), $(b,'timestamp:<unix-timestamp>') or $(b,'<rfc3339-timestamp>')."
     in
     Arg.(value & opt (some metadata) None & info [ "metadata" ] ~doc)
   in
   let output =
     let fpath = Arg.conv (Fpath.of_string, Fpath.pp) in
     let doc = "The output file where the tls-crypt-v2 will be stored." in
-    Arg.(required & pos ~rev:true 0 (some fpath) None & info [] ~doc)
+    Arg.(required & pos ~rev:true 0 (some fpath) None & info [] ~doc ~docv:"OUTPUT")
   in
   Term.(
     const genkey $ term_random_number_generator $ ty $ metadata $ server_key
@@ -170,10 +170,10 @@ let cmd_genkey =
   let man =
     [
       `S Manpage.s_description;
-      `P "$(term) is a simple tool to generate tls-crypt-v2 keys.";
+      `P "$(tname) is a simple tool to generate tls-crypt-v2 keys.";
     ]
   in
-  Cmd.v (Cmd.info "genkey" ~doc ~man) Term.(ret term_genkey)
+  Cmd.v (Cmd.info "miragevpn.key" ~doc ~man) Term.(ret term_genkey)
 
 let () =
   let open Cmdliner in
