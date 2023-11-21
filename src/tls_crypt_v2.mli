@@ -7,7 +7,6 @@ module Key : sig
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
   val hmac : t -> Cstruct.t
   val equal : t -> t -> bool
-  val pp_hum : t Fmt.t
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
   val to_base64 : t -> string
 end

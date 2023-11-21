@@ -20,7 +20,9 @@
   mirage-crypto-rng-lwt
   mtime.clock.os
   tuntap
-  cstruct-lwt))
+  cstruct-lwt
+  hxd.core
+  hxd.string))
 
 (executable
  (name openvpn_config_parser)

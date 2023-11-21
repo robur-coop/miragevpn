@@ -55,7 +55,6 @@ module Key : sig
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
   val hmac : t -> Cstruct.t
   val equal : t -> t -> bool
-  val pp_hum : t Fmt.t
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
   val to_base64 : t -> string
 end = struct
@@ -84,14 +83,6 @@ end = struct
   let hmac cs = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
   let equal a b = Eqaf_cstruct.equal a b
   let generate ?g () = Mirage_crypto_rng.generate ?g 128
-
-  let pp_hum ppf cs =
-    let cipher_key = Cstruct.(to_string (sub cs 0 64)) in
-    let hmac = Cstruct.(to_string (sub cs 64 64)) in
-    Fmt.pf ppf "Cipher Key: @[<hov>%a@]\n%!"
-      (Hxd_string.pp Hxd.default)
-      cipher_key;
-    Fmt.pf ppf "HMAC Key:   @[<hov>%a@]\n%!" (Hxd_string.pp Hxd.default) hmac
 
   let to_base64 cs =
     let str = Cstruct.to_string cs in

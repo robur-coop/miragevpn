@@ -9,8 +9,6 @@
   decompress.lzo
   mirage-crypto
   tls
-  hxd.core
-  hxd.string
   x509
   duration
   angstrom
