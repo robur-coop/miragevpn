@@ -14,7 +14,7 @@ Our goal is not to implement the complete protocol, but rather a small useful su
 
 Since OpenVPN is not detailed in a protocol specificaton specified, apart from comments in the header files, we have written a specification document in Markdown, still work in progress:
 
-  - [spec.md](https://git.robur.coop/robur/openvpn-spec/src/branch/main/openvpn.md)
+  - [openvpn.md](https://git.robur.coop/robur/openvpn-spec/src/branch/main/openvpn.md)
 
 Our OpenVPN configuration parser can be tested with an OpenVPN configuration file:
 
