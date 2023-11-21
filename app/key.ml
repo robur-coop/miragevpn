@@ -105,10 +105,10 @@ let term_random_number_generator =
 let metadata =
   let parser str =
     match (String.split_on_char ':' str, Ptime.of_rfc3339 str) with
-    | "user" :: str, _ ->
-        ( match Base64.decode (String.concat ":" str) with
+    | "user" :: str, _ -> (
+        match Base64.decode (String.concat ":" str) with
         | Ok str -> Ok (Tls_crypt_v2.Metadata.user str)
-        | Error (`Msg _) -> error_msgf "Invalid base64 user metadata" )
+        | Error (`Msg _) -> error_msgf "Invalid base64 user metadata")
     | "timestamp" :: str, _ -> (
         let exn _ = error_msgf "" in
         catch ~exn @@ fun () ->
@@ -159,15 +159,17 @@ let term_genkey =
   in
   let metadata =
     let doc =
-      "Metadata which can be attached to a $(i,client) tls-crypt-v2 key. The format is: \
-       $(b,'user:<base64-encoded-string>'), $(b,'timestamp:<unix-timestamp>') or $(b,'<rfc3339-timestamp>')."
+      "Metadata which can be attached to a $(i,client) tls-crypt-v2 key. The \
+       format is: $(b,'user:<base64-encoded-string>'), \
+       $(b,'timestamp:<unix-timestamp>') or $(b,'<rfc3339-timestamp>')."
     in
     Arg.(value & opt (some metadata) None & info [ "metadata" ] ~doc)
   in
   let output =
     let fpath = Arg.conv (Fpath.of_string, Fpath.pp) in
     let doc = "The output file where the tls-crypt-v2 will be stored." in
-    Arg.(required & pos ~rev:true 0 (some fpath) None & info [] ~doc ~docv:"OUTPUT")
+    Arg.(
+      required & pos ~rev:true 0 (some fpath) None & info [] ~doc ~docv:"OUTPUT")
   in
   Term.(
     const genkey $ term_random_number_generator $ ty $ metadata $ server_key

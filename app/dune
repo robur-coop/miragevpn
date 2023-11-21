@@ -33,4 +33,11 @@
  (name key)
  (modules key)
  (public_name miragevpn.key)
- (libraries mirage-crypto-rng.unix ptime.clock.os bos miragevpn cmdliner hxd.core hxd.string))
+ (libraries
+  mirage-crypto-rng.unix
+  ptime.clock.os
+  bos
+  miragevpn
+  cmdliner
+  hxd.core
+  hxd.string))

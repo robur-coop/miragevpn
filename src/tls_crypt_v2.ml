@@ -31,7 +31,10 @@ end
 let _TLS_CRYPT_V2_CLIENT_KEY_LEN = 2048 / 8
 let _TLS_CRYPT_V2_MAX_WKC_LEN = 1024
 let _TLS_CRYPT_V2_TAG_SIZE = 256 / 8
-let _TLS_CRYPT_V2_MAX_METADATA_LEN = _TLS_CRYPT_V2_MAX_WKC_LEN - (_TLS_CRYPT_V2_CLIENT_KEY_LEN + _TLS_CRYPT_V2_TAG_SIZE + 2)
+
+let _TLS_CRYPT_V2_MAX_METADATA_LEN =
+  _TLS_CRYPT_V2_MAX_WKC_LEN
+  - (_TLS_CRYPT_V2_CLIENT_KEY_LEN + _TLS_CRYPT_V2_TAG_SIZE + 2)
 
 let pem_of_lines ~name seq =
   match List.of_seq seq with
@@ -62,7 +65,7 @@ end = struct
 
   let len_of_secret_aes_ctr_key =
     Array.to_list Mirage_crypto.Cipher_block.AES.CTR.key_sizes
-    |> List.filter ((>) 128) (* ∀x. 128 > x <=> ∀x. x <= 128 *)
+    |> List.filter (( > ) 128) (* ∀x. 128 > x <=> ∀x. x <= 128 *)
     |> List.fold_left max 0
 
   (* NOTE: it's a bit paranoid but we ensure that [mirage-crypto] exposes values
@@ -93,10 +96,11 @@ module Metadata = struct
   type t = User of string | Timestamp of Ptime.t
 
   let timestamp now = Timestamp now
+
   let user str =
     if String.length str >= _TLS_CRYPT_V2_MAX_METADATA_LEN then
       invalid_arg "Tls_crypt_v2.Metadata.user";
-   User str
+    User str
 
   let to_cstruct = function
     | User str ->
