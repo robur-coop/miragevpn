@@ -191,7 +191,7 @@ end = struct
   type t = Key.t * Key.t * Metadata.t
 
   let server_key (k, _, _) = k
-  let client_key (k, _, _) = k
+  let client_key (_, k, _) = k
 
   let unwrap ~key:server_key cs =
     let ( let* ) = Result.bind in
