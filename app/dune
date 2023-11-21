@@ -20,9 +20,7 @@
   mirage-crypto-rng-lwt
   mtime.clock.os
   tuntap
-  cstruct-lwt
-  hxd.core
-  hxd.string))
+  cstruct-lwt))
 
 (executable
  (name openvpn_config_parser)
@@ -35,4 +33,4 @@
  (name key)
  (modules key)
  (public_name miragevpn.key)
- (libraries mirage-crypto-rng.unix ptime.clock.os bos miragevpn cmdliner))
+ (libraries mirage-crypto-rng.unix ptime.clock.os bos miragevpn cmdliner hxd.core hxd.string))
