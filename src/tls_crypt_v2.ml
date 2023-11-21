@@ -146,8 +146,8 @@ module Metadata = struct
         Fmt.pf ppf "Timestamp:  %a\n%!" (Ptime.pp_rfc3339 ()) ptime
 end
 
-module rec Server : sig
-  type t
+module Server : sig
+  type t = Key.t
 
   val load : lines:string Seq.t -> (t, [> `Msg of string ]) result
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
@@ -172,7 +172,7 @@ end = struct
     List.to_seq lines
 end
 
-and Client : sig
+module Client : sig
   type t
 
   val server_key : t -> Key.t
@@ -186,7 +186,7 @@ and Client : sig
   val generate :
     ?g:Mirage_crypto_rng.g -> now:(unit -> Ptime.t) -> Metadata.t option -> t
 
-  val save : key:Server.t -> Client.t -> string Seq.t
+  val save : key:Server.t -> t -> string Seq.t
 end = struct
   type t = Key.t * Key.t * Metadata.t
 
