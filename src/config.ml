@@ -159,6 +159,7 @@ module Conf_map = struct
     | Handshake_window : int k
     | Ifconfig : (Ipaddr.t * Ipaddr.t) k
     | Ifconfig_nowarn : flag k
+    | Key_derivation : [ `Tls_ekm ] k
     | Link_mtu : int k
     | Mssfix : int k
     | Mute_replay_warnings : flag k
@@ -469,6 +470,7 @@ module Conf_map = struct
     | Ifconfig, (local, remote) ->
         p () "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
     | Ifconfig_nowarn, () -> p () "ifconfig-nowarn"
+    | Key_derivation, `Tls_ekm -> p () "key-derivation tls-ekm"
     | Link_mtu, i -> p () "link-mtu %d" i
     | Ping_interval, n -> p () "ping %d" (int_of_ping_interval n)
     | Ping_timeout, `Exit timeout -> p () "ping-exit %d" timeout
@@ -1254,6 +1256,10 @@ let a_tran_window =
 let a_mssfix = a_entry_one_number "mssfix" >>| fun x -> `Entry (B (Mssfix, x))
 (* TODO make a_mssfix use a_number_range *)
 
+let a_key_derivation =
+  string "key-derivation" *> a_whitespace *> string "tls-ekm" >>| fun _ ->
+  `Entry (B (Key_derivation, `Tls_ekm))
+
 let a_entry_two_numbers name =
   a_entry_one_number name >>= fun x ->
   a_whitespace *> a_number >>| fun y -> (x, y)
@@ -1560,6 +1566,7 @@ let a_config_entry : line A.t =
          a_socks_proxy;
          a_auth_user_pass_verify;
          a_auth_user_pass;
+         a_key_derivation;
          a_link_mtu;
          a_tun_mtu;
          a_cipher;
@@ -2128,6 +2135,7 @@ let merge_push_reply client (push_config : string) =
     | Dhcp_dns, _ -> not (Conf_map.mem Route_nopull client)
     | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
+    | Key_derivation, _ -> true
     | Route, _ -> not (Conf_map.mem Route_nopull client)
     | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | _ -> false

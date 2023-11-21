@@ -599,3 +599,10 @@ let decode_tls_data ?(with_premaster = false) buf =
 
 let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
 let push_reply = Cstruct.of_string "PUSH_REPLY"
+
+module Iv_proto = struct
+  type t = Request_push | Tls_key_export
+
+  let bit = function Request_push -> 2 | Tls_key_export -> 3
+  let byte xs = List.fold_left (fun b x -> b lor (1 lsl bit x)) 0 xs
+end
