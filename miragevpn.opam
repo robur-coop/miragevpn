@@ -17,7 +17,7 @@ build: [
 
 depends: [
   "dune" {>= "2.9"}
-  "ocaml" {>= "4.13.0"}
+  "ocaml" {>= "4.14.0"}
   "odoc" {with-doc}
 
   "fmt"      { >= "0.8.7" }
@@ -25,7 +25,6 @@ depends: [
 
   "angstrom" { >= "0.14.0" }
   "cstruct"  { >= "6.0.0" }
-  "cmdliner" { >= "1.1.0" }
   "domain-name" { >= "0.2.0" }
   "fmt"
   "gmap"     { >= "0.3.0" }
@@ -55,6 +54,10 @@ depends: [
   "tcpip" {>= "7.0.0"}
   "mirage-random" {>= "2.0.0"}
   "mirage-clock" {>= "3.0.0"}
+  # tooling:
+  "cmdliner" { >= "1.1.0" }
+  "hxd"
+  "bos"
 
   "crowbar" {with-test}
   "alcotest" {with-test}
