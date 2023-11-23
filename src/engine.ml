@@ -1369,14 +1369,14 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
 let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) needs_wkc key
     transport outs =
   let now_ts = ptime_to_ts_exn now in
-  let acks = bytes_of_acks transport in
   (* If we reply with hmac cookie we must split such that the first control
      packet, the Control_wkc has room for the /cleartext/ wkc, and fix the
      packet length afterwards *)
   let session, transport, maybe_out, outs =
     match (needs_wkc, outs) with
     | true, (`Control, data) :: rest ->
-        let l = min (mtu - Cstruct.length wkc) (Cstruct.length data) in
+        let acks = bytes_of_acks transport in
+        let l = min (mtu - acks - Cstruct.length wkc) (Cstruct.length data) in
         let data, data' = Cstruct.split data l in
         let rest =
           if Cstruct.is_empty data' then rest else (`Control, data') :: rest
@@ -1402,6 +1402,7 @@ let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) needs_wkc key
     | false, _ -> (session, transport, None, outs)
   in
   (* we split the remainder control packets *)
+  let acks = bytes_of_acks transport in
   let outs = split_control ~acks mtu outs in
   let session, transport, outs =
     List.fold_left
