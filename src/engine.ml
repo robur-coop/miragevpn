@@ -575,7 +575,9 @@ let incoming_control_client config rng session channel now op data =
   match (channel.channel_st, op) with
   | Expect_reset, (Packet.Hard_reset_server_v2 | Packet.Soft_reset_v2) ->
       (* for rekey we receive a soft_reset -- a bit alien that we don't send soft_reset *)
-      (* we reply with ACK + TLS client hello! *)
+      (* we reply with embedded ACK + TLS client hello! *)
+      (* NOTE: For tls-crypt-v2 hmac cookies it is important we don't send a
+         dedicated ACK as we need to ensure the Control_wkc arrives first *)
       let tls, ch =
         let authenticator =
           match Config.find Ca config with
@@ -1364,8 +1366,42 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
   in
   (session, transport, List.rev outs)
 
-let wrap_tls_crypt_control now ts mtu session tls_crypt key transport outs =
+let wrap_tls_crypt_control now ts mtu session (tls_crypt, wkc) needs_wkc key
+    transport outs =
   let now_ts = ptime_to_ts_exn now in
+  (* If we reply with hmac cookie we must split such that the first control
+     packet, the Control_wkc has room for the /cleartext/ wkc, and fix the
+     packet length afterwards *)
+  let session, transport, maybe_out, outs =
+    match (needs_wkc, outs) with
+    | true, (`Control, data) :: rest ->
+        let acks = bytes_of_acks transport in
+        let l = min (mtu - acks - Cstruct.length wkc) (Cstruct.length data) in
+        let data, data' = Cstruct.split data l in
+        let rest =
+          if Cstruct.is_empty data' then rest else (`Control, data') :: rest
+        in
+        let session, transport, header = header session transport now_ts in
+        let transport, sn = next_sequence_number transport in
+        let p = `Control (Packet.Control_wkc, (header, sn, data)) in
+        (* First we encrypt *)
+        let out = encrypt_and_out session.protocol tls_crypt (key, p) in
+        (* Then we append wkc and fix the length if TCP *)
+        let len =
+          Cstruct.length out
+          - match session.protocol with `Tcp -> 2 | `Udp -> 0
+        in
+        let out = Cstruct.append out wkc in
+        let proto = Packet.encode_protocol session.protocol len in
+        Cstruct.blit proto 0 out 0 (Cstruct.length proto);
+        (session, transport, Some out, rest)
+    | true, _ ->
+        Log.err (fun m ->
+            m "wrap_tls_crypt_control: expected control to append wkc");
+        assert false
+    | false, _ -> (session, transport, None, outs)
+  in
+  (* we split the remainder control packets *)
   let acks = bytes_of_acks transport in
   let outs = split_control ~acks mtu outs in
   let session, transport, outs =
@@ -1397,7 +1433,11 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt key transport outs =
         (session, { transport with out_packets }, out :: acc))
       (session, transport, []) outs
   in
-  (session, transport, List.rev outs)
+  let outs =
+    let outs = List.rev outs in
+    Option.fold ~none:outs ~some:(fun c_wkc -> c_wkc :: outs) maybe_out
+  in
+  (session, transport, outs)
 
 let merge_payload a b =
   match (a, b) with
@@ -1456,7 +1496,7 @@ let find_channel state key op =
           | Server_tls_auth _ ),
           Packet.(
             ( Control | Ack | Data_v1 | Hard_reset_client_v2
-            | Hard_reset_server_v2 | Hard_reset_client_v3 )) ) ->
+            | Hard_reset_server_v2 | Hard_reset_client_v3 | Control_wkc )) ) ->
           Log.warn (fun m ->
               m "ignoring unexpected packet %a in %a" Packet.pp_operation op pp
                 state);
@@ -1472,6 +1512,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
         (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
         Ok ({ state with linger = buf }, out, act)
     | Ok (op, key, payload, linger) ->
+        let state = { state with linger } in
         let* state, out, act =
           match find_channel state key op with
           | None ->
@@ -1693,7 +1734,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       Ok (set_ch state ch, out, act))
               | Packet.Hard_reset_client_v3, Client_tls_crypt _ ->
                   Error (`No_transition (ch, op, payload))
-              | _control_op, Client_tls_crypt { tls_crypt = tls_crypt, _wkc; _ }
+              | _control_op, Client_tls_crypt { tls_crypt = tls_crypt, wkc; _ }
                 -> (
                   let* cleartext, off =
                     Packet.Tls_crypt.decode_cleartext_header payload
@@ -1708,6 +1749,12 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   let* ((_, _, data) as control) =
                     Packet.Tls_crypt.decode_decrypted_control cleartext
                       decrypted
+                  in
+                  let* needs_wkc =
+                    match op with
+                    | Hard_reset_server_v2 ->
+                        Packet.decode_early_negotiation_tlvs data
+                    | _ -> Ok false
                   in
                   let p = `Control (op, control) in
                   let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
@@ -1727,10 +1774,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     | Expect_reset, Hard_reset_server_v2 ->
                         let hdr = Packet.header p in
                         Log.warn (fun m ->
-                            m "Hard_reset_client_v2 data: %a" Cstruct.hexdump_pp
-                              data);
-                        Log.warn (fun m ->
-                            m "fixing their_replay_id: %lx" hdr.replay_id);
+                            m "fixing their_replay_id: %08lx" hdr.replay_id);
                         { state.session with their_replay_id = hdr.replay_id }
                     | _ -> state.session
                   in
@@ -1764,7 +1808,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       in
                       let session, transport, encs =
                         wrap_tls_crypt_control (state.now ()) (state.ts ())
-                          my_mtu state.session tls_crypt key ch.transport out'
+                          my_mtu state.session (tls_crypt, wkc) needs_wkc key
+                          ch.transport out'
                       in
                       let out = out @ encs
                       and ch = { ch with transport }
@@ -1811,7 +1856,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                 act )
                           | _ -> assert false))))
         in
-        multi linger (state, out, act)
+        (* Invariant: [linger] is always empty for UDP *)
+        if Cstruct.is_empty linger then Ok (state, out, act)
+        else multi linger (state, out, act)
   in
   let+ s', out, act =
     multi (Cstruct.append state.linger buf) (state, [], None)
@@ -1996,6 +2043,7 @@ let handle_client_tls_crypt t s tls_crypt wkc ev =
           let my_session_id = Randomconv.int64 t.rng in
           let protocol = match remote idx with _, _, proto -> proto in
           let session = init_session ~my_session_id ~protocol () in
+          let session = { session with my_replay_id = 0x0f000001l } in
           let session, channel, out =
             init_channel ~payload:wkc Packet.Hard_reset_client_v3 session 0 now
               ts
