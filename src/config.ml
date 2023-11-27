@@ -637,7 +637,7 @@ end
 open Conf_map
 
 type block = [ `Inline of string * string ]
-type line_no_block =
+type non_block =
   [ `Entries of b list
   | `Entry of b
   | `Comment of string
@@ -655,7 +655,7 @@ type line_no_block =
   | `Dev of string (* [dev name] stanza requiring a [dev-type]*)
   | `Dev_type of [ `Tun | `Tap ] (* [dev-type] stanza requiring [dev name]*) ]
 
-type line = [ block | line_no_block ]
+type line = [ block | non_block ]
 
 let pp_line ppf (x : [< line ]) =
   let v = Fmt.pf in
@@ -1624,7 +1624,7 @@ let parse_internal config_str : (line list, 'x) result =
                     (Printf.sprintf "Error at byte offset %d: %S" pos context)
                 ))
 
-type parser_partial_state = block list * line_no_block list * Conf_map.t
+type parser_partial_state = block list * non_block list * Conf_map.t
 
 type parser_state =
   [ `Done of Conf_map.t
@@ -1857,9 +1857,9 @@ let parse_next (effect : parser_effect) initial_state :
     let* thing = parse_inline payload kind in
     resolve_add_conflict acc thing
   in
-  let rec loop blocks (acc : Conf_map.t) : line_no_block list -> (parser_state, 'b) result =
+  let rec loop blocks (acc : Conf_map.t) : non_block list -> (parser_state, 'b) result =
     function
-    | (hd : line_no_block) :: tl -> (
+    | (hd : non_block) :: tl -> (
         (* TODO should make sure not to override without conflict resolution,
            ie use addb_unless_bound and so on... *)
         let multib ?(tl = tl) kv =
@@ -2057,13 +2057,11 @@ let parse_begin config_str : (parser_state, 'err) result =
   let open Result.Syntax in
   let* lines = parse_internal config_str in
   let blocks, non_blocks =
-    (* List.partition (function `Inline _ -> true | _ -> false) lines *)
-    let rec loop (blocks, non_blocks) = function
-      | `Inline _ as block :: tl -> loop (block :: blocks, non_blocks) tl
-      | (#line_no_block as non_block) :: tl -> loop (blocks, non_block :: non_blocks) tl
-      | [] -> (List.rev blocks, List.rev non_blocks)
-    in
-    loop ([], []) lines
+    List.partition_map
+      (function
+        | #block as block -> Left block
+        | #non_block as non_block -> Right non_block)
+      lines
   in
   parse_next None (`Partial (blocks, non_blocks, empty))
 
