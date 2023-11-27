@@ -17,6 +17,7 @@ type inlineable =
   | `Tls_cert
   | `Tls_key
   | `Secret of [ `Incoming | `Outgoing ] option
+  | `Tls_crypt
   | `Tls_crypt_v2 of bool ]
 
 let string_of_inlineable = function
@@ -28,6 +29,7 @@ let string_of_inlineable = function
   | `Tls_cert -> "cert"
   | `Tls_key -> "key"
   | `Secret _ -> "secret"
+  | `Tls_crypt -> "tls-crypt"
   | `Tls_crypt_v2 _ -> "tls-crypt-v2"
 
 type inline_or_path =
@@ -225,6 +227,7 @@ module Conf_map = struct
     | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
+    | Tls_crypt : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_crypt_v2_client
         : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
     | Tls_crypt_v2_server : ((Cstruct.t * Cstruct.t) * bool) k
@@ -571,6 +574,9 @@ module Conf_map = struct
         p () "tls-ciphersuite %a"
           Fmt.(list ~sep:(any ":") string)
           (List.map cs13_to_cipher13 ciphers)
+    | Tls_crypt, key ->
+        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>"
+          pp_key key
     | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
@@ -876,7 +882,7 @@ let a_tls_auth =
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
 
 let a_tls_crypt_v2 =
-  string "tls-crypt-v2" *> a_whitespace *> a_filepath () >>= fun source ->
+  a_option_with_single_path "tls-crypt-v2" () >>= fun source ->
   choice
     [
       a_whitespace *> string "force-cookie" *> return true;
@@ -983,9 +989,9 @@ let a_auth_user_pass =
   a_option_with_single_path "auth-user-pass" `Auth_user_pass
 
 let a_secret_payload direction str =
-  match parse_string ~consume:Consume.All (inline_payload "secret") str with
-  | Ok (a, b, c, d) -> Ok (B (Secret, (direction, a, b, c, d)))
-  | Error e -> Error e
+  let open Result.Syntax in
+  let* (a, b, c, d) = parse_string ~consume:Consume.All (inline_payload "secret") str in
+  Ok (B (Secret, (direction, a, b, c, d)))
 
 let a_secret =
   a_option_with_single_path "secret" () >>= fun source ->
@@ -993,6 +999,14 @@ let a_secret =
   match source with
   | `Need_inline () -> `Need_inline (`Secret direction)
   | `Path (path, ()) -> `Path (path, `Secret direction)
+
+let a_tls_crypt_payload str =
+  let open Result.Syntax in
+  let* key = parse_string ~consume:Consume.All (inline_payload "tls-crypt") str in
+  Ok (B (Tls_crypt, key))
+
+let a_tls_crypt =
+  a_option_with_single_path "tls-crypt" `Tls_crypt
 
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
@@ -1552,6 +1566,7 @@ let a_config_entry : line A.t =
          a_resolv_retry;
          a_tls_auth;
          a_tls_timeout;
+         a_tls_crypt;
          a_tls_crypt_v2;
          a_remote_cert_tls;
          a_verb;
@@ -1660,6 +1675,7 @@ let parse_inline str = function
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
+  | `Tls_crypt -> a_tls_crypt_payload str
   | `Tls_crypt_v2 force_cookie ->
       parse_string ~consume:Consume.All
         (a_tls_crypt_v2_payload force_cookie)
@@ -1852,6 +1868,7 @@ let parse_next (effect : parser_effect) initial_state :
       | "cert" -> Ok `Tls_cert
       | "key" -> Ok `Tls_key
       | "secret" -> Ok (`Secret None)
+      | "tls-crypt" -> Ok `Tls_crypt
       | "tls-crypt-v2" -> Ok (`Tls_crypt_v2 false)
       | _ -> Error ("Unknown inline kind " ^ kind)
     in

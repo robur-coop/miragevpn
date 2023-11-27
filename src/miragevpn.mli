@@ -175,6 +175,7 @@ module Config : sig
     | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
+    | Tls_crypt : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
     | Tls_crypt_v2_client
         : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
         (** [Tls_crypt_v2_client (key, wkc, force_cookie)] *)
