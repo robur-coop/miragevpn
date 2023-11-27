@@ -501,6 +501,39 @@ let client_conf =
   |> add Remote_cert_tls `Server
   |> add Tls_auth tls_auth |> add Cipher `AES_256_CBC |> add Verb 3
 
+let static_client_conf, inline_secret_direction =
+  let k_a, k_b, k_c, k_d = a_inline_payload {|
+-----BEGIN OpenVPN Static key V1-----
+87055d27a5536ac72e129916f4287adb
+fce68b7ef6d929539ea170ed0ddf6822
+899f5dbe6aa5df17673c10d63bfe5221
+a25824527c60187666406d92c18dfc3a
+ec597ed09c5aaacc2256c2303e71e17e
+ff995ce7760877abee1d400ea768ace6
+3dcc7d0ef10f1f6d4df4822a78ebbf87
+99e1ddcf2e206872235eb7a92fddd560
+99654cb6d0d19dc099fdfe318382c5b8
+f508feaf3818d8bb35d0afea0e609681
+8d7eaf4dc8ee072188c414405d6a0ec7
+079d4faaf8520e77eee535e4cc0c7785
+5f70cc929d9b5fcbab6e939c088962e4
+7fe05b2e4367c15ddf8f1824b7d772a6
+668345bc7b2f847d03080abb59ff37f2
+1f7c6528d77584af997c0779a1c7e36f
+-----END OpenVPN Static key V1-----|}
+  in
+  let open Miragevpn.Config in
+  let cfg =
+    minimal_config |> remove Auth_user_pass |> remove Tls_mode
+    |> add Dev (`Tun, None)
+    |> add Proto (None, `Udp)
+    |> add Remote [ ( `Ip (Ipaddr.of_string_exn "1.2.3.4"), 1194, `Udp ); ]
+    |> add Verb 3
+    |> add Ifconfig (Ipaddr.of_string_exn "10.1.0.2", Ipaddr.of_string_exn "10.1.0.1")
+    |> add Secret (None, k_a, k_b, k_c, k_d)
+  in
+  cfg, cfg |> add Secret (Some `Outgoing, k_a, k_b, k_c, k_d)
+
 let tls_home_conf =
   let open Miragevpn.Config in
   minimal_config |> remove Auth_user_pass
@@ -699,10 +732,16 @@ let tests =
       parse_client_configuration ~config:client_conf "client.conf" );
     ( "parsing configuration 'static-home'",
       `Quick,
-      parse_client_configuration "static-home.conf" );
+      parse_client_configuration ~config:static_client_conf "static-home.conf" );
     ( "parsing configuration 'static-home-inline-secret'",
       `Quick,
-      parse_client_configuration "static-home-inline-secret.conf" );
+      parse_client_configuration ~config:static_client_conf "static-home-inline-secret.conf" );
+    ( "parsing configuration 'inline-secret-direction'",
+      `Quick,
+      parse_client_configuration ~config:inline_secret_direction "inline-secret-direction.conf" );
+    ( "parsing configuration 'inline-secret-direction-reverse'",
+      `Quick,
+      parse_client_configuration ~config:inline_secret_direction "inline-secret-direction-reverse.conf" );
     ( "parsing configuration 'tls-home'",
       `Quick,
       parse_client_configuration ~config:tls_home_conf "tls-home.conf" );
