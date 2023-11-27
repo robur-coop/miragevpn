@@ -269,7 +269,8 @@ type tls_crypt = {
 
 type state =
   | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
-  | Client_tls_crypt of {
+  | Client_tls_crypt of { tls_crypt : tls_crypt; state : client_state }
+  | Client_tls_crypt_v2 of {
       tls_crypt : tls_crypt * Cstruct.t;
       state : client_state;
     }
@@ -281,6 +282,8 @@ let pp_state ppf = function
       Fmt.pf ppf "client tls-auth %a" pp_client_state state
   | Client_tls_crypt { state; _ } ->
       Fmt.pf ppf "client tls-crypt %a" pp_client_state state
+  | Client_tls_crypt_v2 { state; _ } ->
+      Fmt.pf ppf "client tls-crypt-v2 %a" pp_client_state state
   | Client_static { state; _ } ->
       Fmt.pf ppf "client static %a" pp_client_state state
   | Server_tls_auth { state; _ } -> pp_server_state ppf state
@@ -367,7 +370,7 @@ let control_mtu config state session =
     | Client_tls_auth _ | Server_tls_auth _ ->
         (* here, the hash is used from auth *)
         Config.get Auth config |> Mirage_crypto.Hash.digest_size
-    | Client_tls_crypt _ ->
+    | Client_tls_crypt _ | Client_tls_crypt_v2 _ ->
         (* AES_CTR and SHA256 *)
         Mirage_crypto.Hash.SHA256.digest_size
   in
