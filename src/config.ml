@@ -1663,7 +1663,7 @@ type parser_state =
 
 type parser_effect = [ `File of string * string ] option
 
-let parse_inline str = function
+let parse_inline ~file str = function
   | `Auth_user_pass ->
       (* TODO openvpn doesn't seem to allow inlining passwords, we do.. *)
       parse_string ~consume:Consume.All a_auth_user_pass_payload str
@@ -1695,7 +1695,13 @@ let parse_inline str = function
         (a_tls_crypt_v2_payload force_cookie)
         str
   | `Secret direction -> a_secret_payload direction str
-  | `Pkcs12 -> a_pkcs12_payload str
+  | `Pkcs12 ->
+      let open Result.Syntax in
+      let* data =
+        if file then Ok str
+        else Result.map_error (function `Msg msg -> msg) (Base64.decode str)
+      in
+      a_pkcs12_payload data
 
 let eq : eq =
   {
@@ -1883,7 +1889,7 @@ let parse_next (effect : parser_effect) initial_state :
       | "tls-crypt-v2" -> Ok (`Tls_crypt_v2 false)
       | _ -> Error ("Unknown inline kind " ^ kind)
     in
-    let* thing = parse_inline payload kind in
+    let* thing = parse_inline ~file:false payload kind in
     resolve_add_conflict acc thing
   in
   let rec loop blocks (acc : Conf_map.t) :
@@ -1915,7 +1921,7 @@ let parse_next (effect : parser_effect) initial_state :
                 let* r =
                   Result.map_error
                     (fun x -> "failed parsing provided file: " ^ x)
-                    (parse_inline content kind)
+                    (parse_inline ~file:true content kind)
                 in
                 retb r
             | _ -> Ok (`Need_file (wanted_name, (blocks, hd :: tl, acc))))
@@ -1928,7 +1934,7 @@ let parse_next (effect : parser_effect) initial_state :
             with
             | `Inline (_, x) :: inline_tl, other_tl ->
                 Log.debug (fun m -> m "consuming [inline] %s" looking_for);
-                let* thing = parse_inline x kind in
+                let* thing = parse_inline ~file:false x kind in
                 let* acc = resolve_add_conflict acc thing in
                 (* TODO: this leads to some list shuffling *)
                 loop (other_tl @ inline_tl) acc tl

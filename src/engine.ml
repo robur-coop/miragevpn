@@ -165,7 +165,7 @@ let tls_crypt config =
           wkc,
           force_cookie )
 
-let client config ts now rng =
+let client ?pkcs12_password config ts now rng =
   let open Result.Syntax in
   let current_ts = ts () in
   let config =
@@ -182,6 +182,52 @@ let client config ts now rng =
         done;
         let remotes = Array.to_list remotes in
         Config.add Remote remotes config
+  in
+  let* config =
+    match Config.find Pkcs12 config with
+    | None -> Ok config
+    | Some p12 -> (
+        let* pass =
+          Option.to_result ~none:(`Msg "missing pkcs12 password")
+            pkcs12_password
+        in
+        let* stuff = X509.PKCS12.verify pass p12 in
+        let cert =
+          List.filter_map
+            (function `Certificate c -> Some c | _ -> None)
+            stuff
+        and key =
+          List.filter
+            (function
+              | `Private_key _ | `Decrypted_private_key _ -> true | _ -> false)
+            stuff
+        in
+        match (cert, key) with
+        | certs, ([ `Private_key pk ] | [ `Decrypted_private_key pk ]) -> (
+            let key_fp =
+              X509.Public_key.fingerprint (X509.Private_key.public pk)
+            in
+            match
+              List.filter
+                (fun cert ->
+                  let cert_pubkey = X509.Certificate.public_key cert in
+                  Cstruct.equal (X509.Public_key.fingerprint cert_pubkey) key_fp)
+                certs
+            with
+            | [ cert ] ->
+                Ok
+                  Config.(
+                    add Tls_key pk (add Tls_cert cert (remove Pkcs12 config)))
+            | _ ->
+                Error
+                  (`Msg "PKCS12: couldn't find matching cert for private key"))
+        | _, keys ->
+            Error
+              (`Msg
+                (Fmt.str
+                   "expected exactly one private key in PKCS12, found %u \
+                    private keys"
+                   (List.length keys))))
   in
   let* action, state =
     match Config.get Remote config with

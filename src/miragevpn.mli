@@ -286,6 +286,7 @@ type action =
 val pp_action : action Fmt.t
 
 val client :
+  ?pkcs12_password:string ->
   Config.t ->
   (unit -> int64) ->
   (unit -> Ptime.t) ->
