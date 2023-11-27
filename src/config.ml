@@ -636,12 +636,13 @@ end
 
 open Conf_map
 
-type line =
+type block = [ `Inline of string * string ]
+
+type non_block =
   [ `Entries of b list
   | `Entry of b
   | `Comment of string
   | `Ignored of string
-  | `Inline of string * string
   | `Keepalive of int * int (* interval * timeout *)
   | `Remote of
     [ `Domain of [ `host ] Domain_name.t * [ `Ipv6 | `Ipv4 | `Any ]
@@ -655,7 +656,9 @@ type line =
   | `Dev of string (* [dev name] stanza requiring a [dev-type]*)
   | `Dev_type of [ `Tun | `Tap ] (* [dev-type] stanza requiring [dev name]*) ]
 
-let pp_line ppf (x : line) =
+type line = [ block | non_block ]
+
+let pp_line ppf (x : [< line ]) =
   let v = Fmt.pf in
   match x with
   | `Remote (host, port, proto) ->
@@ -1622,7 +1625,7 @@ let parse_internal config_str : (line list, 'x) result =
                     (Printf.sprintf "Error at byte offset %d: %S" pos context)
                 ))
 
-type parser_partial_state = line list * Conf_map.t
+type parser_partial_state = block list * non_block list * Conf_map.t
 
 type parser_state =
   [ `Done of Conf_map.t
@@ -1835,9 +1838,29 @@ let valid_server_options ~client:_ _server_t =
 let parse_next (effect : parser_effect) initial_state :
     (parser_state, 'err) result =
   let open Result.Syntax in
-  let rec loop (acc : Conf_map.t) : line list -> (parser_state, 'b) result =
-    function
-    | (hd : line) :: tl -> (
+  let block acc (`Inline (kind, payload)) =
+    let* acc = acc in
+    (* These are <inlines> that were not declared with an [inline];
+       so fill in default values *)
+    let* kind =
+      match kind with
+      | "auth-user-pass" -> Ok `Auth_user_pass
+      | "ca" -> Ok `Ca
+      | "connection" -> Ok `Connection
+      | "pkcs12" -> Ok `Pkcs12
+      | "tls-auth" -> Ok (`Tls_auth None)
+      | "cert" -> Ok `Tls_cert
+      | "key" -> Ok `Tls_key
+      | "secret" -> Ok (`Secret None)
+      | "tls-crypt-v2" -> Ok (`Tls_crypt_v2 false)
+      | _ -> Error ("Unknown inline kind " ^ kind)
+    in
+    let* thing = parse_inline payload kind in
+    resolve_add_conflict acc thing
+  in
+  let rec loop blocks (acc : Conf_map.t) :
+      non_block list -> (parser_state, 'b) result = function
+    | (hd : non_block) :: tl -> (
         (* TODO should make sure not to override without conflict resolution,
            ie use addb_unless_bound and so on... *)
         let multib ?(tl = tl) kv =
@@ -1852,7 +1875,7 @@ let parse_next (effect : parser_effect) initial_state :
                     Error err)
               (Ok acc) kv
           in
-          loop acc tl
+          loop blocks acc tl
         in
         let retb ?tl b = multib ?tl [ b ] in
         match hd with
@@ -1867,56 +1890,25 @@ let parse_next (effect : parser_effect) initial_state :
                     (parse_inline content kind)
                 in
                 retb r
-            | _ -> Ok (`Need_file (wanted_name, (hd :: tl, acc))))
+            | _ -> Ok (`Need_file (wanted_name, (blocks, hd :: tl, acc))))
         | `Need_inline kind -> (
             let looking_for = string_of_inlineable kind in
             match
               List.partition
-                (function
-                  | `Inline (kind2, _) -> String.equal looking_for kind2
-                  | _ -> false)
-                tl
+                (fun (`Inline (kind2, _)) -> String.equal looking_for kind2)
+                blocks
             with
             | `Inline (_, x) :: inline_tl, other_tl ->
                 Log.debug (fun m -> m "consuming [inline] %s" looking_for);
                 let* thing = parse_inline x kind in
                 let* acc = resolve_add_conflict acc thing in
-                loop acc (other_tl @ inline_tl)
+                (* TODO: this leads to some list shuffling *)
+                loop (other_tl @ inline_tl) acc tl
             | [], _ ->
                 (* TODO if we already have it in the map, we don't need to fail: *)
-                Error ("not found: needed [inline]: " ^ looking_for)
-            | _ -> Error "TODO List.partition was wrong")
-        | `Inline ("connection", x) ->
-            let* thing = parse_inline x `Connection in
-            let* acc = resolve_add_conflict acc thing in
-            loop acc tl
-        | `Inline ("secret", payload) ->
-            (* If there's a "secret [inline] dir" earlier this doesn't trigger inshallah *)
-            let* thing = parse_inline payload (`Secret None) in
-            let* acc = resolve_add_conflict acc thing in
-            loop acc tl
-        | `Inline (fname, _) ->
-            (* Except for "connection" all blocks must be warranted by an
-               [inline] value in a matching directive. If we have one, we move
-               this block to the end of the list (since we -know- it's needed).
-               If not, we ignore it after emitting an error: *)
-            loop acc @@ tl
-            @
-            if
-              List.exists
-                (function
-                  | `Need_inline k
-                    when String.equal fname (string_of_inlineable k) ->
-                      true
-                  | _ -> false)
-                tl
-            then [ hd ]
-            else (
-              Log.warn (fun m ->
-                  m "Inline block %S seems to be redundant" fname);
-              [])
-        | `Ignored _ -> loop acc tl
-        | `Comment _ -> loop acc tl
+                Error ("not found: needed [inline]: " ^ looking_for))
+        | `Ignored _ -> loop blocks acc tl
+        | `Comment _ -> loop blocks acc tl
         | `Rport _ as this_directive ->
             (* The parser for `Remote will look for `Rport when needed.
                To avoid an endless loop here we ignore the present `Rport
@@ -1942,7 +1934,7 @@ let parse_next (effect : parser_effect) initial_state :
                     | _ -> compare a b)
                   (this_directive :: tl)
               in
-              loop acc sorted_tl
+              loop blocks acc sorted_tl
         | `Entry b -> retb b
         | `Entries lst -> multib lst
         | `Keepalive (interval, timeout) ->
@@ -1984,7 +1976,7 @@ let parse_next (effect : parser_effect) initial_state :
               in
               keepalive_action was_old timeout action
             in
-            loop (add Ping_timeout timeout acc) tl
+            loop blocks (add Ping_timeout timeout acc) tl
         | (`Proto_force _ | `Socks_proxy _) as line ->
             Log.warn (fun m ->
                 m "ignoring unimplemented option: %a" pp_line line);
@@ -2040,7 +2032,7 @@ let parse_next (effect : parser_effect) initial_state :
                 (* extraneous dev-type stanzas when dev-type has already been
                    inferred from the device name, e.g. "tun0" *)
                 match find Dev acc with
-                | Some (typ2, _name) when typ = typ2 -> loop acc tl
+                | Some (typ2, _name) when typ = typ2 -> loop blocks acc tl
                 | Some (_, _name) ->
                     Error
                       (Fmt.str
@@ -2053,17 +2045,26 @@ let parse_next (effect : parser_effect) initial_state :
                 Error
                   (Fmt.str "[dev %S] stanza without required [dev-type]" name)
             | _ -> Error "multiple conflicting [dev-type] stanzas present"))
-    | [] -> Ok (`Done acc : parser_state)
+    | [] ->
+        let* acc = List.fold_left block (Ok acc) blocks in
+        Ok (`Done acc : parser_state)
   in
   match initial_state with
   | `Done _ as ret -> Ok ret (* already done*)
-  | `Partial (lines, acc) -> loop acc lines
-  | `Need_file (_fn, (lines, acc)) -> loop acc lines
+  | `Partial (blocks, lines, acc) -> loop blocks acc lines
+  | `Need_file (_fn, (blocks, lines, acc)) -> loop blocks acc lines
 
 let parse_begin config_str : (parser_state, 'err) result =
   let open Result.Syntax in
   let* lines = parse_internal config_str in
-  parse_next None (`Partial (lines, empty))
+  let blocks, non_blocks =
+    List.partition_map
+      (function
+        | #block as block -> Left block
+        | #non_block as non_block -> Right non_block)
+      lines
+  in
+  parse_next None (`Partial (blocks, non_blocks, empty))
 
 let parse ~string_of_file config_str : (Conf_map.t, [> `Msg of string ]) result
     =
