@@ -637,6 +637,7 @@ end
 open Conf_map
 
 type block = [ `Inline of string * string ]
+
 type non_block =
   [ `Entries of b list
   | `Entry of b
@@ -1857,8 +1858,8 @@ let parse_next (effect : parser_effect) initial_state :
     let* thing = parse_inline payload kind in
     resolve_add_conflict acc thing
   in
-  let rec loop blocks (acc : Conf_map.t) : non_block list -> (parser_state, 'b) result =
-    function
+  let rec loop blocks (acc : Conf_map.t) :
+      non_block list -> (parser_state, 'b) result = function
     | (hd : non_block) :: tl -> (
         (* TODO should make sure not to override without conflict resolution,
            ie use addb_unless_bound and so on... *)
@@ -2045,8 +2046,8 @@ let parse_next (effect : parser_effect) initial_state :
                   (Fmt.str "[dev %S] stanza without required [dev-type]" name)
             | _ -> Error "multiple conflicting [dev-type] stanzas present"))
     | [] ->
-      let* acc = List.fold_left block (Ok acc) blocks in
-      Ok (`Done acc : parser_state)
+        let* acc = List.fold_left block (Ok acc) blocks in
+        Ok (`Done acc : parser_state)
   in
   match initial_state with
   | `Done _ as ret -> Ok ret (* already done*)
