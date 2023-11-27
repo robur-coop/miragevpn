@@ -575,8 +575,7 @@ module Conf_map = struct
           Fmt.(list ~sep:(any ":") string)
           (List.map cs13_to_cipher13 ciphers)
     | Tls_crypt, key ->
-        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>"
-          pp_key key
+        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>" pp_key key
     | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
@@ -990,7 +989,9 @@ let a_auth_user_pass =
 
 let a_secret_payload direction str =
   let open Result.Syntax in
-  let* (a, b, c, d) = parse_string ~consume:Consume.All (inline_payload "secret") str in
+  let* a, b, c, d =
+    parse_string ~consume:Consume.All (inline_payload "secret") str
+  in
   Ok (B (Secret, (direction, a, b, c, d)))
 
 let a_secret =
@@ -1002,12 +1003,12 @@ let a_secret =
 
 let a_tls_crypt_payload str =
   let open Result.Syntax in
-  let* key = parse_string ~consume:Consume.All (inline_payload "tls-crypt") str in
+  let* key =
+    parse_string ~consume:Consume.All (inline_payload "tls-crypt") str
+  in
   Ok (B (Tls_crypt, key))
 
-let a_tls_crypt =
-  a_option_with_single_path "tls-crypt" `Tls_crypt
-
+let a_tls_crypt = a_option_with_single_path "tls-crypt" `Tls_crypt
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
 let a_auth_user_pass_payload =
