@@ -741,6 +741,10 @@ let tests =
       `Quick,
       parse_client_configuration ~config:static_client_conf
         "static-home-inline-secret.conf" );
+    ( "parsing configuration 'static-home-inline-secret-no-secret-inline'",
+      `Quick,
+      parse_client_configuration ~config:static_client_conf
+        "static-home-inline-secret-no-secret-inline.conf" );
     ( "parsing configuration 'inline-secret-direction'",
       `Quick,
       parse_client_configuration ~config:inline_secret_direction
