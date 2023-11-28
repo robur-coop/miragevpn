@@ -920,7 +920,7 @@ type error =
   [ Packet.error
   | Lzo.error
   | `Non_monotonic_replay_id of int32 * int32
-  | `Non_monotonic_sequence_number of int32 * int32 option
+  | `Non_monotonic_sequence_number of int32 * int32
   | `Mismatch_their_session_id of transport * Packet.header
   | `Mismatch_my_session_id of transport * Packet.header
   | `Bad_mac of t * Cstruct.t * Packet.t
