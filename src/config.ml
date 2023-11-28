@@ -1697,6 +1697,7 @@ let parse_inline ~file str = function
   | `Secret direction -> a_secret_payload direction str
   | `Pkcs12 ->
       let open Result.Syntax in
+      (* pkcs12 files are usually DER-encoded, but when inlined have a base64 encoding (as specified in the openvpn man page) *)
       let* data =
         if file then Ok str
         else Result.map_error (function `Msg msg -> msg) (Base64.decode str)
