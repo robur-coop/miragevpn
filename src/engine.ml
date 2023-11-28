@@ -202,27 +202,32 @@ let client ?pkcs12_password config ts now rng =
               | `Private_key _ | `Decrypted_private_key _ -> true | _ -> false)
             stuff
         in
-        (* TODO: allow for certs as --ca or --extra-certs *)
         match (cert, key) with
-        | [ cert ], ([ `Private_key pk ] | [ `Decrypted_private_key pk ]) -> (
+        | certs, ([ `Private_key pk ] | [ `Decrypted_private_key pk ]) -> (
             let key_fp =
               X509.Public_key.fingerprint (X509.Private_key.public pk)
             in
-            let cert_pubkey = X509.Certificate.public_key cert in
-            if Cstruct.equal (X509.Public_key.fingerprint cert_pubkey) key_fp then
-              Ok
-                Config.(
-                  add Tls_key pk (add Tls_cert cert (remove Pkcs12 config)))
-            else
-              Error
-                (`Msg "PKCS12: couldn't find matching cert for private key"))
+            match
+              List.filter
+                (fun cert ->
+                  let cert_pubkey = X509.Certificate.public_key cert in
+                  Cstruct.equal (X509.Public_key.fingerprint cert_pubkey) key_fp)
+                certs
+            with
+            | [ cert ] ->
+                Ok
+                  Config.(
+                    add Tls_key pk (add Tls_cert cert (remove Pkcs12 config)))
+            | _ ->
+                Error
+                  (`Msg "PKCS12: couldn't find matching cert for private key"))
         | _, keys ->
             Error
               (`Msg
                 (Fmt.str
-                   "expected exactly one private key and one certificate in PKCS12, found %u \
-                    private keys and %u certificates"
-                   (List.length keys) (List.length cert))))
+                   "expected exactly one private key in PKCS12, found %u \
+                    private keys"
+                   (List.length keys))))
   in
   let* action, state =
     match Config.get Remote config with
