@@ -69,7 +69,7 @@ let header session transport timestamp =
   let ack_sequence_numbers =
     acked_sequence_numbers transport.last_acked_sequence_number
   in
-  Logs.info (fun m -> m "last ack %lu, seq %lu ack: %a"
+  Log.debug (fun m -> m "last ack %lu, seq %lu ack: %a"
                 transport.last_acked_sequence_number
                 transport.their_sequence_number
                 Fmt.(list ~sep:(any ", ") int32) ack_sequence_numbers);
@@ -888,7 +888,7 @@ let expected_packet session transport data =
       (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id <= 0)
       (`Non_monotonic_replay_id (session.their_replay_id, hdr.Packet.replay_id))
   in
-  Logs.info (fun m -> m "received %a" Fmt.(option ~none:(any "no") int32) sn);
+  Log.debug (fun m -> m "received %a" Fmt.(option ~none:(any "no") int32) sn);
   let+ () =
     opt_guard
       (Int32.equal transport.their_sequence_number)
@@ -906,7 +906,7 @@ let expected_packet session transport data =
     Option.value ~default:transport.their_sequence_number
       (Option.map Int32.succ sn)
   in
-  Logs.info (fun m -> m "their sequence number: %lu -> %lu"
+  Log.debug (fun m -> m "their sequence number: %lu -> %lu"
                 transport.their_sequence_number their_sequence_number);
   let out_packets =
     List.fold_left
