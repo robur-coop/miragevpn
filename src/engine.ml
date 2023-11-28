@@ -197,13 +197,13 @@ let client ?pkcs12_password config ts now rng =
             (function `Certificate c -> Some c | _ -> None)
             stuff
         and keys =
-          List.filter
+          List.filter_map
             (function
-              | `Private_key _ | `Decrypted_private_key _ -> true | _ -> false)
+              | `Private_key pk | `Decrypted_private_key pk -> Some pk | _ -> None)
             stuff
         in
         match keys with
-        | [ (`Private_key pk | `Decrypted_private_key pk) ] -> (
+        | [ pk ] -> (
             let key_fp =
               X509.Public_key.fingerprint (X509.Private_key.public pk)
             in
