@@ -199,7 +199,8 @@ let client ?pkcs12_password config ts now rng =
         and keys =
           List.filter_map
             (function
-              | `Private_key pk | `Decrypted_private_key pk -> Some pk | _ -> None)
+              | `Private_key pk | `Decrypted_private_key pk -> Some pk
+              | _ -> None)
             stuff
         in
         match keys with
