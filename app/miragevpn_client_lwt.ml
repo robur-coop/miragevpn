@@ -341,8 +341,10 @@ let send_recv conn config ip_config _mtu =
       in
       Lwt.pick [ process_incoming (); process_outgoing tun_fd ]
 
-let establish_tunnel config =
-  match Miragevpn.client config ts now Mirage_crypto_rng.generate with
+let establish_tunnel config pkcs12_password =
+  match
+    Miragevpn.client ?pkcs12_password config ts now Mirage_crypto_rng.generate
+  with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "client construction failed %s" msg);
       failwith msg
@@ -397,13 +399,13 @@ let parse_config filename =
   | Ok str -> Miragevpn.Config.parse_client ~string_of_file str
   | Error _ as e -> e
 
-let jump _ filename =
+let jump _ filename pkcs12 =
   Printexc.record_backtrace true;
   Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
   Lwt_main.run
     (parse_config filename >>= function
      | Error (`Msg s) -> failwith ("config parser: " ^ s)
-     | Ok config -> establish_tunnel config)
+     | Ok config -> establish_tunnel config pkcs12)
 (* <- Lwt_main.run *)
 
 let reporter_with_ts ~dst () =
@@ -447,8 +449,15 @@ let config =
   let doc = "Configuration file to use" in
   Arg.(required & pos 0 (some file) None & info [] ~doc ~docv:"CONFIG")
 
+let pkcs12 =
+  let doc = "PKCS12 password" in
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "pkcs12-password" ] ~doc ~docv:"PKCS12-PASSWORD")
+
 let cmd =
-  let term = Term.(term_result (const jump $ setup_log $ config))
+  let term = Term.(term_result (const jump $ setup_log $ config $ pkcs12))
   and info = Cmd.info "miragevpn_client" ~version:"%%VERSION_NUM%%" in
   Cmd.v info term
 

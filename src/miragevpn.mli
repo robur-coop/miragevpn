@@ -100,6 +100,7 @@ module Config : sig
         from us?
     *)
     | Ping_timeout : [ `Restart of int | `Exit of int ] k
+    | Pkcs12 : X509.PKCS12.t k
     | Port : int k
     | Pull : flag k
     | Proto
@@ -285,6 +286,7 @@ type action =
 val pp_action : action Fmt.t
 
 val client :
+  ?pkcs12_password:string ->
   Config.t ->
   (unit -> int64) ->
   (unit -> Ptime.t) ->

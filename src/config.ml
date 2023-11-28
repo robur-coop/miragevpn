@@ -170,6 +170,7 @@ module Conf_map = struct
     | Persist_tun : flag k
     | Ping_interval : [ `Not_configured | `Seconds of int ] k
     | Ping_timeout : [ `Restart of int | `Exit of int ] k
+    | Pkcs12 : X509.PKCS12.t k
     | Port : int k
     | Pull : flag k
     | Proto
@@ -269,6 +270,24 @@ module Conf_map = struct
       else Ok ()
     else Ok ()
 
+  let cert_key_or_pkcs12 t =
+    match (find Tls_cert t, find Tls_key t, find Pkcs12 t) with
+    | Some cert, Some key, None ->
+        let cert_pubkey = X509.Certificate.public_key cert in
+        let key_pubkey = X509.Private_key.public key in
+        if
+          Cstruct.equal
+            (X509.Public_key.fingerprint cert_pubkey)
+            (X509.Public_key.fingerprint key_pubkey)
+        then Ok `Some
+        else Error "key and cert do not match"
+    | None, None, Some _ -> Ok `Some
+    | Some _, Some _, Some _ ->
+        Error "tls-cert, tls-key and pkcs12 are mutually exclusive"
+    | Some _, None, _ -> Error "missing tls-cert"
+    | None, Some _, _ -> Error "missing tls-key"
+    | None, None, None -> Ok `None
+
   let is_valid_server_config t =
     let ensure_mem k err = if mem k t then Ok () else Error err in
     let open Result.Syntax in
@@ -281,11 +300,8 @@ module Conf_map = struct
          | None | Some `Client -> Error "config must specify 'tls-server'"
          | Some `Server -> Ok ()
        in
-       match (find Tls_cert t, find Tls_key t) with
-       | Some _, Some _ -> Ok ()
-       | None, None -> Error "missing tls-cert and tls-key"
-       | Some _, None -> Error "missing tls-cert"
-       | None, Some _ -> Error "missing tls-key" (* ^-- TODO or has -pkcs12 *))
+       let* _ = cert_key_or_pkcs12 t in
+       Ok ())
 
   let is_valid_client_config t =
     let open Result.Syntax in
@@ -305,24 +321,13 @@ module Conf_map = struct
              Ok ()
          | Some _, Some _ -> Error "both static secret and TLS mode specified"
          | Some `Client, None -> (
-             match (find Auth_user_pass t, find Tls_cert t, find Tls_key t) with
-             | _, Some _, None -> Error "tls-cert provided, but no tls-key"
-             | _, None, Some _ -> Error "tls-key provided, but not tls-cert"
-             | Some _, None, None -> Ok ()
-             | _, Some cert, Some key ->
-                 let cert_pubkey = X509.Certificate.public_key cert in
-                 let key_pubkey = X509.Private_key.public key in
-                 if
-                   Cstruct.equal
-                     (X509.Public_key.fingerprint cert_pubkey)
-                     (X509.Public_key.fingerprint key_pubkey)
-                 then Ok ()
-                 else Error "key and cert do not match"
-             | None, None, None ->
+             match (find Auth_user_pass t, cert_key_or_pkcs12 t) with
+             | Some _, Ok _ | None, Ok `Some -> Ok ()
+             | None, Ok `None ->
                  Error
                    "config has neither user/password, nor TLS client \
                     certificate"
-                 (* ^-- TODO or has -pkcs12 *))
+             | _, (Error _ as e) -> e)
        in
        let* () =
          if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
@@ -483,6 +488,9 @@ module Conf_map = struct
     | Passtos, () -> p () "passtos"
     | Persist_key, () -> p () "persist-key"
     | Persist_tun, () -> p () "persist-tun"
+    | Pkcs12, p12 ->
+        p () "pkcs12 [inline]\n<pkcs12>\n%s\n</pkcs12>"
+          (Base64.encode_exn (Cstruct.to_string (X509.PKCS12.encode_der p12)))
     | Port, port -> p () "port %u" port
     | Proto, (ip_v, kind) ->
         p () "proto %s%s%s"
@@ -858,6 +866,11 @@ let a_key_payload str =
   match X509.Private_key.decode_pem (Cstruct.of_string str) with
   | Ok key -> Ok (B (Tls_key, key))
   | Error (`Msg msg) -> Error ("no key found in x509 tls-key: " ^ msg)
+
+let a_pkcs12_payload str =
+  match X509.PKCS12.decode_der (Cstruct.of_string str) with
+  | Error (`Msg msg) -> Error ("failed to decode PKCS12: " ^ msg)
+  | Ok p12 -> Ok (B (Pkcs12, p12))
 
 let a_pkcs12 = a_option_with_single_path "pkcs12" `Pkcs12
 
@@ -1650,7 +1663,7 @@ type parser_state =
 
 type parser_effect = [ `File of string * string ] option
 
-let parse_inline str = function
+let parse_inline ~file str = function
   | `Auth_user_pass ->
       (* TODO openvpn doesn't seem to allow inlining passwords, we do.. *)
       parse_string ~consume:Consume.All a_auth_user_pass_payload str
@@ -1682,10 +1695,14 @@ let parse_inline str = function
         (a_tls_crypt_v2_payload force_cookie)
         str
   | `Secret direction -> a_secret_payload direction str
-  | kind ->
-      Error
-        ("config-parser: not sure how to parse inline "
-       ^ string_of_inlineable kind)
+  | `Pkcs12 ->
+      let open Result.Syntax in
+      (* pkcs12 files are usually DER-encoded, but when inlined have a base64 encoding (as specified in the openvpn man page) *)
+      let* data =
+        if file then Ok str
+        else Result.map_error (function `Msg msg -> msg) (Base64.decode str)
+      in
+      a_pkcs12_payload data
 
 let eq : eq =
   {
@@ -1873,7 +1890,7 @@ let parse_next (effect : parser_effect) initial_state :
       | "tls-crypt-v2" -> Ok (`Tls_crypt_v2 false)
       | _ -> Error ("Unknown inline kind " ^ kind)
     in
-    let* thing = parse_inline payload kind in
+    let* thing = parse_inline ~file:false payload kind in
     resolve_add_conflict acc thing
   in
   let rec loop blocks (acc : Conf_map.t) :
@@ -1905,7 +1922,7 @@ let parse_next (effect : parser_effect) initial_state :
                 let* r =
                   Result.map_error
                     (fun x -> "failed parsing provided file: " ^ x)
-                    (parse_inline content kind)
+                    (parse_inline ~file:true content kind)
                 in
                 retb r
             | _ -> Ok (`Need_file (wanted_name, (blocks, hd :: tl, acc))))
@@ -1918,7 +1935,7 @@ let parse_next (effect : parser_effect) initial_state :
             with
             | `Inline (_, x) :: inline_tl, other_tl ->
                 Log.debug (fun m -> m "consuming [inline] %s" looking_for);
-                let* thing = parse_inline x kind in
+                let* thing = parse_inline ~file:false x kind in
                 let* acc = resolve_add_conflict acc thing in
                 (* TODO: this leads to some list shuffling *)
                 loop (other_tl @ inline_tl) acc tl

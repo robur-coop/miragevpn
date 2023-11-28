@@ -84,6 +84,12 @@ commonName of the subject in the X.509 certificate. MirageVPN validates the
 provided host against the set of hostnames in the certificate, namely the union
 of the commonName and the DNS entries in the SubjectAlternativeName extension.
 
+When using a PKCS#12 file the certificates in it are not used to authenticate
+the remote.  OpenVPN will use the certificates if (and only if) no "ca" option
+is specified.  If it is desired to use the certificates from the PKCS#12 file
+to authenticate the remote the certificates can be added with the "ca" option
+by extracting the certificates with e.g. `openssl pkcs12`.
+
 ## Funding
 
 This project was funded in 2019 for six months by the [German federal ministry for education and research](https://www.bmbf.de) via the [Prototypefund](https://prototypefund.de) - the amount was 47500 EUR.

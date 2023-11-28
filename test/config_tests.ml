@@ -726,56 +726,56 @@ let tests =
     ("trailing whitespace after <tls-auth>", `Quick, whitespace_after_tls_auth);
     ("remote entries are in order", `Quick, remotes_in_order);
     ("remote entries with port are in order", `Quick, remotes_in_order_with_port);
-    ( "parsing configuration 'minimal-client'",
+    ( "parsing 'minimal-client'",
       `Quick,
       parse_client_configuration ~config:minimal_ta_conf "minimal-client.conf"
     );
-    ( "parsing configuration 'client'",
+    ( "parsing 'client'",
       `Quick,
       parse_client_configuration ~config:client_conf "client.conf" );
-    ( "parsing configuration 'static-home'",
+    ( "parsing 'static-home'",
       `Quick,
       parse_client_configuration ~config:static_client_conf "static-home.conf"
     );
-    ( "parsing configuration 'static-home-inline-secret'",
+    ( "parsing 'static-home-inline-secret'",
       `Quick,
       parse_client_configuration ~config:static_client_conf
         "static-home-inline-secret.conf" );
-    ( "parsing configuration 'static-home-inline-secret-no-secret-inline'",
+    ( "parsing 'static-home-inline-secret-no-secret-inline'",
       `Quick,
       parse_client_configuration ~config:static_client_conf
         "static-home-inline-secret-no-secret-inline.conf" );
-    ( "parsing configuration 'inline-secret-direction'",
+    ( "parsing 'inline-secret-direction'",
       `Quick,
       parse_client_configuration ~config:inline_secret_direction
         "inline-secret-direction.conf" );
-    ( "parsing configuration 'inline-secret-direction-reverse'",
+    ( "parsing 'inline-secret-direction-reverse'",
       `Quick,
       parse_client_configuration ~config:inline_secret_direction
         "inline-secret-direction-reverse.conf" );
-    ( "parsing configuration 'tls-home'",
+    ( "parsing 'tls-home'",
       `Quick,
       parse_client_configuration ~config:tls_home_conf "tls-home.conf" );
-    ( "parsing configuration 'client-tcp-certauth-passauth'",
+    ( "parsing 'client-tcp-certauth-passauth'",
       `Quick,
       parse_client_configuration "client-tcp-certauth-passauth.conf" );
-    ( "parsing configuration 'IPredator-CLI-Password'",
+    ( "parsing 'IPredator-CLI-Password'",
       `Quick,
       parse_client_configuration ~config:ipredator_conf
         "IPredator-CLI-Password.conf" );
-    ("parsing configuration with multiple CAs", `Quick, parse_multiple_cas);
-    ( "parsing configuration 'tls-crypt-v2-client.conf'",
+    ("parsing with multiple CAs", `Quick, parse_multiple_cas);
+    ( "parsing 'tls-crypt-v2-client.conf'",
       `Quick,
       parse_client_configuration ~config:client_tls_crypt_v2_conf
         "tls-crypt-v2-client.conf" );
     ("parsing server tls-crypt-v2 keys", `Quick, server_tls_crypt_v2);
-    ( "parsing configuration 'wild-client-no-auth'",
+    ( "parsing 'wild-client-no-auth'",
       `Quick,
       parse_client_configuration "wild-client-no-auth.conf" );
-    ( "parsing configuration 'wild-client'",
+    ( "parsing 'wild-client'",
       `Quick,
       parse_client_configuration "wild-client.conf" );
-    ( "parsing configuration 'windows-riseup-client'",
+    ( "parsing 'windows-riseup-client'",
       `Quick,
       parse_client_configuration "windows-riseup-client.conf" );
     ( "parsing 'tls-home-with-cipher'",
