@@ -1948,6 +1948,7 @@ let parse_next (effect : parser_effect) initial_state :
       | "secret" -> Ok (`Secret None)
       | "tls-crypt" -> Ok `Tls_crypt
       | "tls-crypt-v2" -> Ok (`Tls_crypt_v2 false)
+      | "peer-fingerprint" -> Ok `Peer_fingerprint
       | _ -> Error ("Unknown inline kind " ^ kind)
     in
     let* thing = parse_inline ~file:false payload kind in
