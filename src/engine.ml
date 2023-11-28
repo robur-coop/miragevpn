@@ -192,36 +192,45 @@ let client ?pkcs12_password config ts now rng =
             pkcs12_password
         in
         let* stuff = X509.PKCS12.verify pass p12 in
-        let cert =
+        let certs =
           List.filter_map
             (function `Certificate c -> Some c | _ -> None)
             stuff
-        and key =
+        and keys =
           List.filter
             (function
               | `Private_key _ | `Decrypted_private_key _ -> true | _ -> false)
             stuff
         in
-        match (cert, key) with
-        | certs, ([ `Private_key pk ] | [ `Decrypted_private_key pk ]) -> (
+        match keys with
+        | [ (`Private_key pk | `Decrypted_private_key pk) ] -> (
             let key_fp =
               X509.Public_key.fingerprint (X509.Private_key.public pk)
             in
             match
-              List.filter
+              List.partition
                 (fun cert ->
                   let cert_pubkey = X509.Certificate.public_key cert in
                   Cstruct.equal (X509.Public_key.fingerprint cert_pubkey) key_fp)
                 certs
             with
-            | [ cert ] ->
+            | [ cert ], extra_certs ->
+                (* OpenVPN adds the certs to [Ca] if it is not present;
+                   we don't as it is easily surprising behavior *)
+                if extra_certs <> [] then
+                  Log.warn (fun m ->
+                      m "Extra certificates found in PKCS12 file%s: %a"
+                        (if Config.mem Ca config then ""
+                         else " (not using them as --ca)")
+                        Fmt.(list ~sep:(any ", ") X509.Certificate.pp)
+                        extra_certs);
                 Ok
                   Config.(
                     add Tls_key pk (add Tls_cert cert (remove Pkcs12 config)))
             | _ ->
                 Error
                   (`Msg "PKCS12: couldn't find matching cert for private key"))
-        | _, keys ->
+        | keys ->
             Error
               (`Msg
                 (Fmt.str
