@@ -888,7 +888,7 @@ let expected_packet session transport data =
       (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id <= 0)
       (`Non_monotonic_replay_id (session.their_replay_id, hdr.Packet.replay_id))
   in
-  Log.debug (fun m -> m "received %a" Fmt.(option ~none:(any "no") int32) sn);
+  Log.debug (fun m -> m "received %a" Fmt.(option ~none:(any "no") (fun ppf -> pf ppf "%lu")) sn);
   let+ () =
     opt_guard
       (Int32.equal transport.their_sequence_number)
