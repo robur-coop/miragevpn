@@ -69,10 +69,11 @@ let header session transport timestamp =
   let ack_sequence_numbers =
     acked_sequence_numbers transport.last_acked_sequence_number
   in
-  Log.debug (fun m -> m "last ack %lu, seq %lu ack: %a"
-                transport.last_acked_sequence_number
-                transport.their_sequence_number
-                Fmt.(list ~sep:(any ", ") (fun ppf -> pf ppf "%lu")) ack_sequence_numbers);
+  Log.debug (fun m ->
+      m "last ack %lu, seq %lu ack: %a" transport.last_acked_sequence_number
+        transport.their_sequence_number
+        Fmt.(list ~sep:(any ", ") (fun ppf -> pf ppf "%lu"))
+        ack_sequence_numbers);
   let remote_session =
     match ack_sequence_numbers with
     | [] -> None
@@ -888,12 +889,16 @@ let expected_packet session transport data =
       (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id <= 0)
       (`Non_monotonic_replay_id (session.their_replay_id, hdr.Packet.replay_id))
   in
-  Log.debug (fun m -> m "received %a" Fmt.(option ~none:(any "no") (fun ppf -> pf ppf "%lu")) sn);
+  Log.debug (fun m ->
+      m "received %a" Fmt.(option ~none:(any "no") (fun ppf -> pf ppf "%lu")) sn);
   let+ () =
-    opt_guard
-      (Int32.equal transport.their_sequence_number)
+    Option.fold ~none:(Ok ())
+      ~some:(fun seq ->
+        guard
+          (Int32.equal transport.their_sequence_number seq)
+          (`Non_monotonic_sequence_number
+            (transport.their_sequence_number, seq)))
       sn
-      (`Non_monotonic_sequence_number (transport.their_sequence_number, sn))
   in
   let session =
     {
@@ -906,8 +911,9 @@ let expected_packet session transport data =
     Option.value ~default:transport.their_sequence_number
       (Option.map Int32.succ sn)
   in
-  Log.debug (fun m -> m "their sequence number: %lu -> %lu"
-                transport.their_sequence_number their_sequence_number);
+  Log.debug (fun m ->
+      m "their sequence number: %lu -> %lu" transport.their_sequence_number
+        their_sequence_number);
   let out_packets =
     List.fold_left
       (fun m id -> IM.remove id m)
@@ -933,13 +939,11 @@ let pp_error ppf = function
   | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
   | #Lzo.error as e -> Fmt.pf ppf "lzo %a" Lzo.pp_error e
   | `Non_monotonic_replay_id (expected, received) ->
-      Fmt.pf ppf "non monotonic replay id: expected %lu, received %lu"
-        expected received
-  | `Non_monotonic_sequence_number (expected, received) ->
-    Fmt.pf ppf "non monotonic sequence number: expected %lu, received %a"
-      expected
-        Fmt.(option ~none:(any "no") int32)
+      Fmt.pf ppf "non monotonic replay id: expected %lu, received %lu" expected
         received
+  | `Non_monotonic_sequence_number (expected, received) ->
+      Fmt.pf ppf "non monotonic sequence number: expected %lu, received %lu"
+        expected received
   | `Mismatch_their_session_id (state, hdr) ->
       Fmt.pf ppf "mismatched their session id in %a@ (state %a)"
         Packet.pp_header hdr pp_transport state
