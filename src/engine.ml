@@ -222,7 +222,10 @@ let client ?pkcs12_password config ts now rng =
                       m "Extra certificates found in PKCS12 file%s: %a"
                         (if Config.mem Ca config then ""
                          else " (not using them as --ca)")
-                        Fmt.(list ~sep:(any ", ") X509.Certificate.pp)
+                        Fmt.(
+                          list ~sep:(any ", ") (fun ppf cert ->
+                              pf ppf "%a" X509.Distinguished_name.pp
+                                (X509.Certificate.subject cert)))
                         extra_certs);
                 Ok
                   Config.(
