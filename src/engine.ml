@@ -871,16 +871,19 @@ let expected_packet session transport data =
   let hdr = Packet.header data and sn = Packet.sequence_number data in
   (* TODO timestamp? - epsilon-same as ours? monotonically increasing? *)
   let* () =
-    opt_guard
-      (Int64.equal session.my_session_id)
+    Option.fold ~none:(Ok ())
+      ~some:(fun sid ->
+        guard
+          (Int64.equal session.my_session_id sid)
+          (`Mismatch_my_session_id (session.my_session_id, sid)))
       hdr.Packet.remote_session
-      (`Mismatch_my_session_id (transport, hdr))
   in
   let* () =
     guard
       (Int64.equal session.their_session_id 0L
       || Int64.equal session.their_session_id hdr.Packet.local_session)
-      (`Mismatch_their_session_id (transport, hdr))
+      (`Mismatch_their_session_id
+        (session.their_session_id, hdr.Packet.local_session))
   in
   (* TODO deal with it, properly: packets may be lost (e.g. udp)
      both from their side, and acks from our side *)
@@ -927,8 +930,8 @@ type error =
   | Lzo.error
   | `Non_monotonic_replay_id of int32 * int32
   | `Non_monotonic_sequence_number of int32 * int32
-  | `Mismatch_their_session_id of transport * Packet.header
-  | `Mismatch_my_session_id of transport * Packet.header
+  | `Mismatch_their_session_id of int64 * int64
+  | `Mismatch_my_session_id of int64 * int64
   | `Bad_mac of t * Cstruct.t * Packet.t
   | `No_transition of channel * Packet.operation * Cstruct.t
   | `Tls of
@@ -944,12 +947,12 @@ let pp_error ppf = function
   | `Non_monotonic_sequence_number (expected, received) ->
       Fmt.pf ppf "non monotonic sequence number: expected %lu, received %lu"
         expected received
-  | `Mismatch_their_session_id (state, hdr) ->
-      Fmt.pf ppf "mismatched their session id in %a@ (state %a)"
-        Packet.pp_header hdr pp_transport state
-  | `Mismatch_my_session_id (state, hdr) ->
-      Fmt.pf ppf "mismatched my session id in %a@ (state %a)" Packet.pp_header
-        hdr pp_transport state
+  | `Mismatch_their_session_id (expected, received) ->
+      Fmt.pf ppf "mismatched their session id: expected %Lu, received %Lu"
+        expected received
+  | `Mismatch_my_session_id (expected, received) ->
+      Fmt.pf ppf "mismatched my session id: expected %Lu, received %Lu" expected
+        received
   | `Bad_mac (state, computed, data) ->
       Fmt.pf ppf "bad mac: computed %a data %a@ (state %a)" Cstruct.hexdump_pp
         computed Packet.pp data pp state
