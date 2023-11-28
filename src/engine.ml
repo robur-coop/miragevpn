@@ -72,7 +72,7 @@ let header session transport timestamp =
   Log.debug (fun m -> m "last ack %lu, seq %lu ack: %a"
                 transport.last_acked_sequence_number
                 transport.their_sequence_number
-                Fmt.(list ~sep:(any ", ") int32) ack_sequence_numbers);
+                Fmt.(list ~sep:(any ", ") (fun ppf -> pf ppf "%lu")) ack_sequence_numbers);
   let remote_session =
     match ack_sequence_numbers with
     | [] -> None
