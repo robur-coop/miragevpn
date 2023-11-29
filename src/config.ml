@@ -1107,24 +1107,17 @@ let a_tls_crypt = a_option_with_single_path "tls-crypt" `Tls_crypt
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
 let a_auth_user_pass_payload =
-  pos >>= fun user_pos ->
   take_till (function '\n' | '\r' -> true | _ -> false) <* a_newline <* commit
   >>= fun user ->
   (if String.equal user "" then
-     Fmt.kstr fail
-       "auth-user-pass (byte %d): username is empty, expected on first line!"
-       user_pos
+     Fmt.kstr fail "auth-user-pass: username is empty, expected on first line!"
    else return ())
-  *> pos
-  >>= fun pass_pos ->
-  take_till (function '\n' | '\r' -> true | _ -> false)
+  *> take_till (function '\n' | '\r' -> true | _ -> false)
   <* choice [ a_newline; end_of_input ]
   <* commit
   >>= fun pass ->
   (if String.equal pass "" then
-     Fmt.kstr fail
-       "auth-user-pass (byte %d): password is empty, expected on second line!"
-       pass_pos
+     Fmt.kstr fail "auth-user-pass: password is empty, expected on second line!"
    else return ())
   *> (* OpenVPN only looks at the first two lines and ignores the rest :/ *)
   skip_many any_char
@@ -1577,8 +1570,8 @@ let a_inline =
   let end_tag = Printf.ksprintf string "</%s>" tag in
   commit
   *> many_till
-       ( take_till (function '\r' | '\n' -> true | _ -> false) >>= fun line ->
-         choice [ string "\r\n"; string "\n" ] >>| ( ^ ) line )
+       ( take_while (function '\r' | '\n' -> false | _ -> true) <* a_newline
+       >>| fun line -> line ^ "\n" )
        (a_ign_whitespace_no_comment *> end_tag)
   >>| fun lines -> `Inline (tag, String.concat "" lines)
 

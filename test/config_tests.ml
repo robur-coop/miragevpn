@@ -227,25 +227,19 @@ let auth_user_pass_trailing_whitespace () =
 
   Alcotest.(check (result conf_map pmsg))
     "reject empty username"
-    (Error
-       (`Msg
-         ": auth-user-pass (byte 0): username is empty, expected on first line!"))
+    (Error (`Msg ": auth-user-pass: username is empty, expected on first line!"))
     (common "\r\ntestpass\n");
 
   Alcotest.(check (result conf_map pmsg))
     "reject empty password"
     (Error
-       (`Msg
-         ": auth-user-pass (byte 9): password is empty, expected on second \
-          line!"))
+       (`Msg ": auth-user-pass: password is empty, expected on second line!"))
     (common "testuser\n");
 
   Alcotest.(check (result conf_map pmsg))
     "reject empty Windows-style password"
     (Error
-       (`Msg
-         ": auth-user-pass (byte 10): password is empty, expected on second \
-          line!"))
+       (`Msg ": auth-user-pass: password is empty, expected on second line!"))
     (common "testuser\r\n\r");
 
   (* At the server '\x99' will be converted to '_' to protect against
