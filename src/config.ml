@@ -1537,9 +1537,9 @@ let a_remote :
 let a_remote_entry = a_remote
 
 let a_connection =
-  skip_many (a_whitespace <|> a_newline)
+  skip_many (a_whitespace_or_comment <|> a_newline)
   *> a_remote_entry <*
-  skip_many (a_whitespace <|> a_newline)
+  skip_many (a_whitespace_or_comment <|> a_newline)
 
 let a_network_or_gateway =
   choice
