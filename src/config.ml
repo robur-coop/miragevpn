@@ -1116,12 +1116,18 @@ let a_auth_user_pass_payload =
   <* choice [ a_newline; end_of_input ]
   <* commit
   >>= fun pass ->
+  pos >>= fun garbage_start ->
   (if String.equal pass "" then
      Fmt.kstr fail "auth-user-pass: password is empty, expected on second line!"
    else return ())
   *> (* OpenVPN only looks at the first two lines and ignores the rest :/ *)
-  skip_many any_char
-  >>= fun () -> return (B (Auth_user_pass, (user, pass)))
+  skip_many any_char *> pos
+  >>= fun garbage_end ->
+  let garbage_bytes = garbage_end - garbage_start in
+  if garbage_bytes > 0 then
+    Log.warn (fun m ->
+        m "Ignoring %d bytes of garbage in auth-user-pass" garbage_bytes);
+  return (B (Auth_user_pass, (user, pass)))
 
 let a_auth_retry =
   string "auth-retry" *> a_whitespace
