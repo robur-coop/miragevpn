@@ -8,6 +8,8 @@ module Log =
 open Angstrom
 module A = Angstrom
 
+(* When adding a new constructor please update the sample
+   test/sample-configuration-files/inline-all.conf *)
 type inlineable =
   [ `Auth_user_pass
   | `Ca
