@@ -1536,6 +1536,11 @@ let a_remote :
 
 let a_remote_entry = a_remote
 
+let a_connection =
+  skip_many (a_whitespace <|> a_newline)
+  *> a_remote_entry <*
+  skip_many (a_whitespace <|> a_newline)
+
 let a_network_or_gateway =
   choice
     [
@@ -1761,7 +1766,7 @@ let parse_inline ~file str = function
       (* TODO basically a Connection block is a subset of Conf_map.t,
          we should use the same parser.*)
       let* (`Remote (host, port, proto)) =
-        parse_string ~consume:Consume.All a_remote str
+        parse_string ~consume:Consume.All a_connection str
       in
       (* TODO consult `Proto and `Proto_force *)
       let proto = match proto with None -> `Udp | Some x -> x in
