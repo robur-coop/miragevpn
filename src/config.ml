@@ -1107,62 +1107,28 @@ let a_tls_crypt = a_option_with_single_path "tls-crypt" `Tls_crypt
 let a_ign_whitespace_nl = skip_many (a_newline <|> a_whitespace_unit)
 
 let a_auth_user_pass_payload =
-  (* To protect against a client passing a maliciously  formed  user‐
-     name  or  password string, the username string must consist only
-     of these characters: alphanumeric, underbar ('_'),  dash  ('-'),
-     dot  ('.'), or at ('@').  The password string can consist of any
-     printable characters except for CR or LF.  Any  illegal  charac‐
-     ters in either the username or password string will be converted
-     to underbar ('_').*)
-  pos
-  >>= (fun user_pos ->
-        (a_line (function
-           | '_' | '-' | '.' | '@' | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' ->
-               true
-           | _ -> false)
-         >>= function
-         | "" ->
-             ( *> ) commit @@ fail
-             @@ Fmt.str
-                  "auth-user-pass (byte %d): username is empty, expected on \
-                   first line!"
-                  user_pos
-         | user -> return user)
-        >>= fun user ->
-        pos >>= fun pass_pos ->
-        (a_line not_control_char >>= function
-         | "" ->
-             ( *> ) commit @@ fail
-             @@ Fmt.str
-                  "auth-user-pass (byte %d): password is empty, expected on \
-                   second line!"
-                  pass_pos
-         | raw_pass ->
-             let bad = ref ~-1 in
-             let count = ref 0 in
-             String.map
-               (function
-                 | '\x00' .. '\x1f' | '\x7f' .. '\xff' ->
-                     bad := !count;
-                     incr count;
-                     '_'
-                 | ch ->
-                     incr count;
-                     ch)
-               raw_pass
-             |> return
-             <* return
-                @@
-                if 0 <= !bad then
-                  Log.warn (fun m ->
-                      m
-                        "config: user-auth-pass at (byte offset %d line offset \
-                         %d) contains special character that will be turned \
-                         into an underscore '_' , is this intentional?"
-                        (pass_pos + !bad) !bad))
-        >>= fun pass ->
-        a_ign_whitespace_nl *> return (B (Auth_user_pass, (user, pass))))
-  <|> fail "reading user/password file failed"
+  pos >>= fun user_pos ->
+  take_till (function '\n' | '\r' -> true | _ -> false) <* a_newline <* commit
+  >>= fun user ->
+  (if String.equal user "" then
+     Fmt.kstr fail
+       "auth-user-pass (byte %d): username is empty, expected on first line!"
+       user_pos
+   else return ())
+  *> pos
+  >>= fun pass_pos ->
+  take_till (function '\n' | '\r' -> true | _ -> false)
+  <* choice [ a_newline; end_of_input ]
+  <* commit
+  >>= fun pass ->
+  (if String.equal pass "" then
+     Fmt.kstr fail
+       "auth-user-pass (byte %d): password is empty, expected on second line!"
+       pass_pos
+   else return ())
+  *> (* OpenVPN only looks at the first two lines and ignores the rest :/ *)
+  skip_many any_char
+  >>= fun () -> return (B (Auth_user_pass, (user, pass)))
 
 let a_auth_retry =
   string "auth-retry" *> a_whitespace
@@ -1608,11 +1574,13 @@ let a_inline =
   *> take_while1 (function 'a' .. 'z' | '0' .. '9' | '-' -> true | _ -> false)
   <* char '>' <* a_newline
   >>= fun tag ->
-  skip_many (a_whitespace_or_comment *> end_of_line)
-  *> take_till (function '<' -> true | _ -> false)
-  >>= fun x ->
-  return (`Inline (tag, x))
-  <* skip_many end_of_line <* char '<' <* char '/' <* string tag <* char '>'
+  let end_tag = Printf.ksprintf string "</%s>" tag in
+  commit
+  *> many_till
+       ( take_till (function '\r' | '\n' -> true | _ -> false) >>= fun line ->
+         choice [ string "\r\n"; string "\n" ] >>| ( ^ ) line )
+       (a_ign_whitespace_no_comment *> end_tag)
+  >>| fun lines -> `Inline (tag, String.concat "" lines)
 
 let a_dhcp_option =
   (string "dhcp-option" *> a_whitespace *> a_single_param
@@ -1789,10 +1757,7 @@ let parse_inline ~file str = function
         if file then Ok str
         else
           let* str =
-            parse_string ~consume:Consume.All
-              (skip_many (a_whitespace_unit <|> a_newline) *> many a_base64_line
-              <* skip_many (a_whitespace_unit <|> a_newline))
-              str
+            parse_string ~consume:Consume.All (many a_base64_line) str
           in
           let str = String.concat "" str in
           Result.map_error

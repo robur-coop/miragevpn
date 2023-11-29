@@ -248,14 +248,29 @@ let auth_user_pass_trailing_whitespace () =
           line!"))
     (common "testuser\r\n\r");
 
+  (* At the server '\x99' will be converted to '_' to protect against
+     "maliciously formed usernames and password string[s]" sent from the
+     client. However, it is valid for the client to send garbage. *)
   Alcotest.(check (result conf_map pmsg))
-    "Accept password with special characters mapped to underscore"
-    (common "testuser\nfoo_bar\n")
+    "Accept password with special characters"
+    (common "testuser\nfoo\x99bar\n")
     (common "testuser\r\nfoo\x99bar\r\n");
 
   Alcotest.(check (result conf_map pmsg))
     "accept trailing whitespace in <auth-user-pass> blocks" expected
-    (common (valid ^ "\n"))
+    (common (valid ^ "\n"));
+
+  Alcotest.(check (result conf_map pmsg))
+    "Accept trailing garbage in <auth-user-pass> blocks" expected
+    (common
+       (valid
+      ^ "\n\
+         never gonna give you up\n\
+         never gonna let you down\n\
+         never gonna run around and desert you\n\
+         never gonna make you cry\n\
+         never gonna say goodbye\n\
+         never gonna tell a lie and hurt you\n"))
 
 let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
