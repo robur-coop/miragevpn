@@ -34,6 +34,20 @@ let string_of_inlineable = function
   | `Tls_crypt_v2 _ -> "tls-crypt-v2"
   | `Peer_fingerprint -> "peer-fingerprint"
 
+let default_inlineable_of_string = function
+  | "auth-user-pass" -> Some `Auth_user_pass
+  | "ca" -> Some `Ca
+  | "connection" -> Some `Connection
+  | "pkcs12" -> Some `Pkcs12
+  | "tls-auth" -> Some (`Tls_auth None)
+  | "cert" -> Some `Tls_cert
+  | "key" -> Some `Tls_key
+  | "secret" -> Some (`Secret None)
+  | "tls-crypt" -> Some `Tls_crypt
+  | "tls-crypt-v2" -> Some (`Tls_crypt_v2 false)
+  | "peer-fingerprint" -> Some `Peer_fingerprint
+  | _ -> None
+
 type inline_or_path =
   [ `Need_inline of inlineable | `Path of string * inlineable ]
 
@@ -1937,19 +1951,8 @@ let parse_next (effect : parser_effect) initial_state :
     (* These are <inlines> that were not declared with an [inline];
        so fill in default values *)
     let* kind =
-      match kind with
-      | "auth-user-pass" -> Ok `Auth_user_pass
-      | "ca" -> Ok `Ca
-      | "connection" -> Ok `Connection
-      | "pkcs12" -> Ok `Pkcs12
-      | "tls-auth" -> Ok (`Tls_auth None)
-      | "cert" -> Ok `Tls_cert
-      | "key" -> Ok `Tls_key
-      | "secret" -> Ok (`Secret None)
-      | "tls-crypt" -> Ok `Tls_crypt
-      | "tls-crypt-v2" -> Ok (`Tls_crypt_v2 false)
-      | "peer-fingerprint" -> Ok `Peer_fingerprint
-      | _ -> Error ("Unknown inline kind " ^ kind)
+      Option.to_result (default_inlineable_of_string kind)
+        ~none:(Printf.sprintf "Unknown inlineable kind %S" kind)
     in
     let* thing = parse_inline ~file:false payload kind in
     resolve_add_conflict acc thing
