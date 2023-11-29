@@ -288,8 +288,10 @@ module Conf_map = struct
         Error (`Msg "only AES-256-CBC supported in static key mode")
       else Ok ()
     else if mem Ca t && mem Peer_fingerprint t then
-      Error (`Msg "While --ca and --peer-fingerprint are not mutually exclusive \
-                   the semantics are unclear to us and thus not implemented")
+      Error
+        (`Msg
+          "While --ca and --peer-fingerprint are not mutually exclusive the \
+           semantics are unclear to us and thus not implemented")
     else Ok ()
 
   let cert_key_or_pkcs12 t =
@@ -454,8 +456,7 @@ module Conf_map = struct
       for i = 0 to Cstruct.length fp - 1 do
         let a, b = Hex.of_char (Cstruct.get fp i) in
         Fmt.pf ppf "%c%c" a b;
-        if i < Cstruct.length fp - 1 then
-          Fmt.pf ppf ":";
+        if i < Cstruct.length fp - 1 then Fmt.pf ppf ":"
       done
     in
     match (k, v) with
@@ -517,8 +518,13 @@ module Conf_map = struct
     | Mute_replay_warnings, () -> p () "mute-replay-warnings"
     | Passtos, () -> p () "passtos"
     | Peer_fingerprint, fps ->
-      p () "peer-fingerprint [inline]\n<peer-fingerprint>\n%a\n</peer-fingerprint>"
-        Fmt.(list ~sep:(any "\n") pp_fingerprint) fps
+        p ()
+          "peer-fingerprint [inline]\n\
+           <peer-fingerprint>\n\
+           %a\n\
+           </peer-fingerprint>"
+          Fmt.(list ~sep:(any "\n") pp_fingerprint)
+          fps
     | Persist_key, () -> p () "persist-key"
     | Persist_tun, () -> p () "persist-tun"
     | Pkcs12, p12 ->
@@ -911,19 +917,18 @@ let a_fingerprint =
   (* We assume SHA256: 32 bytes, so 64 hex digits *)
   let hex_digit =
     any_char >>= function
-    | '0'..'9' | 'a'..'f' | 'A'..'F' as d -> return d
+    | ('0' .. '9' | 'a' .. 'f' | 'A' .. 'F') as d -> return d
     | d -> Fmt.kstr fail "invalid hex character %C" d
   in
   let hex_val = function
-    | '0'..'9' as c -> Char.code c - Char.code '0'
-    | 'a'..'f' as c -> 10 + Char.code c - Char.code 'a'
-    | 'A'..'F' as c -> 10 + Char.code c - Char.code 'A'
+    | '0' .. '9' as c -> Char.code c - Char.code '0'
+    | 'a' .. 'f' as c -> 10 + Char.code c - Char.code 'a'
+    | 'A' .. 'F' as c -> 10 + Char.code c - Char.code 'A'
     | _ -> assert false
   in
   let byte =
     hex_digit >>= fun a ->
-    hex_digit >>| fun b ->
-    hex_val a lsl 4 + hex_val b
+    hex_digit >>| fun b -> (hex_val a lsl 4) + hex_val b
   in
   count 31 (byte <* char ':') >>= fun hd ->
   byte >>| fun tl ->
@@ -933,20 +938,21 @@ let a_fingerprint =
   buf
 
 let a_multi_fingerprint =
-  skip_many (a_whitespace_or_comment *> end_of_line) *>
-  many_till
-    (a_fingerprint <* end_of_line <*
-     skip_many (a_whitespace_or_comment *> end_of_line))
-    end_of_input
-  >>| fun fps ->
-  B (Peer_fingerprint, fps)
+  skip_many (a_whitespace_or_comment *> end_of_line)
+  *> many_till
+       (a_fingerprint <* end_of_line
+       <* skip_many (a_whitespace_or_comment *> end_of_line))
+       end_of_input
+  >>| fun fps -> B (Peer_fingerprint, fps)
 
 let a_peer_fingerprint =
-  string "peer-fingerprint" *> a_whitespace *>
-  choice [
-    string "[inline]" *> return (`Need_inline `Peer_fingerprint);
-    choice [a_fingerprint; fail "Bad fingerprint"] >>| fun fp -> `Entry (B (Peer_fingerprint, [fp]))
-  ]
+  string "peer-fingerprint" *> a_whitespace
+  *> choice
+       [
+         string "[inline]" *> return (`Need_inline `Peer_fingerprint);
+         ( choice [ a_fingerprint; fail "Bad fingerprint" ] >>| fun fp ->
+           `Entry (B (Peer_fingerprint, [ fp ])) );
+       ]
 
 let a_key_direction_option =
   choice
@@ -1778,7 +1784,8 @@ let parse_inline ~file str = function
         else Result.map_error (function `Msg msg -> msg) (Base64.decode str)
       in
       a_pkcs12_payload data
-  | `Peer_fingerprint -> parse_string ~consume:Consume.All a_multi_fingerprint str
+  | `Peer_fingerprint ->
+      parse_string ~consume:Consume.All a_multi_fingerprint str
 
 let eq : eq =
   {
@@ -1953,7 +1960,8 @@ let parse_next (effect : parser_effect) initial_state :
     (* These are <inlines> that were not declared with an [inline];
        so fill in default values *)
     let* kind =
-      Option.to_result (default_inlineable_of_string kind)
+      Option.to_result
+        (default_inlineable_of_string kind)
         ~none:(Printf.sprintf "Unknown inlineable kind %S" kind)
     in
     let* thing = parse_inline ~file:false payload kind in

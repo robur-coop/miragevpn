@@ -644,10 +644,14 @@ let incoming_control_client config rng session channel now op data =
          dedicated ACK as we need to ensure the Control_wkc arrives first *)
       let tls, ch =
         let authenticator =
-          match Config.find Ca config, Config.find Peer_fingerprint config with
+          match
+            (Config.find Ca config, Config.find Peer_fingerprint config)
+          with
           | None, None ->
               Log.warn (fun m ->
-                  m "not authenticating certificate (missing CA and peer-fingerprint)");
+                  m
+                    "not authenticating certificate (missing CA and \
+                     peer-fingerprint)");
               fun ?ip:_ ~host:_ _ -> Ok None
           | Some ca, _ ->
               Log.info (fun m ->
@@ -660,18 +664,18 @@ let incoming_control_client config rng session channel now op data =
                 ca
           | _, Some fps ->
               Logs.info (fun m ->
-                m "authenticating with fingerprints %a"
-                  Fmt.(list ~sep:(any "\n") Hex.pp) (List.map Hex.of_cstruct fps));
+                  m "authenticating with fingerprints %a"
+                    Fmt.(list ~sep:(any "\n") Hex.pp)
+                    (List.map Hex.of_cstruct fps));
               fun ?ip ~host chain ->
                 List.fold_left
                   (fun acc fingerprint ->
-                     match acc with
-                     | Ok _ -> acc
-                     | Error _ ->
-                       X509.Validation.trust_cert_fingerprint
-                         ~time:(fun () -> Some now)
-                         ~hash:`SHA256 ~fingerprint
-                         ?ip ~host chain)
+                    match acc with
+                    | Ok _ -> acc
+                    | Error _ ->
+                        X509.Validation.trust_cert_fingerprint
+                          ~time:(fun () -> Some now)
+                          ~hash:`SHA256 ~fingerprint ?ip ~host chain)
                   (Error (`Msg "No fingerprints provided"))
                   fps
         and certificates =
