@@ -990,14 +990,16 @@ let a_tls_crypt_v2 =
 let tls_crypt_v2_client_pem_name = "OpenVPN tls-crypt-v2 client key"
 let tls_crypt_v2_server_pem_name = "OpenVPN tls-crypt-v2 server key"
 
+let a_base64_line =
+  take_while (function
+    | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' | '=' -> true
+    | _ -> false)
+  <* (end_of_line <|> fail "Invalid base64 character")
+
 let inline_pem_payload pem_name element =
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
   *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline <|> fail "FIXME")
-  *> many_till
-       (take_while (function
-          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '+' | '/' | '=' -> true
-          | _ -> false)
-       <* (end_of_line <|> fail "Invalid base64 character"))
+  *> many_till a_base64_line
        (string ("-----END " ^ pem_name ^ "-----") *> a_newline
        <|> fail "Missing END mark")
   <* commit
@@ -1536,6 +1538,10 @@ let a_remote :
 
 let a_remote_entry = a_remote
 
+let a_connection =
+  skip_many (a_whitespace_or_comment <|> a_newline) *> a_remote_entry
+  <* skip_many (a_whitespace_or_comment <|> a_newline)
+
 let a_network_or_gateway =
   choice
     [
@@ -1761,7 +1767,7 @@ let parse_inline ~file str = function
       (* TODO basically a Connection block is a subset of Conf_map.t,
          we should use the same parser.*)
       let* (`Remote (host, port, proto)) =
-        parse_string ~consume:Consume.All a_remote str
+        parse_string ~consume:Consume.All a_connection str
       in
       (* TODO consult `Proto and `Proto_force *)
       let proto = match proto with None -> `Udp | Some x -> x in
@@ -1781,7 +1787,17 @@ let parse_inline ~file str = function
       (* pkcs12 files are usually DER-encoded, but when inlined have a base64 encoding (as specified in the openvpn man page) *)
       let* data =
         if file then Ok str
-        else Result.map_error (function `Msg msg -> msg) (Base64.decode str)
+        else
+          let* str =
+            parse_string ~consume:Consume.All
+              (skip_many (a_whitespace_unit <|> a_newline) *> many a_base64_line
+              <* skip_many (a_whitespace_unit <|> a_newline))
+              str
+          in
+          let str = String.concat "" str in
+          Result.map_error
+            (function `Msg msg -> "Bad base64: " ^ msg)
+            (Base64.decode str)
       in
       a_pkcs12_payload data
   | `Peer_fingerprint ->
