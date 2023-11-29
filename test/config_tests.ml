@@ -227,35 +227,44 @@ let auth_user_pass_trailing_whitespace () =
 
   Alcotest.(check (result conf_map pmsg))
     "reject empty username"
-    (Error
-       (`Msg
-         ": auth-user-pass (byte 0): username is empty, expected on first line!"))
+    (Error (`Msg ": auth-user-pass: username is empty, expected on first line!"))
     (common "\r\ntestpass\n");
 
   Alcotest.(check (result conf_map pmsg))
     "reject empty password"
     (Error
-       (`Msg
-         ": auth-user-pass (byte 9): password is empty, expected on second \
-          line!"))
+       (`Msg ": auth-user-pass: password is empty, expected on second line!"))
     (common "testuser\n");
 
   Alcotest.(check (result conf_map pmsg))
     "reject empty Windows-style password"
     (Error
-       (`Msg
-         ": auth-user-pass (byte 10): password is empty, expected on second \
-          line!"))
+       (`Msg ": auth-user-pass: password is empty, expected on second line!"))
     (common "testuser\r\n\r");
 
+  (* At the server '\x99' will be converted to '_' to protect against
+     "maliciously formed usernames and password string[s]" sent from the
+     client. However, it is valid for the client to send garbage. *)
   Alcotest.(check (result conf_map pmsg))
-    "Accept password with special characters mapped to underscore"
-    (common "testuser\nfoo_bar\n")
+    "Accept password with special characters"
+    (common "testuser\nfoo\x99bar\n")
     (common "testuser\r\nfoo\x99bar\r\n");
 
   Alcotest.(check (result conf_map pmsg))
     "accept trailing whitespace in <auth-user-pass> blocks" expected
-    (common (valid ^ "\n"))
+    (common (valid ^ "\n"));
+
+  Alcotest.(check (result conf_map pmsg))
+    "Accept trailing garbage in <auth-user-pass> blocks" expected
+    (common
+       (valid
+      ^ "\n\
+         never gonna give you up\n\
+         never gonna let you down\n\
+         never gonna run around and desert you\n\
+         never gonna make you cry\n\
+         never gonna say goodbye\n\
+         never gonna tell a lie and hurt you\n"))
 
 let rport_precedence () =
   (* NOTE: at the moment this is expected to fail because we do not implement
