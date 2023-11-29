@@ -714,6 +714,20 @@ let server_tls_crypt_v2 () =
         "second part of server key" b (Cstruct.to_string b');
       Alcotest.(check bool) "force-cookie" true force_cookie
 
+let inlineables_no_inline () =
+  let data = string_of_file "inline-all.conf" in
+  let string_of_file path =
+    error_msgf
+      "this test suite does not read external files, but a config asked for: %S"
+      path
+  in
+  (* This test is only to ensure we handle all "<inlineable>" blocks without a
+     "inlineable [inline]". *)
+  match Miragevpn.Config.parse ~string_of_file data with
+  | Ok _ -> ()
+  | Error (`Msg e) ->
+      Alcotest.failf "Expected parser to succeed, but got error: %s" e
+
 let tests =
   [
     ("minimal client config", `Quick, ok_minimal_client);
@@ -796,6 +810,9 @@ let tests =
        `Quick,
        parse_server_configuration
          "wild-server.conf" ); not there yet, needs: dev-node writepid ping-timer-rem client-config-dir *)
+    ( "parsing a file with only <inlineable></inlineable> blocks",
+      `Quick,
+      inlineables_no_inline );
   ]
 
 let tests = [ ("Config tests", tests) ]
