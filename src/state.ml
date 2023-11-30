@@ -139,7 +139,7 @@ type action =
   | `Disconnect
   | `Exit
   | `Established of ip_config * int
-  | `Payload of Cstruct.t list ]
+  | `Payload of Cstruct.t ]
 
 let pp_ip_version ppf = function
   | `Ipv4 -> Fmt.string ppf "ipv4"
@@ -159,8 +159,7 @@ let pp_action ppf = function
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) ->
       Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
-  | `Payload xs ->
-      Fmt.pf ppf "payload %d (%d bytes)" (List.length xs) (Cstruct.lenv xs)
+  | `Payload x -> Fmt.pf ppf "payload (%d bytes)" (Cstruct.length x)
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with
@@ -411,6 +410,84 @@ let channel_of_keyid keyid s =
             in
             Some (channel, set)
         | _ -> None)
+
+let transition_to_established t =
+  match t.state with
+  | Client_tls_auth { state = Handshaking _; tls_auth } ->
+      let compress =
+        match Config.find Comp_lzo t.config with
+        | None -> false
+        | Some () -> true
+      in
+      let session = { t.session with compress }
+      and mtu = data_mtu t.config t.session in
+      ( { t with state = Client_tls_auth { state = Ready; tls_auth }; session },
+        Some mtu )
+  | Client_tls_crypt { state = Handshaking _; tls_crypt } ->
+      let compress =
+        match Config.find Comp_lzo t.config with
+        | None -> false
+        | Some () -> true
+      in
+      let session = { t.session with compress }
+      and mtu = data_mtu t.config t.session in
+      ( { t with state = Client_tls_crypt { state = Ready; tls_crypt }; session },
+        Some mtu )
+  | Client_tls_crypt_v2 { state = Handshaking _; tls_crypt } ->
+      let compress =
+        match Config.find Comp_lzo t.config with
+        | None -> false
+        | Some () -> true
+      in
+      let session = { t.session with compress }
+      and mtu = data_mtu t.config t.session in
+      ( {
+          t with
+          state = Client_tls_crypt_v2 { state = Ready; tls_crypt };
+          session;
+        },
+        Some mtu )
+  | Client_tls_auth { state = Rekeying _; tls_auth } ->
+      (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+      let lame_duck = Some (t.channel, t.ts ()) in
+      ( { t with state = Client_tls_auth { state = Ready; tls_auth }; lame_duck },
+        None )
+  | Client_tls_crypt { state = Rekeying _; tls_crypt } ->
+      (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+      let lame_duck = Some (t.channel, t.ts ()) in
+      ( {
+          t with
+          state = Client_tls_crypt { state = Ready; tls_crypt };
+          lame_duck;
+        },
+        None )
+  | Client_tls_crypt_v2 { state = Rekeying _; tls_crypt } ->
+      (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
+      let lame_duck = Some (t.channel, t.ts ()) in
+      ( {
+          t with
+          state = Client_tls_crypt_v2 { state = Ready; tls_crypt };
+          lame_duck;
+        },
+        None )
+  | Server_tls_auth { state = Server_handshaking; tls_auth } ->
+      let mtu = data_mtu t.config t.session in
+      ( { t with state = Server_tls_auth { state = Server_ready; tls_auth } },
+        Some mtu )
+  | Server_tls_auth { state = Server_rekeying _; tls_auth } ->
+      (* TODO: may cipher (i.e. mtu) or compress (or IP?) change between rekeys? *)
+      let lame_duck = Some (t.channel, t.ts ()) in
+      ( {
+          t with
+          state = Server_tls_auth { state = Server_ready; tls_auth };
+          lame_duck;
+        },
+        None )
+  | Client_tls_auth _ -> assert false
+  | Client_tls_crypt _ -> assert false
+  | Client_tls_crypt_v2 _ -> assert false
+  | Server_tls_auth _ -> assert false
+  | Client_static _ -> assert false
 
 type server = {
   server_config : Config.t;

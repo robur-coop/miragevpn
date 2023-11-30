@@ -187,6 +187,16 @@ let decode_control ~hmac_len buf =
   and payload = Cstruct.shift buf (off + 4) in
   (header, sequence_number, payload)
 
+let decode_ack_or_control op ~hmac_len buf =
+  let open Result.Syntax in
+  match op with
+  | Ack ->
+      let+ ack = decode_ack ~hmac_len buf in
+      `Ack ack
+  | _ ->
+      let+ control = decode_control ~hmac_len buf in
+      `Control (op, control)
+
 let encode_control (header, sequence_number, payload) =
   let hdr_buf, len = encode_header header in
   let sequence_number_buf = Cstruct.create 4 in
@@ -419,6 +429,16 @@ module Tls_crypt = struct
     and payload = Cstruct.shift buf (off + 4) in
     (hdr, sequence_number, payload)
 
+  let decode_decrypted_ack_or_control clear_hdr op buf =
+    let open Result.Syntax in
+    match op with
+    | Ack ->
+        let+ hdr = decode_decrypted_ack clear_hdr buf in
+        `Ack hdr
+    | _ ->
+        let+ control = decode_decrypted_control clear_hdr buf in
+        `Control (op, control)
+
   let decode_cleartext_header buf =
     let open Result.Syntax in
     (* header up till acked sequence numbers *)
@@ -427,7 +447,8 @@ module Tls_crypt = struct
     and replay_id = Cstruct.BE.get_uint32 buf 8
     and timestamp = Cstruct.BE.get_uint32 buf 12
     and hmac = Cstruct.sub buf 16 hmac_len in
-    ({ local_session; replay_id; timestamp; hmac }, clear_hdr_len)
+    ( { local_session; replay_id; timestamp; hmac },
+      Cstruct.shift buf clear_hdr_len )
 end
 
 type ack = [ `Ack of header ]

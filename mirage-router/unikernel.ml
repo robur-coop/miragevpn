@@ -244,73 +244,68 @@ struct
 
   (* packets received over the tunnel *)
   let rec ovpn_recv t =
-    O.read t.ovpn >>= fun datas ->
+    O.read t.ovpn >>= fun data ->
     let ts = M.elapsed_ns () in
-    Lwt_list.fold_left_s
-      (fun c data ->
-        match Ipv4_packet.Unmarshal.of_cstruct data with
-        | Ok (hdr, payload) ->
-            let c, pkt = Fragments.process c ts hdr payload in
-            (match pkt with
-            | None -> ()
-            | Some (hdr, payload) ->
-                if local_network hdr.Ipv4_packet.dst then
-                  match Ipv4_packet.(Unmarshal.int_to_protocol hdr.proto) with
-                  | None ->
-                      Logs.warn (fun m ->
-                          m "ignoring %a (cannot decode IP protocol number)"
-                            Ipv4_packet.pp hdr)
-                  | Some proto -> (
-                      match
-                        forward_or_reject hdr payload
-                          (I.mtu t.private_ip ~dst:hdr.Ipv4_packet.dst)
-                      with
-                      | Ok hdr ->
-                          Lwt.async (fun () ->
-                              (* The IPv4.write here takes care of fragmenting the packet*)
-                              I.write t.private_ip ~ttl:hdr.Ipv4_packet.ttl
-                                ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst
-                                proto
-                                (fun _ -> 0)
-                                [ payload ]
-                              >|= function
-                              | Ok () -> ()
-                              | Error _e ->
-                                  (* could send back host unreachable if this was an arp timeout *)
-                                  (* Logs.err (fun m -> m "error %a while forwarding %a"
-                                                 I.pp_error e Ipv4_packet.pp hdr)) *)
-                                  ())
-                      | Error (`Icmp pay) ->
-                          (* send icmp error back via ovpn *)
-                          let hdr =
-                            {
-                              hdr with
-                              Ipv4_packet.ttl = 255;
-                              src = List.hd (I.get_ip t.private_ip);
-                              (* or which ip should be used? *)
-                              dst = hdr.Ipv4_packet.src;
-                              proto = Ipv4_packet.Marshal.protocol_to_int `ICMP;
-                            }
-                          in
-                          let payload_len = Cstruct.length pay in
-                          let hdr_cs =
-                            Ipv4_packet.Marshal.make_cstruct ~payload_len hdr
-                          in
-                          Lwt.async (fun () ->
-                              O.write t.ovpn (Cstruct.append hdr_cs pay)
-                              >|= fun _ -> ())
-                      | Error `Drop -> ())
-                else
-                  (* Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
-                                Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (Key_gen.private_ipv4 ())) *)
-                  ());
-            Lwt.return c
-        | Error msg ->
-            Logs.err (fun m ->
-                m "failed to decode ipv4 packet %s: %a" msg Cstruct.hexdump_pp
-                  data);
-            Lwt.return c)
-      t.ovpn_fragments datas
+    (match Ipv4_packet.Unmarshal.of_cstruct data with
+    | Ok (hdr, payload) ->
+        let c, pkt = Fragments.process t.ovpn_fragments ts hdr payload in
+        (match pkt with
+        | None -> ()
+        | Some (hdr, payload) ->
+            if local_network hdr.Ipv4_packet.dst then
+              match Ipv4_packet.(Unmarshal.int_to_protocol hdr.proto) with
+              | None ->
+                  Logs.warn (fun m ->
+                      m "ignoring %a (cannot decode IP protocol number)"
+                        Ipv4_packet.pp hdr)
+              | Some proto -> (
+                  match
+                    forward_or_reject hdr payload
+                      (I.mtu t.private_ip ~dst:hdr.Ipv4_packet.dst)
+                  with
+                  | Ok hdr ->
+                      Lwt.async (fun () ->
+                          (* The IPv4.write here takes care of fragmenting the packet*)
+                          I.write t.private_ip ~ttl:hdr.Ipv4_packet.ttl
+                            ~src:hdr.Ipv4_packet.src hdr.Ipv4_packet.dst proto
+                            (fun _ -> 0)
+                            [ payload ]
+                          >|= function
+                          | Ok () -> ()
+                          | Error _e ->
+                              (* could send back host unreachable if this was an arp timeout *)
+                              (* Logs.err (fun m -> m "error %a while forwarding %a"
+                                             I.pp_error e Ipv4_packet.pp hdr)) *)
+                              ())
+                  | Error (`Icmp pay) ->
+                      (* send icmp error back via ovpn *)
+                      let hdr =
+                        {
+                          hdr with
+                          Ipv4_packet.ttl = 255;
+                          src = List.hd (I.get_ip t.private_ip);
+                          (* or which ip should be used? *)
+                          dst = hdr.Ipv4_packet.src;
+                          proto = Ipv4_packet.Marshal.protocol_to_int `ICMP;
+                        }
+                      in
+                      let payload_len = Cstruct.length pay in
+                      let hdr_cs =
+                        Ipv4_packet.Marshal.make_cstruct ~payload_len hdr
+                      in
+                      Lwt.async (fun () ->
+                          O.write t.ovpn (Cstruct.append hdr_cs pay)
+                          >|= fun _ -> ())
+                  | Error `Drop -> ())
+            else
+              (* Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
+                            Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (Key_gen.private_ipv4 ())) *)
+              ());
+        Lwt.return c
+    | Error msg ->
+        Logs.err (fun m ->
+            m "failed to decode ipv4 packet %s: %a" msg Cstruct.hexdump_pp data);
+        Lwt.return t.ovpn_fragments)
     >>= fun frags ->
     t.ovpn_fragments <- frags;
     ovpn_recv t
