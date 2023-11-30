@@ -1027,11 +1027,11 @@ let pp_error ppf = function
       Fmt.pf ppf "non monotonic sequence number: expected %lu, received %lu"
         expected received
   | `Mismatch_their_session_id (expected, received) ->
-      Fmt.pf ppf "mismatched their session id: expected %Lu, received %Lu"
+      Fmt.pf ppf "mismatched their session id: expected %016LX, received %016LX"
         expected received
   | `Mismatch_my_session_id (expected, received) ->
-      Fmt.pf ppf "mismatched my session id: expected %Lu, received %Lu" expected
-        received
+      Fmt.pf ppf "mismatched my session id: expected %016LX, received %016LX"
+        expected received
   | `Bad_mac (state, computed, data) ->
       Fmt.pf ppf "bad mac: computed %a data %a@ (state %a)" Cstruct.hexdump_pp
         computed Packet.pp data pp state

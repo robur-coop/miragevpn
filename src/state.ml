@@ -222,8 +222,8 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
 
 let pp_session ppf t =
   Fmt.pf ppf
-    "compression %B@ protocol %a@ my session %Lu@ replay %lu@ their session \
-     %Lu@ replay %lu"
+    "compression %B@ protocol %a@ my session %016LX@ replay %lu@ their session \
+     %016LX@ replay %lu"
     t.compress pp_proto t.protocol t.my_session_id t.my_replay_id
     t.their_session_id t.their_replay_id
 
