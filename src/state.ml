@@ -268,9 +268,8 @@ type tls_crypt = {
 
 type state =
   | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
-  | Client_tls_crypt of { tls_crypt : tls_crypt; state : client_state }
-  | Client_tls_crypt_v2 of {
-      tls_crypt : tls_crypt * Cstruct.t;
+  | Client_tls_crypt of {
+      tls_crypt : tls_crypt * Cstruct.t option;
       state : client_state;
     }
   | Client_static of { keys : keys; state : client_state }
@@ -279,9 +278,9 @@ type state =
 let pp_state ppf = function
   | Client_tls_auth { state; _ } ->
       Fmt.pf ppf "client tls-auth %a" pp_client_state state
-  | Client_tls_crypt { state; _ } ->
+  | Client_tls_crypt { state; tls_crypt = _, None } ->
       Fmt.pf ppf "client tls-crypt %a" pp_client_state state
-  | Client_tls_crypt_v2 { state; _ } ->
+  | Client_tls_crypt { state; tls_crypt = _, Some _ } ->
       Fmt.pf ppf "client tls-crypt-v2 %a" pp_client_state state
   | Client_static { state; _ } ->
       Fmt.pf ppf "client static %a" pp_client_state state
@@ -369,7 +368,7 @@ let control_mtu config state session =
     | Client_tls_auth _ | Server_tls_auth _ ->
         (* here, the hash is used from auth *)
         Config.get Auth config |> Mirage_crypto.Hash.digest_size
-    | Client_tls_crypt _ | Client_tls_crypt_v2 _ ->
+    | Client_tls_crypt _ ->
         (* AES_CTR and SHA256 *)
         Mirage_crypto.Hash.SHA256.digest_size
   in
@@ -433,20 +432,6 @@ let transition_to_established t =
       and mtu = data_mtu t.config t.session in
       ( { t with state = Client_tls_crypt { state = Ready; tls_crypt }; session },
         Some mtu )
-  | Client_tls_crypt_v2 { state = Handshaking _; tls_crypt } ->
-      let compress =
-        match Config.find Comp_lzo t.config with
-        | None -> false
-        | Some () -> true
-      in
-      let session = { t.session with compress }
-      and mtu = data_mtu t.config t.session in
-      ( {
-          t with
-          state = Client_tls_crypt_v2 { state = Ready; tls_crypt };
-          session;
-        },
-        Some mtu )
   | Client_tls_auth { state = Rekeying _; tls_auth } ->
       (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
       let lame_duck = Some (t.channel, t.ts ()) in
@@ -458,15 +443,6 @@ let transition_to_established t =
       ( {
           t with
           state = Client_tls_crypt { state = Ready; tls_crypt };
-          lame_duck;
-        },
-        None )
-  | Client_tls_crypt_v2 { state = Rekeying _; tls_crypt } ->
-      (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-      let lame_duck = Some (t.channel, t.ts ()) in
-      ( {
-          t with
-          state = Client_tls_crypt_v2 { state = Ready; tls_crypt };
           lame_duck;
         },
         None )
@@ -485,7 +461,6 @@ let transition_to_established t =
         None )
   | Client_tls_auth _ -> assert false
   | Client_tls_crypt _ -> assert false
-  | Client_tls_crypt_v2 _ -> assert false
   | Server_tls_auth _ -> assert false
   | Client_static _ -> assert false
 
