@@ -1500,15 +1500,15 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
   in
   (session, transport, List.rev outs)
 
-let wrap_tls_crypt_control now ts mtu session tls_crypt wkc_opt needs_wkc key
-    transport outs =
+let wrap_tls_crypt_control now ts mtu session tls_crypt needs_wkc key transport
+    outs =
   let now_ts = ptime_to_ts_exn now in
   (* If we reply with hmac cookie we must split such that the first control
      packet, the Control_wkc has room for the /cleartext/ wkc, and fix the
      packet length afterwards *)
   let session, transport, maybe_out, outs =
-    match (wkc_opt, needs_wkc, outs) with
-    | Some wkc, true, (`Control, data) :: rest ->
+    match (needs_wkc, outs) with
+    | Some wkc, (`Control, data) :: rest ->
         let acks = bytes_of_acks transport in
         let l = min (mtu - acks - Cstruct.length wkc) (Cstruct.length data) in
         let data, data' = Cstruct.split data l in
@@ -1529,15 +1529,11 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt wkc_opt needs_wkc key
         let proto = Packet.encode_protocol session.protocol len in
         Cstruct.blit proto 0 out 0 (Cstruct.length proto);
         (session, transport, Some out, rest)
-    | Some _, true, _ ->
+    | Some _, _ ->
         Log.err (fun m ->
             m "wrap_tls_crypt_control: expected control to append wkc");
         assert false
-    | None, true, _ ->
-        Log.warn (fun m ->
-            m "wrap_tls_crypt_control: server wants wkc from tls-crypt client");
-        (session, transport, None, outs)
-    | _, false, _ -> (session, transport, None, outs)
+    | None, _ -> (session, transport, None, outs)
   in
   (* we split the remainder control packets *)
   let acks = bytes_of_acks transport in
@@ -1760,10 +1756,14 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       op decrypted
                   in
                   let* needs_wkc =
-                    match p with
-                    | `Control (Packet.Hard_reset_server_v2, (_, _, data)) ->
-                        Packet.decode_early_negotiation_tlvs data
-                    | _ -> Ok false
+                    match (p, wkc_opt) with
+                    | ( `Control (Packet.Hard_reset_server_v2, (_, _, data)),
+                        Some wkc ) ->
+                        let+ needs_wkc =
+                          Packet.decode_early_negotiation_tlvs data
+                        in
+                        if needs_wkc then Some wkc else None
+                    | _ -> Ok None
                   in
                   let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
                   let computed_hmac =
@@ -1811,8 +1811,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                           in
                           let session, transport, encs =
                             wrap_tls_crypt_control (state.now ()) (state.ts ())
-                              my_mtu state.session tls_crypt wkc_opt needs_wkc
-                              key ch.transport out'
+                              my_mtu state.session tls_crypt needs_wkc key
+                              ch.transport out'
                           in
                           let out = out @ encs
                           and ch = { ch with transport }
