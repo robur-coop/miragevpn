@@ -473,10 +473,11 @@ let transition_to_established t =
             lame_duck;
           },
           None )
-  | state ->
+  | (Client_tls_auth _ | Client_tls_crypt _ | Server_tls_auth _) as state ->
       Error
         (`Msg
           (Fmt.str "couldn't transition to established, state %a" pp_state state))
+  | Client_static _ -> assert false
 
 type server = {
   server_config : Config.t;
