@@ -282,7 +282,7 @@ type action =
   | `Disconnect
   | `Exit
   | `Established of ip_config * int
-  | `Payload of Cstruct.t list ]
+  | `Payload of Cstruct.t ]
 
 val pp_action : action Fmt.t
 
@@ -319,7 +319,7 @@ val handle :
   t ->
   ?is_not_taken:(Ipaddr.V4.t -> bool) ->
   event ->
-  (t * Cstruct.t list * action option, error) result
+  (t * Cstruct.t list * action list, error) result
 (** [handle t ~is_not_taken event] handles the [event] with the state [t]. If
     [t] is a server session, [~is_not_taken] must be provided to avoid IP
     address collisions. *)

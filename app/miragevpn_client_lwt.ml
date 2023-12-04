@@ -229,7 +229,7 @@ type conn = {
   mutable peer :
     [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
-  data_mvar : Cstruct.t list Lwt_mvar.t;
+  data_mvar : Cstruct.t Lwt_mvar.t;
   est_mvar : (Miragevpn.ip_config * int, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
@@ -290,12 +290,12 @@ let rec event conn =
   | Error e ->
       Logs.err (fun m -> m "miragevpn handle failed: %a" Miragevpn.pp_error e);
       Lwt_mvar.put conn.est_mvar (Error ()) >>= fun () -> Lwt.return_unit
-  | Ok (t', outs, action) ->
+  | Ok (t', outs, actions) ->
       conn.o_client <- t';
-      Option.iter
+      List.iter
         (fun a ->
           Logs.debug (fun m -> m "handling action %a" Miragevpn.pp_action a))
-        action;
+        actions;
       (match outs with
       | [] -> ()
       | _ ->
@@ -303,9 +303,7 @@ let rec event conn =
               transmit outs conn.peer >>= function
               | true -> Lwt.return_unit
               | false -> Lwt_mvar.put conn.event_mvar `Connection_failed));
-      (match action with
-      | None -> ()
-      | Some a -> Lwt.async (fun () -> handle_action conn a));
+      List.iter (fun a -> Lwt.async (fun () -> handle_action conn a)) actions;
       event conn
 
 let send_recv conn config ip_config _mtu =
@@ -313,15 +311,12 @@ let send_recv conn config ip_config _mtu =
   | Error (`Msg msg) -> failwith ("error opening tun " ^ msg)
   | Ok (_, tun_fd) ->
       let rec process_incoming () =
-        Lwt_mvar.take conn.data_mvar >>= fun app_data ->
-        Lwt_list.for_all_p
-          (fun pkt ->
-            (* not using write_to_fd here because partial writes to a tun
-               interface are semantically different from single write()s: *)
-            Lwt_cstruct.write tun_fd pkt >|= function
-            | written when written = Cstruct.length pkt -> true
-            | _ -> false)
-          app_data
+        ( Lwt_mvar.take conn.data_mvar >>= fun pkt ->
+          (* not using write_to_fd here because partial writes to a tun
+             interface are semantically different from single write()s: *)
+          Lwt_cstruct.write tun_fd pkt >|= function
+          | written when written = Cstruct.length pkt -> true
+          | _ -> false )
         >>= function
         | true -> process_incoming ()
         | false -> Lwt_result.fail (`Msg "partial write to tun interface")

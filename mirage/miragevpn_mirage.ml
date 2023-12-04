@@ -84,6 +84,60 @@ struct
                 t.connections <- IPM.remove dst t.connections
             | Ok () -> ()))
 
+  let handle_action t dst add rm acc action =
+    match acc with
+    | `Stop -> `Stop
+    | `Continue ip -> (
+        match action with
+        | `Established ({ Miragevpn.cidr; _ }, _) ->
+            Log.info (fun m ->
+                m "%a insert ip %a, registering flow" pp_dst dst
+                  Ipaddr.V4.Prefix.pp cidr);
+            let ip = Ipaddr.V4.Prefix.address cidr in
+            add ip;
+            `Continue (Some ip)
+        | `Exit ->
+            rm ();
+            Log.info (fun m -> m "%a exiting" pp_dst dst);
+            `Stop
+        | `Payload data ->
+            (match Ipv4_packet.Unmarshal.of_cstruct data with
+            | Error e ->
+                Log.warn (fun m ->
+                    m "%a received payload (error %s) %a" pp_dst dst e
+                      Cstruct.hexdump_pp data)
+            | Ok (ip, payload)
+              when ip.Ipv4_packet.proto
+                   = Ipv4_packet.Marshal.protocol_to_int `ICMP
+                   && Ipaddr.V4.compare ip.Ipv4_packet.dst (fst t.ip) = 0 -> (
+                (* also check for icmp echo request! *)
+                match Icmpv4_packet.Unmarshal.of_cstruct payload with
+                | Ok (icmp, payload) ->
+                    let reply =
+                      { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
+                    and ip' = { ip with src = ip.dst; dst = ip.src } in
+                    let data =
+                      Cstruct.append
+                        (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
+                        payload
+                    in
+                    let hdr =
+                      Ipv4_packet.Marshal.make_cstruct
+                        ~payload_len:(Cstruct.length data) ip'
+                    in
+                    Lwt.async (fun () ->
+                        write t ip.src (Cstruct.append hdr data))
+                | Error e ->
+                    Log.warn (fun m ->
+                        m "ignoring icmp frame from, decoding error %s" e))
+            | Ok (ip, _) ->
+                Log.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip));
+            `Continue ip
+        | a ->
+            Log.warn (fun m ->
+                m "%a ignoring action %a" pp_dst dst Miragevpn.pp_action a);
+            `Continue ip)
+
   let callback t flow =
     let is_not_taken ip = not (IPM.mem ip t.connections) in
     let client_state = ref (Miragevpn.new_connection t.server) in
@@ -98,6 +152,8 @@ struct
                 m "%a removing ip %a from connections" pp_dst dst Ipaddr.V4.pp
                   ip);
             t.connections <- IPM.remove ip t.connections
+      and add ip =
+        t.connections <- IPM.add ip (f, client_state) t.connections
       in
       TCP.read f >>= function
       | Error e ->
@@ -117,77 +173,12 @@ struct
                     Miragevpn.pp_error msg);
               rm ();
               Lwt.return_unit
-          | Ok (s', out, action) -> (
+          | Ok (s', out, actions) -> (
               client_state := s';
               let ip =
-                match action with
-                | Some (`Established ({ Miragevpn.cidr; _ }, _)) ->
-                    Log.info (fun m ->
-                        m "%a insert ip %a, registering flow" pp_dst dst
-                          Ipaddr.V4.Prefix.pp cidr);
-                    let ip = Ipaddr.V4.Prefix.address cidr in
-                    t.connections <- IPM.add ip (f, client_state) t.connections;
-                    `Continue (Some ip)
-                | Some `Exit ->
-                    rm ();
-                    Log.info (fun m -> m "%a exiting" pp_dst dst);
-                    `Stop
-                | Some (`Payload datas) ->
-                    List.iter
-                      (fun data ->
-                        match Ipv4_packet.Unmarshal.of_cstruct data with
-                        | Error e ->
-                            Log.warn (fun m ->
-                                m "%a received payload (error %s) %a" pp_dst dst
-                                  e Cstruct.hexdump_pp data)
-                        | Ok (ip, payload)
-                          when ip.Ipv4_packet.proto
-                               = Ipv4_packet.Marshal.protocol_to_int `ICMP
-                               && Ipaddr.V4.compare ip.Ipv4_packet.dst
-                                    (fst t.ip)
-                                  = 0 -> (
-                            (* also check for icmp echo request! *)
-                            match
-                              Icmpv4_packet.Unmarshal.of_cstruct payload
-                            with
-                            | Ok (icmp, payload) ->
-                                let reply =
-                                  {
-                                    icmp with
-                                    Icmpv4_packet.ty = Icmpv4_wire.Echo_reply;
-                                  }
-                                and ip' =
-                                  { ip with src = ip.dst; dst = ip.src }
-                                in
-                                let data =
-                                  Cstruct.append
-                                    (Icmpv4_packet.Marshal.make_cstruct ~payload
-                                       reply)
-                                    payload
-                                in
-                                let hdr =
-                                  Ipv4_packet.Marshal.make_cstruct
-                                    ~payload_len:(Cstruct.length data) ip'
-                                in
-                                Lwt.async (fun () ->
-                                    write t ip.src (Cstruct.append hdr data))
-                            | Error e ->
-                                Log.warn (fun m ->
-                                    m
-                                      "ignoring icmp frame from, decoding \
-                                       error %s"
-                                      e))
-                        | Ok (ip, _) ->
-                            Log.warn (fun m ->
-                                m "ignoring ipv4 frame %a" Ipv4_packet.pp ip))
-                      datas;
-                    `Continue ip
-                | Some a ->
-                    Log.warn (fun m ->
-                        m "%a ignoring action %a" pp_dst dst Miragevpn.pp_action
-                          a);
-                    `Continue ip
-                | None -> `Continue ip
+                List.fold_left
+                  (handle_action t dst add rm)
+                  (`Continue ip) actions
               in
               TCP.writev f out >>= function
               | Error e ->
@@ -211,24 +202,25 @@ struct
         | Error e ->
             Log.err (fun m -> m "error in timer %a" Miragevpn.pp_error e);
             Lwt.return acc
-        | Ok (_, _, Some `Exit) ->
-            Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
-            Lwt.return acc
-        | Ok (t', out, act) -> (
-            (* TODO anything to do with "_act"? (apart from exit) *)
-            (match act with
-            | None -> ()
-            | Some a ->
-                Log.warn (fun m ->
-                    m "in timer, ignoring action %a" Miragevpn.pp_action a));
-            t := t';
-            TCP.writev flow out >|= function
-            | Error e ->
-                Log.err (fun m ->
-                    m "%a TCP write failed %a" Ipaddr.V4.pp k TCP.pp_write_error
-                      e);
-                acc
-            | Ok () -> IPM.add k (flow, t) acc))
+        | Ok (t', out, acts) ->
+            if List.mem `Exit acts then (
+              Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
+              Lwt.return acc)
+            else (
+              (* TODO anything to do with "_act"? (apart from exit) *)
+              List.iter
+                (fun a ->
+                  Log.warn (fun m ->
+                      m "in timer, ignoring action %a" Miragevpn.pp_action a))
+                acts;
+              t := t';
+              TCP.writev flow out >|= function
+              | Error e ->
+                  Log.err (fun m ->
+                      m "%a TCP write failed %a" Ipaddr.V4.pp k
+                        TCP.pp_write_error e);
+                  acc
+              | Ok () -> IPM.add k (flow, t) acc))
       server.connections (Lwt.return IPM.empty)
     >>= fun connections ->
     server.connections <- connections;
@@ -265,7 +257,7 @@ struct
     mutable o_client : Miragevpn.t;
     mutable peer :
       [ `Udp of UDP.t * (int * Ipaddr.t * int) | `Tcp of TCP.flow ] option;
-    data_mvar : Cstruct.t list Lwt_mvar.t;
+    data_mvar : Cstruct.t Lwt_mvar.t;
     est_mvar : (Miragevpn.ip_config * int) Lwt_mvar.t;
     event_mvar : Miragevpn.event Lwt_mvar.t;
   }
@@ -462,12 +454,12 @@ struct
     | Error e ->
         Log.err (fun m -> m "miragevpn handle failed %a" Miragevpn.pp_error e);
         Lwt.return_unit
-    | Ok (t', outs, action) ->
+    | Ok (t', outs, actions) ->
         conn.o_client <- t';
-        Option.iter
+        List.iter
           (fun a ->
             Log.debug (fun m -> m "handling action %a" Miragevpn.pp_action a))
-          action;
+          actions;
         (match outs with
         | [] -> ()
         | _ ->
@@ -475,9 +467,9 @@ struct
                 transmit conn.peer outs >>= function
                 | true -> Lwt.return_unit
                 | false -> Lwt_mvar.put conn.event_mvar `Connection_failed));
-        (match action with
-        | None -> ()
-        | Some a -> Lwt.async (fun () -> handle_action s conn a));
+        List.iter
+          (fun a -> Lwt.async (fun () -> handle_action s conn a))
+          actions;
         event s conn
 
   let connect config s =
@@ -654,11 +646,10 @@ struct
 
   let rec process_data ~tcp ~udp ~default t =
     Log.debug (fun m -> m "processing data");
-    O.read t.ovpn >>= fun datas ->
+    O.read t.ovpn >>= fun data ->
     Log.debug (fun m ->
-        m "now for real processing data (%d, lenv %d)" (List.length datas)
-          (Cstruct.lenv datas));
-    Lwt_list.iter_s (input t ~tcp ~udp ~default) datas >>= fun () ->
+        m "now for real processing data (len %d)" (Cstruct.length data));
+    input t ~tcp ~udp ~default data >>= fun () ->
     process_data ~tcp ~udp ~default t
 
   let connect cfg s =

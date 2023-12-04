@@ -191,10 +191,8 @@ struct
             in
             let ovpn_cache = ref (Fragments.Cache.empty (256 * 1024)) in
             let rec listen_ovpn () =
-              O.read ovpn >>= fun datas ->
-              Lwt_list.iter_s
-                (ingest_public ovpn_cache (M.elapsed_ns ()) table)
-                datas
+              O.read ovpn >>= fun data ->
+              ingest_public ovpn_cache (M.elapsed_ns ()) table data
               >>= fun () -> listen_ovpn ()
             in
             Lwt.pick [ listen_private; listen_ovpn () ])
