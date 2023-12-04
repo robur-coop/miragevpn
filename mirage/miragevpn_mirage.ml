@@ -202,24 +202,25 @@ struct
         | Error e ->
             Log.err (fun m -> m "error in timer %a" Miragevpn.pp_error e);
             Lwt.return acc
-        | Ok (_, _, [ `Exit ]) ->
-            Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
-            Lwt.return acc
-        | Ok (t', out, acts) -> (
-            (* TODO anything to do with "_act"? (apart from exit) *)
-            List.iter
-              (fun a ->
-                Log.warn (fun m ->
-                    m "in timer, ignoring action %a" Miragevpn.pp_action a))
-              acts;
-            t := t';
-            TCP.writev flow out >|= function
-            | Error e ->
-                Log.err (fun m ->
-                    m "%a TCP write failed %a" Ipaddr.V4.pp k TCP.pp_write_error
-                      e);
-                acc
-            | Ok () -> IPM.add k (flow, t) acc))
+        | Ok (t', out, acts) ->
+            if List.mem `Exit acts then (
+              Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
+              Lwt.return acc)
+            else (
+              (* TODO anything to do with "_act"? (apart from exit) *)
+              List.iter
+                (fun a ->
+                  Log.warn (fun m ->
+                      m "in timer, ignoring action %a" Miragevpn.pp_action a))
+                acts;
+              t := t';
+              TCP.writev flow out >|= function
+              | Error e ->
+                  Log.err (fun m ->
+                      m "%a TCP write failed %a" Ipaddr.V4.pp k
+                        TCP.pp_write_error e);
+                  acc
+              | Ok () -> IPM.add k (flow, t) acc))
       server.connections (Lwt.return IPM.empty)
     >>= fun connections ->
     server.connections <- connections;
