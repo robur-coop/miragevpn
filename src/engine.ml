@@ -511,7 +511,8 @@ let maybe_kex_client rng config tls =
     let peer_info =
       let iv_proto =
         Packet.Iv_proto.(
-          Tls_key_export :: (if pull then [ Request_push ] else []))
+          (* See issue 181, doesn't reliably work on debian [Tls_key_export ::]*)
+          if pull then [ Request_push ] else [])
       in
       Option.map
         (fun pi ->
