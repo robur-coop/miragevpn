@@ -1682,65 +1682,59 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                     Mirage_crypto.Hash.digest_size tls_auth.hmac_algorithm
                   in
                   let* p = Packet.decode_ack_or_control op ~hmac_len payload in
-                  let bad_mac hmac = `Bad_mac (state, hmac, (key, p)) in
-                  match
-                    let* () =
-                      check_control_integrity bad_mac key p
-                        tls_auth.hmac_algorithm tls_auth.their_hmac
-                    in
+                  let bad_mac hmac =
+                    `Bad_mac (state, hmac, ((key, p) :> Packet.t))
+                  in
+                  let* () =
+                    check_control_integrity bad_mac key p
+                      tls_auth.hmac_algorithm tls_auth.their_hmac
+                  in
+                  let* session, transport =
                     expected_packet state.session ch.transport p
-                  with
-                  | Error e ->
-                      (* XXX: only in udp mode? *)
-                      Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
-                      Ok (state, out, acts)
-                  | Ok (session, transport) -> (
-                      let state = { state with session }
-                      and ch = { ch with transport } in
-                      match p with
-                      | `Ack _ -> Ok (set_ch state ch, out, acts)
-                      | `Control (_, (_, _, data)) -> (
-                          let+ est, config, session, ch, out' =
-                            incoming_control is_not_taken state.config state.rng
-                              state.state state.session ch (state.now ())
-                              (state.ts ()) key op data
+                  in
+                  let state = { state with session }
+                  and ch = { ch with transport } in
+                  match p with
+                  | `Ack _ -> Ok (set_ch state ch, out, acts)
+                  | `Control (_, (_, _, data)) -> (
+                      let* est, config, session, ch, out' =
+                        incoming_control is_not_taken state.config state.rng
+                          state.state state.session ch (state.now ())
+                          (state.ts ()) key op data
+                      in
+                      Log.debug (fun m ->
+                          m "out channel %a, pkts %d" pp_channel ch
+                            (List.length out'));
+                      let state = { state with session } in
+                      (* each control needs to be acked! *)
+                      let out' =
+                        match out' with
+                        | [] -> [ (`Ack, Cstruct.empty) ]
+                        | xs -> xs
+                      in
+                      (* now prepare outgoing packets *)
+                      let my_mtu =
+                        control_mtu config state.state state.session
+                      in
+                      let session, transport, encs =
+                        wrap_hmac_control (state.now ()) (state.ts ()) my_mtu
+                          state.session tls_auth key ch.transport out'
+                      in
+                      let out = out @ encs
+                      and ch = { ch with transport }
+                      and state = { state with config; session } in
+                      match est with
+                      | None -> Ok (set_ch state ch, out, acts)
+                      | Some ip_config ->
+                          let state = { state with channel = ch } in
+                          let+ state, mtu = transition_to_established state in
+                          let est =
+                            Option.to_list
+                              (Option.map
+                                 (fun mtu -> `Established (ip_config, mtu))
+                                 mtu)
                           in
-                          Log.debug (fun m ->
-                              m "out channel %a, pkts %d" pp_channel ch
-                                (List.length out'));
-                          let state = { state with session } in
-                          (* each control needs to be acked! *)
-                          let out' =
-                            match out' with
-                            | [] -> [ (`Ack, Cstruct.empty) ]
-                            | xs -> xs
-                          in
-                          (* now prepare outgoing packets *)
-                          let my_mtu =
-                            control_mtu config state.state state.session
-                          in
-                          let session, transport, encs =
-                            wrap_hmac_control (state.now ()) (state.ts ())
-                              my_mtu state.session tls_auth key ch.transport
-                              out'
-                          in
-                          let out = out @ encs
-                          and ch = { ch with transport }
-                          and state = { state with config; session } in
-                          match est with
-                          | None -> (set_ch state ch, out, acts)
-                          | Some ip_config ->
-                              let state = { state with channel = ch } in
-                              let state, mtu =
-                                transition_to_established state
-                              in
-                              let est =
-                                Option.to_list
-                                  (Option.map
-                                     (fun mtu -> `Established (ip_config, mtu))
-                                     mtu)
-                              in
-                              (state, out, est @ acts))))
+                          (state, out, est @ acts)))
               | _, Client_tls_crypt { tls_crypt = tls_crypt, wkc_opt; _ } -> (
                   let* cleartext, encrypted =
                     Packet.Tls_crypt.decode_cleartext_header payload
@@ -1771,7 +1765,6 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       to_be_signed
                   in
                   let* () =
-                    (* XXX maybe just ignore? *)
                     if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
                       Ok ()
                     else
@@ -1779,58 +1772,53 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         (`Bad_mac
                           (state, computed_hmac, ((key, p) :> Packet.t)))
                   in
-                  match expected_packet state.session ch.transport p with
-                  | Error e ->
-                      (* XXX: only in udp mode? *)
-                      Log.warn (fun m -> m "ignoring bad packet %a" pp_error e);
-                      Ok (state, out, acts)
-                  | Ok (session, transport) -> (
-                      let state = { state with session }
-                      and ch = { ch with transport } in
-                      match p with
-                      | `Ack _ -> Ok (set_ch state ch, out, acts)
-                      | `Control (_, (_, _, data)) -> (
-                          let+ est, config, session, ch, out' =
-                            incoming_control is_not_taken state.config state.rng
-                              state.state state.session ch (state.now ())
-                              (state.ts ()) key op data
+                  let* session, transport =
+                    expected_packet state.session ch.transport p
+                  in
+                  let state = { state with session }
+                  and ch = { ch with transport } in
+                  match p with
+                  | `Ack _ -> Ok (set_ch state ch, out, acts)
+                  | `Control (_, (_, _, data)) -> (
+                      let* est, config, session, ch, out' =
+                        incoming_control is_not_taken state.config state.rng
+                          state.state state.session ch (state.now ())
+                          (state.ts ()) key op data
+                      in
+                      Log.debug (fun m ->
+                          m "out channel %a, pkts %d" pp_channel ch
+                            (List.length out'));
+                      let state = { state with session } in
+                      (* each control needs to be acked! *)
+                      let out' =
+                        match out' with
+                        | [] -> [ (`Ack, Cstruct.empty) ]
+                        | xs -> xs
+                      in
+                      (* now prepare outgoing packets *)
+                      let my_mtu =
+                        control_mtu config state.state state.session
+                      in
+                      let session, transport, encs =
+                        wrap_tls_crypt_control (state.now ()) (state.ts ())
+                          my_mtu state.session tls_crypt needs_wkc key
+                          ch.transport out'
+                      in
+                      let out = out @ encs
+                      and ch = { ch with transport }
+                      and state = { state with config; session } in
+                      match est with
+                      | None -> Ok (set_ch state ch, out, acts)
+                      | Some ip_config ->
+                          let state = { state with channel = ch } in
+                          let+ state, mtu = transition_to_established state in
+                          let est =
+                            Option.to_list
+                              (Option.map
+                                 (fun mtu -> `Established (ip_config, mtu))
+                                 mtu)
                           in
-                          Log.debug (fun m ->
-                              m "out channel %a, pkts %d" pp_channel ch
-                                (List.length out'));
-                          let state = { state with session } in
-                          (* each control needs to be acked! *)
-                          let out' =
-                            match out' with
-                            | [] -> [ (`Ack, Cstruct.empty) ]
-                            | xs -> xs
-                          in
-                          (* now prepare outgoing packets *)
-                          let my_mtu =
-                            control_mtu config state.state state.session
-                          in
-                          let session, transport, encs =
-                            wrap_tls_crypt_control (state.now ()) (state.ts ())
-                              my_mtu state.session tls_crypt needs_wkc key
-                              ch.transport out'
-                          in
-                          let out = out @ encs
-                          and ch = { ch with transport }
-                          and state = { state with config; session } in
-                          match est with
-                          | None -> (set_ch state ch, out, acts)
-                          | Some ip_config ->
-                              let state = { state with channel = ch } in
-                              let state, mtu =
-                                transition_to_established state
-                              in
-                              let est =
-                                Option.to_list
-                                  (Option.map
-                                     (fun mtu -> `Established (ip_config, mtu))
-                                     mtu)
-                              in
-                              (state, out, est @ acts)))))
+                          (state, out, est @ acts))))
         in
         (* Invariant: [linger] is always empty for UDP *)
         if Cstruct.is_empty linger then Ok (state, out, acts)
