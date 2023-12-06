@@ -6,7 +6,7 @@ let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 let catch ~exn fn = try fn () with v -> exn v
 
 let pp_key_hum ppf key =
-  let cs = Tls_crypt_v2.Key.unsafe_to_cstruct key in
+  let cs = Tls_crypt.Key.unsafe_to_cstruct key in
   let cipher_key = Cstruct.(to_string (sub cs 0 64)) in
   let hmac = Cstruct.(to_string (sub cs 64 64)) in
   Fmt.pf ppf "Cipher Key: @[<hov>%a@]\n%!"
@@ -20,7 +20,7 @@ let tls_crypt_v2_server_key =
     if Sys.file_exists str then
       In_channel.with_open_bin str @@ fun ic ->
       let lines = Seq.of_dispenser (fun () -> In_channel.input_line ic) in
-      let* server_key = Tls_crypt_v2.Server.load ~lines in
+      let* server_key = Tls_crypt.Server.load `V2 ~lines in
       Ok (str, server_key)
     else error_msgf "%s does not exist" str
   in
@@ -29,8 +29,9 @@ let tls_crypt_v2_server_key =
 
 module Tls_crypt_v2_core = struct
   let generate_client_key g metadata server_key filename =
-    let client_key = Tls_crypt_v2.Client.generate ~g ~now metadata in
-    let seq = Tls_crypt_v2.Client.save ~key:server_key client_key in
+    let metadata = (server_key, metadata) in
+    let client_key = Tls_crypt.Client.generate ~version:`V2 ~g ~metadata now in
+    let seq = Tls_crypt.Client.save client_key in
     Bos.OS.File.write_lines filename (List.of_seq seq)
 
   let generate_client_key g metadata server_key filename =
@@ -39,8 +40,8 @@ module Tls_crypt_v2_core = struct
     | Error (`Msg msg) -> `Error (false, Fmt.str "%s." msg)
 
   let generate_server_key g filename =
-    let server_key = Tls_crypt_v2.Server.generate ~g () in
-    let seq = Tls_crypt_v2.Server.save ~key:server_key in
+    let server_key = Tls_crypt.Server.generate ~version:`V2 ~g () in
+    let seq = Tls_crypt.Server.save server_key in
     Bos.OS.File.write_lines filename (List.of_seq seq)
 
   let generate_server_key g filename =
@@ -107,18 +108,18 @@ let metadata =
     match (String.split_on_char ':' str, Ptime.of_rfc3339 str) with
     | "user" :: str, _ -> (
         match Base64.decode (String.concat ":" str) with
-        | Ok str -> Ok (Tls_crypt_v2.Metadata.user str)
+        | Ok str -> Ok (Tls_crypt.Metadata.user str)
         | Error (`Msg _) -> error_msgf "Invalid base64 user metadata")
     | "timestamp" :: str, _ -> (
         let exn _ = error_msgf "" in
         catch ~exn @@ fun () ->
         match Ptime.of_float_s (Float.of_string (String.concat ":" str)) with
-        | Some ptime -> Ok (Tls_crypt_v2.Metadata.timestamp ptime)
+        | Some ptime -> Ok (Tls_crypt.Metadata.timestamp ptime)
         | None -> error_msgf "")
-    | _, Ok (ptime, _tz, _) -> Ok (Tls_crypt_v2.Metadata.timestamp ptime)
-    | str, _ -> Ok (Tls_crypt_v2.Metadata.user (String.concat ":" str))
+    | _, Ok (ptime, _tz, _) -> Ok (Tls_crypt.Metadata.timestamp ptime)
+    | str, _ -> Ok (Tls_crypt.Metadata.user (String.concat ":" str))
   in
-  let pp = Tls_crypt_v2.Metadata.pp_hum in
+  let pp = Tls_crypt.Metadata.pp_hum in
   let open Cmdliner in
   Arg.conv (parser, pp)
 

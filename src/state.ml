@@ -263,10 +263,8 @@ type tls_auth = {
 type tls_crypt_key = Mirage_crypto.Cipher_block.AES.CTR.key
 
 type tls_crypt = {
-  my_key : tls_crypt_key;
-  my_hmac : Cstruct.t;
-  their_key : tls_crypt_key;
-  their_hmac : Cstruct.t;
+  my : Tls_crypt.Key.t;
+  their : Tls_crypt.Key.t;
 }
 
 type state =

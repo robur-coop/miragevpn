@@ -247,10 +247,10 @@ module Conf_map = struct
     | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
-    | Tls_crypt : (Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) k
+    | Tls_crypt : Tls_crypt.Client.t k
     | Tls_crypt_v2_client
-        : ((Cstruct.t * Cstruct.t * Cstruct.t * Cstruct.t) * Cstruct.t * bool) k
-    | Tls_crypt_v2_server : ((Cstruct.t * Cstruct.t) * bool) k
+        : (Tls_crypt.Client.t * Cstruct.t * bool) k
+    | Tls_crypt_v2_server : (Tls_crypt.Server.t * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
@@ -375,27 +375,17 @@ module Conf_map = struct
       (match Cstruct.concat [ a; b; c; d ] |> Hex.of_cstruct with
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
 
-  let rec pp_pem_b64 ppf cs =
-    let len = Cstruct.length cs in
-    if len = 0 then Fmt.pf ppf ""
-    else
-      let len = min len 48 in
-      let () =
-        Fmt.pf ppf "%s\n" (Base64.encode_string (Cstruct.to_string ~len cs))
-      in
-      pp_pem_b64 ppf (Cstruct.shift cs len)
+  let pp_tls_crypt_client ppf key =
+    let lines = Tls_crypt.Client.save key in
+    Seq.iter (Fmt.pf ppf "%s\n") lines
 
-  let pp_tls_crypt_v2_client ppf ((a, b, c, d), wkc) =
-    Fmt.pf ppf
-      "-----BEGIN OpenVPN tls-crypt-v2 client key-----\n\
-       %a-----END OpenVPN tls-crypt-v2 client key-----" pp_pem_b64
-      (Cstruct.concat [ a; b; c; d; wkc ])
+  let pp_tls_crypt_v2_client ppf key =
+    let lines = Tls_crypt.Client.save key in
+    Seq.iter (Fmt.pf ppf "%s\n") lines
 
-  let pp_tls_crypt_v2_server ppf (a, b) =
-    Fmt.pf ppf
-      "-----BEGIN OpenVPN tls-crypt-v2 server key-----\n\
-       %a-----END OpenVPN tls-crypt-v2 server key-----" pp_pem_b64
-      (Cstruct.concat [ a; b ])
+  let pp_tls_crypt_v2_server ppf key =
+    let lines = Tls_crypt.Server.save key in
+    Seq.iter (Fmt.pf ppf "%s\n") lines
 
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
     let p () = Fmt.pf ppf in
@@ -622,11 +612,11 @@ module Conf_map = struct
           Fmt.(list ~sep:(any ":") string)
           (List.map cs13_to_cipher13 ciphers)
     | Tls_crypt, key ->
-        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>" pp_key key
-    | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
+        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>" pp_tls_crypt_client key
+    | Tls_crypt_v2_client, (key, _wkc, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
-          pp_tls_crypt_v2_client (key, wkc)
+          pp_tls_crypt_v2_client key
     | Tls_crypt_v2_server, (key, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
@@ -996,22 +986,6 @@ let a_base64_line =
     | _ -> false)
   <* (end_of_line <|> fail "Invalid base64 character")
 
-let inline_pem_payload pem_name element =
-  Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
-  *> (string ("-----BEGIN " ^ pem_name ^ "-----") *> a_newline <|> fail "FIXME")
-  *> many_till a_base64_line
-       (string ("-----END " ^ pem_name ^ "-----") *> a_newline
-       <|> fail "Missing END mark")
-  <* commit
-  <* (skip_many (a_newline <|> a_whitespace) *> end_of_input
-     <|> ( pos >>= fun i ->
-           Fmt.kstr fail "Data after -----END mark at byte offset %d" i ))
-  >>= fun lst ->
-  let s = String.concat "" lst in
-  match Base64.decode s with
-  | Ok s -> return (Cstruct.of_string s)
-  | Error (`Msg e) -> Fmt.kstr fail "Bad base64 in %s pem: %s" element e
-
 let inline_payload element =
   let abort s = fail ("Invalid " ^ element ^ " HMAC key: " ^ s) in
   Angstrom.skip_many (a_whitespace_or_comment *> end_of_line)
@@ -1042,22 +1016,24 @@ let inline_payload element =
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
 let a_tls_crypt_v2_client_payload force_cookie =
-  ( inline_pem_payload tls_crypt_v2_client_pem_name "tls-crypt-v2" >>= fun cs ->
-    if Cstruct.length cs >= 256 + Mirage_crypto.Hash.SHA256.digest_size then
-      return cs
-    else fail "bad tls-crypt-v2 client key size" )
-  >>| fun cs ->
-  let key = Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs 192 64) in
-  let wkc = Cstruct.shift cs 256 in
-  B (Tls_crypt_v2_client, (key, wkc, force_cookie))
+  let line = take_till ((=) '\n') <* char '\n' in
+  many line >>= fun lines ->
+  available >>= take >>= fun rest ->
+  let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
+  match Tls_crypt.Client.load ~version:`V2 lines with
+  | Ok key ->
+      let wkc = Option.get (Tls_crypt.Client.wkc key) in
+      return (B (Tls_crypt_v2_client, (key, wkc, force_cookie)))
+  | Error _ -> fail "Invalid tls-crypt-v2 key"
 
 let a_tls_crypt_v2_server_payload force_cookie =
-  ( inline_pem_payload tls_crypt_v2_server_pem_name "tls-crypt-v2" >>= fun cs ->
-    if Cstruct.length cs = 128 then return cs
-    else fail "bad tls-crypt-v2 server key size" )
-  >>| fun cs ->
-  let key = Cstruct.(sub cs 0 64, sub cs 64 64) in
-  B (Tls_crypt_v2_server, (key, force_cookie))
+  let line = take_till ((=) '\n') <* char '\n' in
+  many line >>= fun lines ->
+  available >>= take >>= fun rest ->
+  let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
+  match Tls_crypt.Server.load `V2 ~lines with
+  | Ok key -> return (B (Tls_crypt_v2_server, (key, force_cookie)))
+  | Error _ -> fail "Invalid tls-crypt-v2 key"
 
 let a_tls_crypt_v2_payload force_cookie =
   a_tls_crypt_v2_client_payload force_cookie
@@ -1098,9 +1074,11 @@ let a_secret =
 
 let a_tls_crypt_payload str =
   let open Result.Syntax in
+  let lines = String.split_on_char '\n' str in
+  let lines = List.to_seq lines in
   let* key =
-    parse_string ~consume:Consume.All (inline_payload "tls-crypt") str
-  in
+    Tls_crypt.Client.load ~version:`V1 lines
+    |> Result.map_error (fun (`Msg msg) -> msg) in
   Ok (B (Tls_crypt, key))
 
 let a_tls_crypt = a_option_with_single_path "tls-crypt" `Tls_crypt
@@ -1790,10 +1768,9 @@ let eq : eq =
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
         | ( Tls_crypt_v2_client,
-            ((a, b, c, d), wkc, force_cookie),
-            ((a', b', c', d'), wkc', force_cookie') ) ->
-            Cstruct.equal a a' && Cstruct.equal b b' && Cstruct.equal c c'
-            && Cstruct.equal d d' && Cstruct.equal wkc wkc'
+            (k0, _, force_cookie),
+            (k1, _, force_cookie') ) ->
+            Tls_crypt.Client.equal k0 k1
             && force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)

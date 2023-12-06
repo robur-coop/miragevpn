@@ -49,19 +49,48 @@ let pem_of_lines ~name seq =
         Base64.decode b64
   | _ -> error_msgf "Invalid %s" name
 
+let hex_of_lines ~name seq =
+  match List.of_seq seq with
+  | [ _ ] -> error_msgf "Invalid %s" name
+  | header :: hex_and_footer when header = "-----BEGIN " ^ name ^ "-----" -> (
+      let hex_and_footer = List.trim hex_and_footer in
+      let footer = List.hd (List.rev hex_and_footer) in
+      if footer <> "-----END " ^ name ^ "-----" then
+        error_msgf "Invalid %s" name
+      else
+        let hex = List.chop hex_and_footer in
+        let buf = Buffer.create 0x100 in
+        let f str =
+          for i = 0 to (String.length str / 2) - 1 do
+            let chr = Hex.to_char str.[i * 2] str.[(i * 2) + 1] in
+            Buffer.add_char buf chr
+          done
+        in
+        try
+          List.iter f hex;
+          Ok (Buffer.contents buf)
+        with _ -> error_msgf "Invalid %s" name)
+  | _ -> error_msgf "Invalid %s" name
+
 module Key : sig
+  type version = [ `V1 | `V2 ]
   type t
 
-  val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
+  val version : t -> version
+
+  val of_cstruct :
+    ?version:version -> Cstruct.t -> (t, [> `Msg of string ]) result
+
   val unsafe_to_cstruct : t -> Cstruct.t
   val to_string : t -> string
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
   val hmac : t -> Cstruct.t
   val equal : t -> t -> bool
-  val generate : ?g:Mirage_crypto_rng.g -> unit -> t
+  val generate : ?version:version -> ?g:Mirage_crypto_rng.g -> unit -> t
   val to_base64 : t -> string
 end = struct
-  type t = Cstruct.t (* cipher (64 bytes) + hmac (64 bytes) *)
+  type version = [ `V1 | `V2 ]
+  type t = version * Cstruct.t (* cipher (64 bytes) + hmac (64 bytes) *)
 
   let len_of_secret_aes_ctr_key =
     Array.to_list Mirage_crypto.Cipher_block.AES.CTR.key_sizes
@@ -71,23 +100,30 @@ end = struct
   (* NOTE: it's a bit paranoid but we ensure that [mirage-crypto] exposes values
      which fit with an OpenVPN key (128 bytes). *)
   let () = assert (len_of_secret_aes_ctr_key > 0)
+  let version = fst
 
-  let of_cstruct cs =
-    if Cstruct.length cs <> 128 then error_msgf "Invalid tls-crypt-v2 key"
-    else Ok cs
+  let of_cstruct ?(version = `V2) cs =
+    if Cstruct.length cs <> 128 then error_msgf "Invalid tls-crypt key"
+    else Ok (version, cs)
 
-  let unsafe_to_cstruct x = x
-  let to_string t = Cstruct.to_string t
+  let unsafe_to_cstruct (_, x) = x
+  let to_string (_, t) = Cstruct.to_string t
 
-  let cipher_key cs =
+  let cipher_key (_, cs) =
     Mirage_crypto.Cipher_block.AES.CTR.of_secret
       (Cstruct.sub cs 0 len_of_secret_aes_ctr_key)
 
-  let hmac cs = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
-  let equal a b = Eqaf_cstruct.equal a b
-  let generate ?g () = Mirage_crypto_rng.generate ?g 128
+  let hmac (_, cs) = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
 
-  let to_base64 cs =
+  let equal (va, a) (vb, b) =
+    match (va, vb) with
+    | `V1, `V1 | `V2, `V2 -> Eqaf_cstruct.equal a b
+    | _ -> false
+
+  let generate ?(version = `V2) ?g () =
+    (version, Mirage_crypto_rng.generate ?g 128)
+
+  let to_base64 (_, cs) =
     let str = Cstruct.to_string cs in
     Base64.encode_string ~pad:true str
 end
@@ -99,7 +135,7 @@ module Metadata = struct
 
   let user str =
     if String.length str >= _TLS_CRYPT_V2_MAX_METADATA_LEN then
-      invalid_arg "Tls_crypt_v2.Metadata.user";
+      invalid_arg "Tls_crypt.Metadata.user";
     User str
 
   let to_cstruct = function
@@ -144,27 +180,35 @@ end
 module Server : sig
   type t = Key.t
 
-  val load : lines:string Seq.t -> (t, [> `Msg of string ]) result
-  val generate : ?g:Mirage_crypto_rng.g -> unit -> t
-  val save : key:t -> string Seq.t
+  val load :
+    Key.version -> lines:string Seq.t -> (t, [> `Msg of string ]) result
+
+  val generate : ?version:Key.version -> ?g:Mirage_crypto_rng.g -> unit -> t
+  val save : t -> string Seq.t
 end = struct
   type t = Key.t
 
-  let load ~lines =
-    let ( let* ) = Result.bind in
-    let* key = pem_of_lines ~name:"OpenVPN tls-crypt-v2 server key" lines in
-    Key.of_cstruct (Cstruct.of_string key)
+  let load version ~lines =
+    match version with
+    | `V2 ->
+        let ( let* ) = Result.bind in
+        let* key = pem_of_lines ~name:"OpenVPN tls-crypt-v2 server key" lines in
+        Key.of_cstruct (Cstruct.of_string key)
+    | `V1 -> assert false
 
-  let generate ?g () = Key.generate ?g ()
+  let generate ?version ?g () = Key.generate ?version ?g ()
 
-  let save ~key:server_key =
-    let b64 = Key.to_base64 server_key in
-    let lines =
-      "-----BEGIN OpenVPN tls-crypt-v2 server key-----"
-      :: String.split_at 64 b64
-      @ [ "-----END OpenVPN tls-crypt-v2 server key-----"; "" ]
-    in
-    List.to_seq lines
+  let save server_key =
+    match Key.version server_key with
+    | `V2 ->
+        let b64 = Key.to_base64 server_key in
+        let lines =
+          "-----BEGIN OpenVPN tls-crypt-v2 server key-----"
+          :: String.split_at 64 b64
+          @ [ "-----END OpenVPN tls-crypt-v2 server key-----"; "" ]
+        in
+        List.to_seq lines
+    | `V1 -> assert false
 end
 
 module Client : sig
@@ -172,23 +216,46 @@ module Client : sig
 
   val server_key : t -> Key.t
   val client_key : t -> Key.t
-  val unwrap : key:Server.t -> Cstruct.t -> (t, [> `Msg of string ]) result
-  val wrap : key:Server.t -> t -> Cstruct.t
+  val wkc : t -> Cstruct.t option
 
   val load :
-    key:Server.t -> lines:string Seq.t -> (t, [> `Msg of string ]) result
+    ?version:Key.version ->
+    ?key:Server.t ->
+    string Seq.t ->
+    (t, [> `Msg of string ]) result
 
   val generate :
-    ?g:Mirage_crypto_rng.g -> now:(unit -> Ptime.t) -> Metadata.t option -> t
+    ?version:Key.version ->
+    ?g:Mirage_crypto_rng.g ->
+    ?metadata:Server.t * Metadata.t option ->
+    (unit -> Ptime.t) ->
+    t
 
-  val save : key:Server.t -> t -> string Seq.t
+  val save : t -> string Seq.t
+  val equal : t -> t -> bool
 end = struct
-  type t = Key.t * Key.t * Metadata.t
+  type extra =
+    | Unencrypted of { wkc : Cstruct.t; metadata : Metadata.t }
+    | Encrypted of Cstruct.t
+    | None
+
+  type t = Key.t * Key.t * extra
+  (* let (s, c, m) = key in
+     assert (Key.version s = Key.version c) (* same version *)
+     if fst s = `V2 then assert (m <> None) (* for v2, metadata is available *) *)
 
   let server_key (k, _, _) = k
   let client_key (_, k, _) = k
 
+  let wkc (_, _, v) =
+    match v with
+    | Unencrypted { wkc; _ } -> Some wkc
+    | Encrypted wkc -> Some wkc
+    | None -> Option.none
+
   let unwrap ~key:server_key cs =
+    if Key.version server_key = `V1 then
+      invalid_arg "Invalid server key version";
     let ( let* ) = Result.bind in
     let* () =
       guard ~msg:"Failed to read length" @@ fun () -> Cstruct.length cs >= 2
@@ -237,7 +304,7 @@ end = struct
     let* metadata = Metadata.of_cstruct metadata in
     Ok (a, b, metadata)
 
-  let load ~key:server_key ~lines =
+  let load_v2 ?key:server_key lines =
     let ( let* ) = Result.bind in
     let* str = pem_of_lines ~name:"OpenVPN tls-crypt-v2 client key" lines in
     let cs = Cstruct.of_string str in
@@ -256,28 +323,35 @@ end = struct
       Cstruct.length cs - net_len >= 128 * 2
     in
     let kc = Cstruct.sub cs 0 (Cstruct.length cs - net_len) in
-    let* a = Key.of_cstruct (Cstruct.sub kc 0 128) in
-    let* b = Key.of_cstruct (Cstruct.sub kc 128 128) in
-    let* a', b', metadata = unwrap ~key:server_key wkc in
-    let* () =
-      guard ~msg:"Client keys don't correspond" @@ fun () -> Key.equal a a'
-    in
-    let* () =
-      guard ~msg:"Client keys don't correspond" @@ fun () -> Key.equal b b'
-    in
-    Ok (a, b, metadata)
+    let* a = Key.of_cstruct ~version:`V2 (Cstruct.sub kc 0 128) in
+    let* b = Key.of_cstruct ~version:`V2 (Cstruct.sub kc 128 128) in
+    match server_key with
+    | Some server_key ->
+        let* a', b', metadata = unwrap ~key:server_key wkc in
+        let* () =
+          guard ~msg:"Client keys don't correspond" @@ fun () -> Key.equal a a'
+        in
+        let* () =
+          guard ~msg:"Client keys don't correspond" @@ fun () -> Key.equal b b'
+        in
+        Ok (a, b, Unencrypted { wkc; metadata })
+    | None -> Ok (a, b, Encrypted wkc)
 
-  let generate ?g ~now metadata =
-    let metadata =
-      match metadata with
-      | None -> Metadata.timestamp (now ())
-      | Some metadata -> metadata
+  let load_v1 lines =
+    let ( let* ) = Result.bind in
+    let* str = hex_of_lines ~name:"OpenVPN Static key V1" lines in
+    let cs = Cstruct.of_string str in
+    let* () =
+      guard ~msg:"Truncated OpenVPN Static key V1" @@ fun () ->
+      Cstruct.length cs >= 256
     in
-    let a = Key.generate ?g () in
-    let b = Key.generate ?g () in
-    (a, b, metadata)
+    let* a = Key.of_cstruct ~version:`V1 (Cstruct.sub cs 0 128) in
+    let* b = Key.of_cstruct ~version:`V1 (Cstruct.sub cs 128 128) in
+    Ok (a, b, None)
 
   let wrap ~key:server_key (a, b, metadata) =
+    if Key.version server_key = `V1 then
+      invalid_arg "Invalid server key version";
     let a = Key.unsafe_to_cstruct a in
     let b = Key.unsafe_to_cstruct b in
     let cs = Cstruct.concat [ a; b ] in
@@ -306,12 +380,35 @@ end = struct
     in
     Cstruct.concat [ tag; wkc; net_len ]
 
-  let save ~key:server_key client_key =
+  let generate ?(version = `V2) ?g ?metadata now =
+    let a = Key.generate ~version ?g () in
+    let b = Key.generate ~version ?g () in
+    let metadata =
+      match (metadata, version) with
+      | Some (key, Option.None), `V2 ->
+          let metadata = Metadata.timestamp (now ()) in
+          let wkc = wrap ~key (a, b, metadata) in
+          Unencrypted { wkc; metadata }
+      | Some (key, Some metadata), `V2 ->
+          let wkc = wrap ~key (a, b, metadata) in
+          Unencrypted { wkc; metadata }
+      | None, `V2 ->
+          invalid_arg
+            "tls-crypt-v2 client key generation requires the server key"
+      | _, `V1 -> None
+    in
+    (a, b, metadata)
+
+  let save_v2 (a, b, extra) =
     let kc =
-      let a, b, _ = client_key in
       Cstruct.concat [ Key.unsafe_to_cstruct a; Key.unsafe_to_cstruct b ]
     in
-    let wkc = wrap ~key:server_key client_key in
+    let wkc =
+      match extra with
+      | Unencrypted { wkc; _ } -> wkc
+      | Encrypted wkc -> wkc
+      | None -> assert false
+    in
     let payload = Cstruct.concat [ kc; wkc ] in
     let payload = Cstruct.to_string payload in
     let b64 = Base64.encode_string ~pad:true payload in
@@ -321,4 +418,38 @@ end = struct
       @ [ "-----END OpenVPN tls-crypt-v2 client key-----"; "" ]
     in
     List.to_seq lines
+
+  let save_v1 (a, b, _) =
+    let k =
+      Cstruct.concat [ Key.unsafe_to_cstruct a; Key.unsafe_to_cstruct b ]
+    in
+    let (`Hex h) = Hex.of_cstruct k in
+    let lines = List.init (256 / 16) (fun i -> String.sub h (i * 32) 32) in
+    let lines =
+      ("-----BEGIN OpenVPN Static key V1-----" :: lines)
+      @ [ "-----END OpenVPN Static key V1-----"; "" ]
+    in
+    List.to_seq lines
+
+  let load ?(version = `V2) ?key lines =
+    match (Option.map Key.version key, version) with
+    | Some `V2, `V2 | None, `V2 -> load_v2 ?key lines
+    | Some `V1, `V1 | None, `V1 -> load_v1 lines
+    | Some `V1, `V2 | Some `V2, `V1 -> error_msgf "Incompatible key version"
+
+  let save ((a, b, _) as client_key) =
+    match (Key.version a, Key.version b) with
+    | `V2, `V2 -> save_v2 client_key
+    | `V1, `V1 -> save_v1 client_key
+    | _ -> assert false
+
+  let equal (a, b, extra) (a', b', extra') =
+    Key.equal a a' && Key.equal b b'
+    &&
+    match (extra, extra') with
+    | ( (Unencrypted { wkc; _ } | Encrypted wkc),
+        (Unencrypted { wkc = wkc'; _ } | Encrypted wkc') ) ->
+        Cstruct.equal wkc wkc'
+    | None, None -> true
+    | _ -> false
 end
