@@ -141,25 +141,34 @@ let rec write_to_fd fd data =
          write_to_fd fd (Cstruct.shift data len))
       (fun e ->
          let+ () = safe_close fd in
-         Error (`Msg (Printf.sprintf "TCP write error %s" (Printexc.to_string e))))
+         Error (`Msg (Fmt.str "TCP write error %a" Fmt.exn e)))
 
 let transmit proto fd data =
   match proto with
-  | `Udp ->
-    (* TODO: catch exception *)
-    let+ len = Lwt_cstruct.write fd data in
-    if Cstruct.length data <> len then
-      Error (`Msg "wrote short UDP packet")
-    else
-      Ok ()
   | `Tcp ->
     write_to_fd fd data
+  | `Udp ->
+    let* r = Lwt_result.catch (fun () -> Lwt_cstruct.write fd data) in
+    match r with
+    | Ok len when Cstruct.length data <> len ->
+      Lwt_result.fail (`Msg "wrote short UDP packet")
+    | Ok _ -> Lwt_result.return ()
+    | Error exn ->
+      let+ () = safe_close fd in
+      Error (`Msg (Fmt.str "UDP write error %a" Fmt.exn exn))
 
 let receive _proto fd =
   let buf = Cstruct.create_unsafe 65535 in
-  let+ len, _ = Lwt_cstruct.recvfrom fd buf [] in
-  Logs.debug (fun m -> m "received %d bytes" len);
-  `Data (Cstruct.sub buf 0 len)
+  let* r = Lwt_result.catch (fun () -> Lwt_cstruct.recvfrom fd buf []) in
+  match r with
+  | Ok (len, _) ->
+    Logs.debug (fun m -> m "received %d bytes" len);
+    Lwt.return (`Data (Cstruct.sub buf 0 len))
+  | Error exn ->
+    let* () = safe_close fd in
+    (* XXX: emit `Connection_failed?! *)
+    Logs.err (fun m -> m "Receive error %a" Fmt.exn exn);
+    exit 3
 
 let rec established_action proto fd incoming ifconfig tick client actions =
   let action, actions =
@@ -345,7 +354,7 @@ let string_of_file ~dir filename =
     let content = really_input_string fh (in_channel_length fh) in
     close_in_noerr fh;
     Ok content
-  with _ -> Printf.ksprintf (fun msg -> Error (`Msg msg)) "Error reading file %S" file
+  with _ -> Fmt.kstr (fun msg -> Error (`Msg msg)) "Error reading file %S" file
 
 let parse_config filename =
   Lwt.return
