@@ -38,11 +38,11 @@ let resolve (name, ip_version) =
           `Resolve_failed
       | Ok ip -> `Resolved (Ipaddr.V6 ip))
 
-type action = [ Miragevpn.action | `Tick | `Transmit of Cstruct.t ]
+type action = [ Miragevpn.action | `Suspend | `Transmit of Cstruct.t ]
 
 let pp_action ppf = function
   | #Miragevpn.action as action -> Miragevpn.pp_action ppf action
-  | `Tick -> Fmt.pf ppf "tick"
+  | `Suspend -> Fmt.pf ppf "suspend"
   | `Transmit data -> Fmt.pf ppf "transmit %d bytes" (Cstruct.length data)
 
 let event k (tick : [ `Tick ] Lwt.t) client actions ev =
@@ -167,12 +167,11 @@ let rec established_action proto fd incoming ifconfig tick client actions =
     | action :: actions ->
       (action :> action), actions
     | [] ->
-      (* XXX *)
-      `Tick, actions
+      `Suspend, actions
   in
   Logs.debug (fun m -> m "established_action %a" pp_action action);
   match action with
-  | `Tick ->
+  | `Suspend ->
     let* ev =
       Lwt.choose [
         ( tick :> [Miragevpn.event | `Ping] Lwt.t );
@@ -231,22 +230,21 @@ and connected_action proto fd incoming tick client actions =
     | action :: actions ->
       (action :> action), actions
     | [] ->
-      (* XXX *)
-      `Tick, actions
+      `Suspend, actions
   in
   Logs.debug (fun m -> m "connected_action %a" pp_action action);
   match action with
-  | `Tick ->
+  | `Suspend ->
     let* ev =
       Lwt.choose [
         (tick :> [`Tick | `Data of Cstruct.t] Lwt.t);
         incoming
       ]
     in
-    let tick, incoming =
+    let incoming =
       match ev with
-      | `Tick -> ticker (), incoming
-      | `Data _ -> tick, receive proto fd
+      | `Data _ -> receive proto fd
+      | _ -> incoming
     in
     event (connected_action proto fd incoming) tick client actions (ev :> Miragevpn.event)
   | `Established ifconfig ->
@@ -279,14 +277,12 @@ and connecting_action tick client actions =
     | action :: actions ->
       action, actions
     | [] ->
-      (* XXX *)
-      `Tick, actions
+      `Suspend, actions
   in
   Logs.debug (fun m -> m "connecting_action %a" pp_action action);
   match action with
-  | `Tick ->
+  | `Suspend ->
     let* `Tick = tick in
-    let tick = ticker () in
     event connecting_action tick client actions `Tick
   | `Resolve data ->
     let* ev = resolve data in
