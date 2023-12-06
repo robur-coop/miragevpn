@@ -218,9 +218,12 @@ let rec established_action proto fd incoming ifconfig tick client actions =
        Logs.err (fun m -> m "transmit error: %s" e);
        exit 3);
     established_action proto fd incoming ifconfig tick client actions
-  | `Connect _ | `Established _ | `Resolve _ ->
+  | `Established _ ->
     Logs.err (fun m -> m "Unexpected action %a" pp_action action);
     assert false
+  | `Connect _ | `Resolve _ as action ->
+    let* () = safe_close fd in
+    connecting_action tick client (action :: actions)
 
 and connected_action proto fd incoming tick client actions =
   let action, actions =
@@ -263,15 +266,18 @@ and connected_action proto fd incoming tick client actions =
        Logs.err (fun m -> m "transmit error: %s" e);
        exit 3);
     connected_action proto fd incoming tick client actions
-  | `Connect _ | `Payload _ | `Resolve _ ->
+  | `Payload _ ->
     Logs.err (fun m -> m "Unexpected action %a" pp_action action);
     assert false
+  | `Connect _ | `Resolve _ as action ->
+    let* () = safe_close fd in
+    connecting_action tick client (action :: actions)
 
 and connecting_action tick client actions =
   let action, actions =
     match actions with
     | action :: actions ->
-      (action :> action), actions
+      action, actions
     | [] ->
       (* XXX *)
       `Tick, actions
