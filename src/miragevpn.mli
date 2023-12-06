@@ -276,9 +276,12 @@ type event =
 
 val pp_event : event Fmt.t
 
-type action =
+type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
-  | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ]
+  | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
+
+type action =
+  [ initial_action
   | `Disconnect
   | `Exit
   | `Established of ip_config * int
@@ -292,7 +295,7 @@ val client :
   (unit -> int64) ->
   (unit -> Ptime.t) ->
   (int -> Cstruct.t) ->
-  (t * action, [> `Msg of string ]) result
+  (t * initial_action, [> `Msg of string ]) result
 (** [client config ts now rng] constructs a [t], returns the remote to
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
