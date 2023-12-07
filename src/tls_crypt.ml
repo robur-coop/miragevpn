@@ -37,6 +37,9 @@ let _TLS_CRYPT_V2_MAX_METADATA_LEN =
   - (_TLS_CRYPT_V2_CLIENT_KEY_LEN + _TLS_CRYPT_V2_TAG_SIZE + 2)
 
 let pem_of_lines ~name seq =
+  let seq =
+    Seq.drop_while (fun str -> String.length str > 0 && str.[0] = '#') seq
+  in
   match List.of_seq seq with
   | [ _ ] -> error_msgf "Invalid %s" name
   | header :: b64_and_footer when header = "-----BEGIN " ^ name ^ "-----" ->
@@ -50,6 +53,9 @@ let pem_of_lines ~name seq =
   | _ -> error_msgf "Invalid %s" name
 
 let hex_of_lines ~name seq =
+  let seq =
+    Seq.drop_while (fun str -> String.length str > 0 && str.[0] = '#') seq
+  in
   match List.of_seq seq with
   | [ _ ] -> error_msgf "Invalid %s" name
   | header :: hex_and_footer when header = "-----BEGIN " ^ name ^ "-----" -> (
@@ -185,6 +191,8 @@ module Server : sig
 
   val generate : ?version:Key.version -> ?g:Mirage_crypto_rng.g -> unit -> t
   val save : t -> string Seq.t
+  val pp : t Fmt.t
+  val equal : t -> t -> bool
 end = struct
   type t = Key.t
 
@@ -209,6 +217,9 @@ end = struct
         in
         List.to_seq lines
     | `V1 -> assert false
+
+  let pp = Fmt.(using Key.to_base64 string)
+  let equal = Key.equal
 end
 
 module Client : sig
@@ -315,7 +326,7 @@ end = struct
     let net_len = Cstruct.BE.get_uint16 cs (Cstruct.length cs - 2) in
     let* () =
       guard ~msg:"Can not locate tls-crypt-v2 wrapped client key" @@ fun () ->
-      Cstruct.length cs = net_len
+      Cstruct.length cs >= net_len
     in
     let wkc = Cstruct.sub cs (Cstruct.length cs - net_len) net_len in
     let* () =

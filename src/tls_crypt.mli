@@ -34,6 +34,8 @@ module Server : sig
 
   val generate : ?version:Key.version -> ?g:Mirage_crypto_rng.g -> unit -> t
   val save : t -> string Seq.t
+  val pp : t Fmt.t
+  val equal : t -> t -> bool
 end
 
 module Client : sig
