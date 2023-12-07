@@ -1869,7 +1869,7 @@ let retransmit timeout ts transport =
   in
   ({ transport with out_packets }, out)
 
-let resolve_connect_client client t ts s ev =
+let resolve_connect_client make_state t ts s ev =
   let open Result.Syntax in
   let remote, next_remote =
     let remotes = Config.get Remote t.config in
@@ -1901,13 +1901,13 @@ let resolve_connect_client client t ts s ev =
       in
       (* We reset [linger] to enforce the invariant that [linger] is empty when
          we are connecting (or resolving) *)
-      Ok ({ t with linger = Cstruct.empty; state = client state }, action)
+      Ok ({ t with linger = Cstruct.empty; state = make_state state }, action)
   in
   match (s, ev) with
   | Resolving (idx, _, retry), `Resolved ip ->
       (* TODO enforce ipv4/ipv6 *)
       let endp = match remote idx with _, port, dp -> (ip, port, dp) in
-      let t = { t with state = client (Connecting (idx, ts, retry)) } in
+      let t = { t with state = make_state (Connecting (idx, ts, retry)) } in
       Ok (t, Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
       let+ t, action = next_or_fail t idx retry in
