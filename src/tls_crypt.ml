@@ -31,10 +31,9 @@ end
 let _TLS_CRYPT_V2_CLIENT_KEY_LEN = 2048 / 8
 let _TLS_CRYPT_V2_MAX_WKC_LEN = 1024
 let _TLS_CRYPT_V2_TAG_SIZE = 256 / 8
+
 let _TLS_CRYPT_V2_MIN_WKC_LEN =
-  _TLS_CRYPT_V2_TAG_SIZE +
-  _TLS_CRYPT_V2_CLIENT_KEY_LEN +
-  1 + 2
+  _TLS_CRYPT_V2_TAG_SIZE + _TLS_CRYPT_V2_CLIENT_KEY_LEN + 1 + 2
 
 let _TLS_CRYPT_V2_MAX_METADATA_LEN =
   _TLS_CRYPT_V2_MAX_WKC_LEN
@@ -86,7 +85,6 @@ module Key : sig
   type t
 
   val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
-
   val unsafe_to_cstruct : t -> Cstruct.t
   val to_string : t -> string
   val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
@@ -118,9 +116,7 @@ end = struct
       (Cstruct.sub cs 0 len_of_secret_aes_ctr_key)
 
   let hmac cs = Cstruct.sub cs 64 Mirage_crypto.Hash.SHA256.digest_size
-
   let equal = Eqaf_cstruct.equal
-
   let generate ?g () = Mirage_crypto_rng.generate ?g 128
 
   let to_base64 cs =
@@ -181,7 +177,6 @@ module Server : sig
   type t = Key.t
 
   val load : lines:string Seq.t -> (t, [> `Msg of string ]) result
-
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
   val save : t -> string Seq.t
   val pp : t Fmt.t
@@ -214,13 +209,9 @@ module Tls_crypt : sig
 
   val server_key : t -> Key.t
   val client_key : t -> Key.t
-
   val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
-
   val load_v1 : string Seq.t -> (t, [> `Msg of string ]) result
-
-  val generate : ?g:Mirage_crypto_rng.g -> unit-> t
-
+  val generate : ?g:Mirage_crypto_rng.g -> unit -> t
   val save_v1 : t -> string Seq.t
   val equal : t -> t -> bool
 end = struct
@@ -229,13 +220,11 @@ end = struct
   let of_cstruct buf =
     let open Result.Syntax in
     let* () =
-      guard ~msg:"Invalid tls-crypt key" @@ fun () ->
-      Cstruct.length buf = 256
+      guard ~msg:"Invalid tls-crypt key" @@ fun () -> Cstruct.length buf = 256
     in
     let* server_key = Key.of_cstruct (Cstruct.sub buf 0 128) in
     let* client_key = Key.of_cstruct (Cstruct.sub buf 128 128) in
     Ok (server_key, client_key)
-
 
   let server_key (k, _) = k
   let client_key (_, k) = k
@@ -269,15 +258,18 @@ end = struct
     in
     List.to_seq lines
 
-  let equal (a, b) (a', b') =
-    Key.equal a a' && Key.equal b b'
+  let equal (a, b) (a', b') = Key.equal a a' && Key.equal b b'
 end
 
 module Wrapped_key : sig
   type t
+
   val of_cstruct : Cstruct.t -> (Cstruct.t * t, [> `Msg of string ]) result
   val wrap : key:Server.t -> Tls_crypt.t -> Metadata.t -> t
-  val unwrap : key:Server.t -> t -> (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
+
+  val unwrap :
+    key:Server.t -> t -> (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
+
   val unsafe_to_cstruct : t -> Cstruct.t
 end = struct
   type t = Cstruct.t
@@ -287,21 +279,18 @@ end = struct
   let of_cstruct buf =
     let open Result.Syntax in
     let* () =
-      guard ~msg:"Can not read wKc length" @@ fun () ->
-      Cstruct.length buf >= 2
+      guard ~msg:"Can not read wKc length" @@ fun () -> Cstruct.length buf >= 2
     in
     let net_len = Cstruct.BE.get_uint16 buf (Cstruct.length buf - 2) in
     let* () =
-      guard ~msg:"Can not locate wKc" @@ fun () ->
-      Cstruct.length buf >= net_len
+      guard ~msg:"Can not locate wKc" @@ fun () -> Cstruct.length buf >= net_len
     in
     let* () =
       guard ~msg:"wKc too small" @@ fun () ->
       net_len >= _TLS_CRYPT_V2_MIN_WKC_LEN
     in
     let+ () =
-      guard ~msg:"wKc too big" @@ fun () ->
-      net_len <= _TLS_CRYPT_V2_MAX_WKC_LEN
+      guard ~msg:"wKc too big" @@ fun () -> net_len <= _TLS_CRYPT_V2_MAX_WKC_LEN
     in
     Cstruct.split buf (Cstruct.length buf - net_len)
 
@@ -310,7 +299,7 @@ end = struct
     let b = Key.unsafe_to_cstruct (Tls_crypt.client_key key) in
     let metadata = Metadata.to_cstruct metadata in
     let net_len =
-      _TLS_CRYPT_V2_TAG_SIZE + Cstruct.lenv [a; b; metadata] + 2
+      _TLS_CRYPT_V2_TAG_SIZE + Cstruct.lenv [ a; b; metadata ] + 2
     in
     let net_len =
       let cs = Cstruct.create 2 in
@@ -319,10 +308,8 @@ end = struct
     in
     let ctx = Mirage_crypto.Hash.SHA256.hmac_empty ~key:(Key.hmac server_key) in
     let ctx =
-      List.fold_left
-        Mirage_crypto.Hash.SHA256.hmac_feed 
-        ctx
-        [net_len; a; b; metadata]
+      List.fold_left Mirage_crypto.Hash.SHA256.hmac_feed ctx
+        [ net_len; a; b; metadata ]
     in
     let tag = Mirage_crypto.Hash.SHA256.hmac_get ctx in
     let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
@@ -385,7 +372,7 @@ let save_tls_crypt_v2_client key wkc =
   let a = Key.unsafe_to_cstruct (Tls_crypt.server_key key) in
   let b = Key.unsafe_to_cstruct (Tls_crypt.client_key key) in
   let wkc = Wrapped_key.unsafe_to_cstruct wkc in
-  let payload = Cstruct.to_string (Cstruct.concat [a; b; wkc]) in
+  let payload = Cstruct.to_string (Cstruct.concat [ a; b; wkc ]) in
   let b64 = Base64.encode_string ~pad:true payload in
   let lines = String.split_at 64 b64 in
   let lines =

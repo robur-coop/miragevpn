@@ -612,7 +612,8 @@ module Conf_map = struct
           Fmt.(list ~sep:(any ":") string)
           (List.map cs13_to_cipher13 ciphers)
     | Tls_crypt, key ->
-        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>" pp_tls_crypt_client key
+        p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>"
+          pp_tls_crypt_client key
     | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
@@ -1016,17 +1017,16 @@ let inline_payload element =
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
 let a_tls_crypt_v2_client_payload force_cookie =
-  let line = take_till ((=) '\n') <* char '\n' in
+  let line = take_till (( = ) '\n') <* char '\n' in
   many line >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
   match Tls_crypt.load_tls_crypt_v2_client lines with
-  | Ok (key, wkc) ->
-      return (B (Tls_crypt_v2_client, (key, wkc, force_cookie)))
+  | Ok (key, wkc) -> return (B (Tls_crypt_v2_client, (key, wkc, force_cookie)))
   | Error _ -> fail "Invalid tls-crypt-v2 key"
 
 let a_tls_crypt_v2_server_payload force_cookie =
-  let line = take_till ((=) '\n') <* char '\n' in
+  let line = take_till (( = ) '\n') <* char '\n' in
   many line >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
@@ -1077,7 +1077,8 @@ let a_tls_crypt_payload str =
   let lines = List.to_seq lines in
   let* key =
     Tls_crypt.Tls_crypt.load_v1 lines
-    |> Result.map_error (fun (`Msg msg) -> msg) in
+    |> Result.map_error (fun (`Msg msg) -> msg)
+  in
   Ok (B (Tls_crypt, key))
 
 let a_tls_crypt = a_option_with_single_path "tls-crypt" `Tls_crypt
@@ -1766,11 +1767,8 @@ let eq : eq =
                 | `Ip a, `Ip b -> 0 = Ipaddr.compare a b
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
-        | ( Tls_crypt_v2_client,
-            (k0, _, force_cookie),
-            (k1, _, force_cookie') ) ->
-            Tls_crypt.Tls_crypt.equal k0 k1
-            && force_cookie = force_cookie'
+        | Tls_crypt_v2_client, (k0, _, force_cookie), (k1, _, force_cookie') ->
+            Tls_crypt.Tls_crypt.equal k0 k1 && force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
