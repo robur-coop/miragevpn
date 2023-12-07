@@ -23,6 +23,32 @@
   cstruct-lwt))
 
 (executable
+ (name miragevpn_client_notun)
+ (public_name miragevpn-client-notun)
+ (package miragevpn)
+ (modules miragevpn_client_notun)
+ (libraries
+  miragevpn
+  lwt
+  lwt.unix
+  cmdliner
+  fmt.tty
+  logs
+  logs.fmt
+  logs.cli
+  fmt.cli
+  ipaddr
+  ipaddr.unix
+  ptime.clock.os
+  dns-client-lwt
+  mirage-crypto-rng-lwt
+  mtime.clock.os
+  cstruct-lwt
+  tcpip
+  tcpip.icmpv4
+  tcpip.ipv4))
+
+(executable
  (name openvpn_config_parser)
  (public_name openvpn-config-parser)
  (package miragevpn)
