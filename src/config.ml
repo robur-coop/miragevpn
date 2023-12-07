@@ -247,9 +247,9 @@ module Conf_map = struct
     | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
-    | Tls_crypt : Tls_crypt.Client.t k
+    | Tls_crypt : Tls_crypt.Tls_crypt.t k
     | Tls_crypt_v2_client
-        : (Tls_crypt.Client.t * Cstruct.t * bool) k
+        : (Tls_crypt.Tls_crypt.t * Tls_crypt.Wrapped_key.t * bool) k
     | Tls_crypt_v2_server : (Tls_crypt.Server.t * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
@@ -376,11 +376,11 @@ module Conf_map = struct
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
 
   let pp_tls_crypt_client ppf key =
-    let lines = Tls_crypt.Client.save key in
+    let lines = Tls_crypt.Tls_crypt.save_v1 key in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
-  let pp_tls_crypt_v2_client ppf key =
-    let lines = Tls_crypt.Client.save key in
+  let pp_tls_crypt_v2_client ppf (key, wkc) =
+    let lines = Tls_crypt.save_tls_crypt_v2_client key wkc in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
   let pp_tls_crypt_v2_server ppf key =
@@ -613,10 +613,10 @@ module Conf_map = struct
           (List.map cs13_to_cipher13 ciphers)
     | Tls_crypt, key ->
         p () "tls-crypt [inline]\n<tls-crypt>\n%a\n</tls-crypt>" pp_tls_crypt_client key
-    | Tls_crypt_v2_client, (key, _wkc, force_cookie) ->
+    | Tls_crypt_v2_client, (key, wkc, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s\n<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
-          pp_tls_crypt_v2_client key
+          pp_tls_crypt_v2_client (key, wkc)
     | Tls_crypt_v2_server, (key, force_cookie) ->
         p () "tls-crypt-v2 [inline] %s<tls-crypt-v2>\n%a\n</tls-crypt-v2>"
           (if force_cookie then "force-cookie" else "allow-noncookie")
@@ -1020,9 +1020,8 @@ let a_tls_crypt_v2_client_payload force_cookie =
   many line >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
-  match Tls_crypt.Client.load ~version:`V2 lines with
-  | Ok key ->
-      let wkc = Option.get (Tls_crypt.Client.wkc key) in
+  match Tls_crypt.load_tls_crypt_v2_client lines with
+  | Ok (key, wkc) ->
       return (B (Tls_crypt_v2_client, (key, wkc, force_cookie)))
   | Error _ -> fail "Invalid tls-crypt-v2 key"
 
@@ -1031,7 +1030,7 @@ let a_tls_crypt_v2_server_payload force_cookie =
   many line >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
-  match Tls_crypt.Server.load `V2 ~lines with
+  match Tls_crypt.Server.load ~lines with
   | Ok key -> return (B (Tls_crypt_v2_server, (key, force_cookie)))
   | Error _ -> fail "Invalid tls-crypt-v2 key"
 
@@ -1077,7 +1076,7 @@ let a_tls_crypt_payload str =
   let lines = String.split_on_char '\n' str in
   let lines = List.to_seq lines in
   let* key =
-    Tls_crypt.Client.load ~version:`V1 lines
+    Tls_crypt.Tls_crypt.load_v1 lines
     |> Result.map_error (fun (`Msg msg) -> msg) in
   Ok (B (Tls_crypt, key))
 
@@ -1770,7 +1769,7 @@ let eq : eq =
         | ( Tls_crypt_v2_client,
             (k0, _, force_cookie),
             (k1, _, force_cookie') ) ->
-            Tls_crypt.Client.equal k0 k1
+            Tls_crypt.Tls_crypt.equal k0 k1
             && force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)

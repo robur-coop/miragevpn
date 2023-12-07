@@ -700,9 +700,8 @@ hamAmG7IN/ftCUCTJe38ziqHiSMB6LNUFAEr
   in
   let key = String.split_on_char '\n' key in
   let key = List.to_seq key in
-  match Tls_crypt.Client.load ~version:`V2 key with
-  | Ok key ->
-      let wkc = Option.get (Tls_crypt.Client.wkc key) in
+  match Tls_crypt.load_tls_crypt_v2_client key with
+  | Ok (key, wkc) ->
       client_conf |> remove Tls_auth |> add Tls_crypt_v2_client (key, wkc, false)
   | Error (`Msg msg) -> failwith msg
 
@@ -719,7 +718,7 @@ gpmt0TrnpFtBkWzq8jd/fEaYq5rFVuqY6P8t7UtZJ/c=
   let key = String.split_on_char '\n' key in
   let key = List.to_seq key in
   let key =
-    match Tls_crypt.Server.load `V2 ~lines:key with
+    match Tls_crypt.Server.load ~lines:key with
     | Ok key -> key
     | Error (`Msg msg) -> failwith msg
   in

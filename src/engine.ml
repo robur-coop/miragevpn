@@ -160,8 +160,8 @@ let tls_crypt config =
   | Some kc ->
       Ok
         {
-          my = Tls_crypt.Client.server_key kc;
-          their = Tls_crypt.Client.client_key kc;
+          my = Tls_crypt.Tls_crypt.server_key kc;
+          their = Tls_crypt.Tls_crypt.client_key kc;
         }
 
 let tls_crypt_v2 config =
@@ -170,8 +170,8 @@ let tls_crypt_v2 config =
   | Some (kc, wkc, force_cookie) ->
       Ok
         ( {
-            my = Tls_crypt.Client.server_key kc;
-            their = Tls_crypt.Client.client_key kc;
+            my = Tls_crypt.Tls_crypt.server_key kc;
+            their = Tls_crypt.Tls_crypt.client_key kc;
           },
           wkc,
           force_cookie )
@@ -1500,6 +1500,7 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt needs_wkc key transport
   let session, transport, maybe_out, outs =
     match (needs_wkc, outs) with
     | Some wkc, (`Control, data) :: rest ->
+        let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
         let acks = bytes_of_acks transport in
         let l = min (mtu - acks - Cstruct.length wkc) (Cstruct.length data) in
         let data, data' = Cstruct.split data l in
@@ -2003,6 +2004,7 @@ let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
             match wkc_opt with
             | None -> init_channel Packet.Hard_reset_client_v2 session 0 now ts
             | Some wkc ->
+                let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
                 let session = { session with my_replay_id = 0x0f000001l } in
                 init_channel ~payload:wkc Packet.Hard_reset_client_v3 session 0
                   now ts
