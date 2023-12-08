@@ -247,10 +247,9 @@ module Conf_map = struct
     | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
-    | Tls_crypt : Tls_crypt.Tls_crypt.t k
-    | Tls_crypt_v2_client
-        : (Tls_crypt.Tls_crypt.t * Tls_crypt.Wrapped_key.t * bool) k
-    | Tls_crypt_v2_server : (Tls_crypt.Server.t * bool) k
+    | Tls_crypt : Tls_crypt.t k
+    | Tls_crypt_v2_client : (Tls_crypt.t * Tls_crypt.Wrapped_key.t * bool) k
+    | Tls_crypt_v2_server : (Tls_crypt.V2_server.t * bool) k
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k
     | Tun_mtu : int k
@@ -376,7 +375,7 @@ module Conf_map = struct
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
 
   let pp_tls_crypt_client ppf key =
-    let lines = Tls_crypt.Tls_crypt.save_v1 key in
+    let lines = Tls_crypt.save_v1 key in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
   let pp_tls_crypt_v2_client ppf (key, wkc) =
@@ -384,7 +383,7 @@ module Conf_map = struct
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
   let pp_tls_crypt_v2_server ppf key =
-    let lines = Tls_crypt.Server.save key in
+    let lines = Tls_crypt.V2_server.save key in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
   let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
@@ -1030,7 +1029,7 @@ let a_tls_crypt_v2_server_payload force_cookie =
   many line >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
-  match Tls_crypt.Server.load ~lines with
+  match Tls_crypt.V2_server.load ~lines with
   | Ok key -> return (B (Tls_crypt_v2_server, (key, force_cookie)))
   | Error _ -> fail "Invalid tls-crypt-v2 key"
 
@@ -1076,8 +1075,7 @@ let a_tls_crypt_payload str =
   let lines = String.split_on_char '\n' str in
   let lines = List.to_seq lines in
   let* key =
-    Tls_crypt.Tls_crypt.load_v1 lines
-    |> Result.map_error (fun (`Msg msg) -> msg)
+    Tls_crypt.load_v1 lines |> Result.map_error (fun (`Msg msg) -> msg)
   in
   Ok (B (Tls_crypt, key))
 
@@ -1768,7 +1766,7 @@ let eq : eq =
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
         | Tls_crypt_v2_client, (k0, _, force_cookie), (k1, _, force_cookie') ->
-            Tls_crypt.Tls_crypt.equal k0 k1 && force_cookie = force_cookie'
+            Tls_crypt.equal k0 k1 && force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in

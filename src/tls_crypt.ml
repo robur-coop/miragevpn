@@ -173,7 +173,7 @@ module Metadata = struct
         Fmt.pf ppf "Timestamp:  %a\n%!" (Ptime.pp_rfc3339 ()) ptime
 end
 
-module Server : sig
+module V2_server : sig
   type t = Key.t
 
   val load : lines:string Seq.t -> (t, [> `Msg of string ]) result
@@ -265,10 +265,12 @@ module Wrapped_key : sig
   type t
 
   val of_cstruct : Cstruct.t -> (Cstruct.t * t, [> `Msg of string ]) result
-  val wrap : key:Server.t -> Tls_crypt.t -> Metadata.t -> t
+  val wrap : key:V2_server.t -> Tls_crypt.t -> Metadata.t -> t
 
   val unwrap :
-    key:Server.t -> t -> (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
+    key:V2_server.t ->
+    t ->
+    (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
 
   val unsafe_to_cstruct : t -> Cstruct.t
 end = struct
@@ -380,3 +382,5 @@ let save_tls_crypt_v2_client key wkc =
     @ [ "-----END OpenVPN tls-crypt-v2 client key-----"; "" ]
   in
   List.to_seq lines
+
+include Tls_crypt

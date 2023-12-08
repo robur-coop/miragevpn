@@ -177,11 +177,10 @@ module Config : sig
     | Tls_version_max : Tls.Core.tls_version k
     | Tls_cipher : Tls.Ciphersuite.ciphersuite list k
     | Tls_ciphersuite : Tls.Ciphersuite.ciphersuite13 list k
-    | Tls_crypt : Tls_crypt.Tls_crypt.t k
-    | Tls_crypt_v2_client
-        : (Tls_crypt.Tls_crypt.t * Tls_crypt.Wrapped_key.t * bool) k
+    | Tls_crypt : Tls_crypt.t k
+    | Tls_crypt_v2_client : (Tls_crypt.t * Tls_crypt.Wrapped_key.t * bool) k
         (** [Tls_crypt_v2_client (key, wkc, force_cookie)] *)
-    | Tls_crypt_v2_server : (Tls_crypt.Server.t * bool) k
+    | Tls_crypt_v2_server : (Tls_crypt.V2_server.t * bool) k
         (** [Tls_crypt_v2_server (key, force_cookie)] *)
     | Topology : [ `Net30 | `P2p | `Subnet ] k
     | Transition_window : int k

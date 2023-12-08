@@ -158,21 +158,14 @@ let tls_crypt config =
   match Config.find Tls_crypt config with
   | None -> Error (`Msg "no tls-crypt payload in config")
   | Some kc ->
-      Ok
-        {
-          my = Tls_crypt.Tls_crypt.server_key kc;
-          their = Tls_crypt.Tls_crypt.client_key kc;
-        }
+      Ok { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc }
 
 let tls_crypt_v2 config =
   match Config.find Tls_crypt_v2_client config with
   | None -> Error (`Msg "no tls-crypt-v2 payload in config")
   | Some (kc, wkc, force_cookie) ->
       Ok
-        ( {
-            my = Tls_crypt.Tls_crypt.server_key kc;
-            their = Tls_crypt.Tls_crypt.client_key kc;
-          },
+        ( { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc },
           wkc,
           force_cookie )
 

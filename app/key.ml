@@ -20,7 +20,7 @@ let tls_crypt_v2_server_key =
     if Sys.file_exists str then
       In_channel.with_open_bin str @@ fun ic ->
       let lines = Seq.of_dispenser (fun () -> In_channel.input_line ic) in
-      let* server_key = Tls_crypt.Server.load ~lines in
+      let* server_key = Tls_crypt.V2_server.load ~lines in
       Ok (str, server_key)
     else error_msgf "%s does not exist" str
   in
@@ -29,7 +29,7 @@ let tls_crypt_v2_server_key =
 
 module Tls_crypt_v2_core = struct
   let generate_client_key g metadata server_key filename =
-    let client_key = Tls_crypt.Tls_crypt.generate ~g () in
+    let client_key = Tls_crypt.generate ~g () in
     let wkc = Tls_crypt.Wrapped_key.wrap ~key:server_key client_key metadata in
     let seq = Tls_crypt.save_tls_crypt_v2_client client_key wkc in
     Bos.OS.File.write_lines filename (List.of_seq seq)
@@ -40,8 +40,8 @@ module Tls_crypt_v2_core = struct
     | Error (`Msg msg) -> `Error (false, Fmt.str "%s." msg)
 
   let generate_server_key g filename =
-    let server_key = Tls_crypt.Server.generate ~g () in
-    let seq = Tls_crypt.Server.save server_key in
+    let server_key = Tls_crypt.V2_server.generate ~g () in
+    let seq = Tls_crypt.V2_server.save server_key in
     Bos.OS.File.write_lines filename (List.of_seq seq)
 
   let generate_server_key g filename =

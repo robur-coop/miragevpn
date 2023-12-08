@@ -718,7 +718,7 @@ gpmt0TrnpFtBkWzq8jd/fEaYq5rFVuqY6P8t7UtZJ/c=
   let key = String.split_on_char '\n' key in
   let key = List.to_seq key in
   let key =
-    match Tls_crypt.Server.load ~lines:key with
+    match Tls_crypt.V2_server.load ~lines:key with
     | Ok key -> key
     | Error (`Msg msg) -> failwith msg
   in
@@ -732,7 +732,7 @@ gpmt0TrnpFtBkWzq8jd/fEaYq5rFVuqY6P8t7UtZJ/c=
         Miragevpn.Config.(get Tls_crypt_v2_server) conf
       in
       let tls_crypt_v2_server =
-        Alcotest.testable Tls_crypt.Server.pp Tls_crypt.Server.equal
+        Alcotest.testable Tls_crypt.V2_server.pp Tls_crypt.V2_server.equal
       in
       Alcotest.(check tls_crypt_v2_server) "first part of server key" key key';
       Alcotest.(check bool) "force-cookie" true force_cookie
