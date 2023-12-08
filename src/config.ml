@@ -1016,8 +1016,8 @@ let inline_payload element =
   Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
 let a_tls_crypt_v2_client_payload force_cookie =
-  let line = take_till (( = ) '\n') <* char '\n' in
-  many line >>= fun lines ->
+  let line = a_line not_control_char in
+  many_till line end_of_input >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
   match Tls_crypt.load_tls_crypt_v2_client lines with
@@ -1025,8 +1025,8 @@ let a_tls_crypt_v2_client_payload force_cookie =
   | Error _ -> fail "Invalid tls-crypt-v2 key"
 
 let a_tls_crypt_v2_server_payload force_cookie =
-  let line = take_till (( = ) '\n') <* char '\n' in
-  many line >>= fun lines ->
+  let line = a_line not_control_char in
+  many_till line end_of_input >>= fun lines ->
   available >>= take >>= fun rest ->
   let lines = Seq.append (List.to_seq lines) (Seq.return rest) in
   match Tls_crypt.V2_server.load ~lines with
@@ -1074,6 +1074,12 @@ let a_tls_crypt_payload str =
   let open Result.Syntax in
   let lines = String.split_on_char '\n' str in
   let lines = List.to_seq lines in
+  let trim_cr s =
+    if String.length s > 0 && Char.equal s.[String.length s - 1] '\r' then
+      String.sub s 0 (String.length s - 1)
+    else s
+  in
+  let lines = Seq.map trim_cr lines in
   let* key =
     Tls_crypt.load_v1 lines |> Result.map_error (fun (`Msg msg) -> msg)
   in
