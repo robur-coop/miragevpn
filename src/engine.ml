@@ -1869,21 +1869,21 @@ let retransmit timeout ts transport =
   in
   ({ transport with out_packets }, out)
 
-let resolve_connect_client config ts s ev =
+let resolve_connect_client make_state t ts s ev =
   let open Result.Syntax in
   let remote, next_remote =
-    let remotes = Config.get Remote config in
+    let remotes = Config.get Remote t.config in
     let r idx = List.nth remotes idx in
     let next idx =
       if succ idx = List.length remotes then None else Some (r (succ idx))
     in
     (r, next)
   and retry_exceeded r =
-    match Config.get Connect_retry_max config with
+    match Config.get Connect_retry_max t.config with
     | `Times m -> m > r
     | `Unlimited -> false
   in
-  let next_or_fail idx retry =
+  let next_or_fail t idx retry =
     let idx', retry', v =
       match next_remote idx with
       | None -> (0, succ retry, remote 0)
@@ -1892,39 +1892,46 @@ let resolve_connect_client config ts s ev =
     if retry_exceeded retry' then
       Error (`Msg "maximum connection retries exceeded")
     else
-      Ok
-        (match v with
+      let state, action =
+        match v with
         | `Domain (name, ip_version), _, _ ->
             (Resolving (idx', ts, retry'), `Resolve (name, ip_version))
         | `Ip ip, port, dp ->
-            (Connecting (idx', ts, retry'), `Connect (ip, port, dp)))
+            (Connecting (idx', ts, retry'), `Connect (ip, port, dp))
+      in
+      (* We reset [linger] to enforce the invariant that [linger] is empty when
+         we are connecting (or resolving) *)
+      Ok ({ t with linger = Cstruct.empty; state = make_state state }, action)
   in
   match (s, ev) with
   | Resolving (idx, _, retry), `Resolved ip ->
       (* TODO enforce ipv4/ipv6 *)
       let endp = match remote idx with _, port, dp -> (ip, port, dp) in
-      Ok (Connecting (idx, ts, retry), Some (`Connect endp))
+      let t = { t with state = make_state (Connecting (idx, ts, retry)) } in
+      Ok (t, Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
-      let+ state, action = next_or_fail idx retry in
-      (state, Some action)
+      let+ t, action = next_or_fail t idx retry in
+      (t, Some action)
   | Connecting (idx, _, retry), `Connection_failed ->
-      let+ state, action = next_or_fail idx retry in
-      (state, Some action)
+      let+ t, action = next_or_fail t idx retry in
+      (t, Some action)
   | Connecting (idx, initial_ts, retry), `Tick ->
       (* We are trying to establish a connection and a clock tick happens.
          We need to determine if {!Config.Connect_timeout} seconds has passed
          since [initial_ts] (when we started connecting), and if so,
          try the next [Remote]. *)
-      let conn_timeout = Duration.of_sec Config.(get Connect_timeout config) in
+      let conn_timeout =
+        Duration.of_sec Config.(get Connect_timeout t.config)
+      in
       if Int64.sub ts initial_ts >= conn_timeout then (
         Log.err (fun m -> m "Connecting to remote #%d timed out" idx);
-        let+ state, action = next_or_fail idx retry in
-        (state, Some action))
-      else Ok (s, None)
+        let+ t, action = next_or_fail t idx retry in
+        (t, Some action))
+      else Ok (t, None)
   | _, `Connection_failed ->
       (* re-start from scratch *)
-      let+ state, action = next_or_fail (-1) 0 in
-      (state, Some action)
+      let+ t, action = next_or_fail t (-1) 0 in
+      (t, Some action)
   | _ -> Error (`Not_handled (remote, next_or_fail))
 
 let handshake_timeout next_or_fail client t s ts =
@@ -1950,15 +1957,15 @@ let handshake_timeout next_or_fail client t s ts =
           let channel = { ch with transport } in
           Ok (set_ch channel, out, None)
       | Error `Hand_timeout ->
-          let+ state, action = next_or_fail (-1) 0 in
-          ({ t with state = client state }, [], Some action))
+          let+ t, action = next_or_fail t (-1) 0 in
+          (t, [], Some action))
 
 let handle_client_tls_auth t s tls_auth ev =
   let open Result.Syntax in
   let now = t.now () and ts = t.ts () in
   let client state = Client_tls_auth { state; tls_auth } in
-  match resolve_connect_client t.config ts s ev with
-  | Ok (s, action) -> Ok ({ t with state = client s }, [], Option.to_list action)
+  match resolve_connect_client client t ts s ev with
+  | Ok (t, action) -> Ok (t, [], Option.to_list action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
@@ -1983,8 +1990,8 @@ let handle_client_tls_auth t s tls_auth ev =
               match maybe_ping_timeout t with
               | Some `Exit -> Ok (t, out, [ `Exit ])
               | Some `Restart ->
-                  let+ state, action = next_or_fail (-1) 0 in
-                  ({ t with state = client state }, out, [ action ])
+                  let+ t, action = next_or_fail t (-1) 0 in
+                  (t, out, [ action ])
               | None ->
                   let t', outs = timer t in
                   Ok (t', out @ outs, [])))
@@ -1999,8 +2006,8 @@ let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
   let client state =
     Client_tls_crypt { state; tls_crypt = (tls_crypt, wkc_opt) }
   in
-  match resolve_connect_client t.config ts s ev with
-  | Ok (s, action) -> Ok ({ t with state = client s }, [], Option.to_list action)
+  match resolve_connect_client client t ts s ev with
+  | Ok (t, action) -> Ok (t, [], Option.to_list action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
@@ -2032,8 +2039,8 @@ let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
               match maybe_ping_timeout t with
               | Some `Exit -> Ok (t, out, [ `Exit ])
               | Some `Restart ->
-                  let+ state, action = next_or_fail (-1) 0 in
-                  ({ t with state = client state }, out, [ action ])
+                  let+ t, action = next_or_fail t (-1) 0 in
+                  (t, out, [ action ])
               | None ->
                   let t', outs = timer t in
                   Ok (t', out @ outs, [])))
@@ -2067,8 +2074,8 @@ let handle_static_client t s keys ev =
   let open Result.Syntax in
   let ts = t.ts () in
   let client state = Client_static { keys; state } in
-  match resolve_connect_client t.config ts s ev with
-  | Ok (s, action) -> Ok ({ t with state = client s }, [], Option.to_list action)
+  match resolve_connect_client client t ts s ev with
+  | Ok (t, action) -> Ok (t, [], Option.to_list action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
@@ -2094,8 +2101,8 @@ let handle_static_client t s keys ev =
           match maybe_ping_timeout t with
           | Some `Exit -> Ok (t, [], [ `Exit ])
           | Some `Restart ->
-              let+ state, action = next_or_fail (-1) 0 in
-              ({ t with state = client state }, [], [ action ])
+              let+ t, action = next_or_fail t (-1) 0 in
+              (t, [], [ action ])
           | None ->
               let t', outs = timer t in
               Ok (t', outs, []))
