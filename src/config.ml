@@ -1765,8 +1765,12 @@ let eq : eq =
                 | `Ip a, `Ip b -> 0 = Ipaddr.compare a b
                 | (`Domain _ | `Ip _), (`Domain _ | `Ip _) -> false)
               remotes_lst remotes_lst2
-        | Tls_crypt_v2_client, (k0, _, force_cookie), (k1, _, force_cookie') ->
-            Tls_crypt.equal k0 k1 && force_cookie = force_cookie'
+        | ( Tls_crypt_v2_client,
+            (k0, wkc0, force_cookie),
+            (k1, wkc1, force_cookie') ) ->
+            Tls_crypt.equal k0 k1
+            && Tls_crypt.Wrapped_key.equal wkc0 wkc1
+            && force_cookie = force_cookie'
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in

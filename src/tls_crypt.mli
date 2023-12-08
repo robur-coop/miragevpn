@@ -49,6 +49,7 @@ module Wrapped_key : sig
     (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
 
   val unsafe_to_cstruct : t -> Cstruct.t
+  val equal : t -> t -> bool
 end
 
 val load_tls_crypt_v2_client :

@@ -273,10 +273,12 @@ module Wrapped_key : sig
     (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
 
   val unsafe_to_cstruct : t -> Cstruct.t
+  val equal : t -> t -> bool
 end = struct
   type t = Cstruct.t
 
   let unsafe_to_cstruct t = t
+  let equal = Eqaf_cstruct.equal
 
   let of_cstruct buf =
     let open Result.Syntax in
