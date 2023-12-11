@@ -262,25 +262,22 @@ type tls_auth = {
 
 type tls_crypt = { my : Tls_crypt.Key.t; their : Tls_crypt.Key.t }
 
-type state =
-  | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
-  | Client_tls_crypt of {
-      tls_crypt : tls_crypt * Tls_crypt.Wrapped_key.t option;
-      state : client_state;
-    }
-  | Client_static of { keys : keys; state : client_state }
-  | Server_tls_auth of { tls_auth : tls_auth; state : server_state }
+type control_crypto =
+  | Tls_auth of tls_auth
+  | Tls_crypt of tls_crypt * Tls_crypt.Wrapped_key.t option
+  | Static of keys
+
+let pp_control_crypto ppf = function
+  | Tls_auth _ -> Fmt.string ppf "tls-auth"
+  | Tls_crypt (_, None) -> Fmt.string ppf "tls-crypt"
+  | Tls_crypt (_, Some _) -> Fmt.string ppf "tls-crypt-v2"
+  | Static _ -> Fmt.string ppf "static"
+
+type state = Client of client_state | Server of server_state
 
 let pp_state ppf = function
-  | Client_tls_auth { state; _ } ->
-      Fmt.pf ppf "client tls-auth %a" pp_client_state state
-  | Client_tls_crypt { state; tls_crypt = _, None } ->
-      Fmt.pf ppf "client tls-crypt %a" pp_client_state state
-  | Client_tls_crypt { state; tls_crypt = _, Some _ } ->
-      Fmt.pf ppf "client tls-crypt-v2 %a" pp_client_state state
-  | Client_static { state; _ } ->
-      Fmt.pf ppf "client static %a" pp_client_state state
-  | Server_tls_auth { state; _ } -> pp_server_state ppf state
+  | Client state -> Fmt.pf ppf "client %a" pp_client_state state
+  | Server state -> Fmt.pf ppf "server %a" pp_server_state state
 
 type t = {
   config : Config.t;
@@ -288,6 +285,7 @@ type t = {
   rng : int -> Cstruct.t;
   ts : unit -> int64;
   now : unit -> Ptime.t;
+  control_crypto : control_crypto;
   state : state;
   session : session;
   channel : channel;
@@ -301,10 +299,10 @@ let pp ppf t =
     match t.lame_duck with None -> None | Some (ch, _) -> Some ch
   in
   Fmt.pf ppf
-    "linger %d@ state %a@ session %a@ active %a@ lame duck %a@ last-rcvd %Lu@ \
-     last-sent %Lu"
-    (Cstruct.length t.linger) pp_state t.state pp_session t.session pp_channel
-    t.channel
+    "linger %d@ state %a@ control crypto %a@ session %a@ active %a@ lame duck \
+     %a@ last-rcvd %Lu@ last-sent %Lu"
+    (Cstruct.length t.linger) pp_state t.state pp_control_crypto
+    t.control_crypto pp_session t.session pp_channel t.channel
     Fmt.(option ~none:(any "no") pp_channel)
     lame_duck t.last_received t.last_sent
 
@@ -351,7 +349,7 @@ let data_mtu config session =
       in
       tun_mtu - hdr
 
-let control_mtu config state session =
+let control_mtu config control_crypto session =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
   let tun_mtu =
     match Config.find Tun_mtu config with
@@ -359,12 +357,12 @@ let control_mtu config state session =
     | Some x -> x
   in
   let mac_len =
-    match state with
-    | Client_static _ -> assert false
-    | Client_tls_auth _ | Server_tls_auth _ ->
+    match control_crypto with
+    | Static _ -> assert false
+    | Tls_auth _ ->
         (* here, the hash is used from auth *)
         Config.get Auth config |> Mirage_crypto.Hash.digest_size
-    | Client_tls_crypt _ ->
+    | Tls_crypt _ ->
         (* AES_CTR and SHA256 *)
         Mirage_crypto.Hash.SHA256.digest_size
   in
@@ -381,34 +379,23 @@ let channel_of_keyid keyid s =
         Some (ch, fun s ch -> { s with lame_duck = Some (ch, ts) })
     | _ -> (
         match s.state with
-        | Client_tls_auth { state = Rekeying channel; tls_auth }
-          when channel.keyid = keyid ->
+        | Client (Rekeying channel) when channel.keyid = keyid ->
             let set s ch =
-              let state = Client_tls_auth { tls_auth; state = Rekeying ch } in
+              let state = Client (Rekeying ch) in
               { s with state }
             in
             Some (channel, set)
-        | Client_tls_crypt { state = Rekeying channel; tls_crypt }
-          when channel.keyid = keyid ->
+        | Server (Server_rekeying channel) when channel.keyid = keyid ->
             let set s ch =
-              let state = Client_tls_crypt { tls_crypt; state = Rekeying ch } in
-              { s with state }
-            in
-            Some (channel, set)
-        | Server_tls_auth { state = Server_rekeying channel; tls_auth }
-          when channel.keyid = keyid ->
-            let set s ch =
-              let state =
-                Server_tls_auth { state = Server_rekeying ch; tls_auth }
-              in
+              let state = Server (Server_rekeying ch) in
               { s with state }
             in
             Some (channel, set)
         | _ -> None)
 
 let transition_to_established t =
-  match t.state with
-  | Client_tls_auth { state = Handshaking _; tls_auth } ->
+  match (t.control_crypto, t.state) with
+  | (Tls_auth _ | Tls_crypt _), Client (Handshaking _) ->
       let compress =
         match Config.find Comp_lzo t.config with
         | None -> false
@@ -416,64 +403,23 @@ let transition_to_established t =
       in
       let session = { t.session with compress }
       and mtu = data_mtu t.config t.session in
-      Ok
-        ( { t with state = Client_tls_auth { state = Ready; tls_auth }; session },
-          Some mtu )
-  | Client_tls_crypt { state = Handshaking _; tls_crypt } ->
-      let compress =
-        match Config.find Comp_lzo t.config with
-        | None -> false
-        | Some () -> true
-      in
-      let session = { t.session with compress }
-      and mtu = data_mtu t.config t.session in
-      Ok
-        ( {
-            t with
-            state = Client_tls_crypt { state = Ready; tls_crypt };
-            session;
-          },
-          Some mtu )
-  | Client_tls_auth { state = Rekeying _; tls_auth } ->
+      Ok ({ t with state = Client Ready; session }, Some mtu)
+  | (Tls_auth _ | Tls_crypt _), Client (Rekeying _) ->
       (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
       let lame_duck = Some (t.channel, t.ts ()) in
-      Ok
-        ( {
-            t with
-            state = Client_tls_auth { state = Ready; tls_auth };
-            lame_duck;
-          },
-          None )
-  | Client_tls_crypt { state = Rekeying _; tls_crypt } ->
-      (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-      let lame_duck = Some (t.channel, t.ts ()) in
-      Ok
-        ( {
-            t with
-            state = Client_tls_crypt { state = Ready; tls_crypt };
-            lame_duck;
-          },
-          None )
-  | Server_tls_auth { state = Server_handshaking; tls_auth } ->
+      Ok ({ t with state = Client Ready; lame_duck }, None)
+  | (Tls_auth _ | Tls_crypt _), Server Server_handshaking ->
       let mtu = data_mtu t.config t.session in
-      Ok
-        ( { t with state = Server_tls_auth { state = Server_ready; tls_auth } },
-          Some mtu )
-  | Server_tls_auth { state = Server_rekeying _; tls_auth } ->
+      Ok ({ t with state = Server Server_ready }, Some mtu)
+  | (Tls_auth _ | Tls_crypt _), Server (Server_rekeying _) ->
       (* TODO: may cipher (i.e. mtu) or compress (or IP?) change between rekeys? *)
       let lame_duck = Some (t.channel, t.ts ()) in
-      Ok
-        ( {
-            t with
-            state = Server_tls_auth { state = Server_ready; tls_auth };
-            lame_duck;
-          },
-          None )
-  | (Client_tls_auth _ | Client_tls_crypt _ | Server_tls_auth _) as state ->
+      Ok ({ t with state = Server Server_ready; lame_duck }, None)
+  | (Tls_auth _ | Tls_crypt _), state ->
       Error
         (`Msg
           (Fmt.str "couldn't transition to established, state %a" pp_state state))
-  | Client_static _ -> assert false
+  | Static _, _ -> assert false
 
 type server = {
   server_config : Config.t;
