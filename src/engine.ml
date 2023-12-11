@@ -127,6 +127,12 @@ let encrypt_and_out protocol { my; _ }
   Cstruct.blit encrypted 0 buf enc_off enc_len;
   buf
 
+let wrap_and_out protocol control_crypto p =
+  match control_crypto with
+  | Tls_auth tls_auth -> hmac_and_out protocol tls_auth p
+  | Tls_crypt (tls_crypt, _wkc_opt) -> encrypt_and_out protocol tls_crypt p
+  | Static _ -> assert false
+
 let tls_auth config =
   match Config.find Tls_auth config with
   | None -> Error (`Msg "no tls auth payload in config")
@@ -1221,21 +1227,16 @@ let maybe_init_rekey s =
     init_channel Packet.Soft_reset_v2 s.session keyid (s.now ()) (s.ts ())
   in
   match (s.state, s.control_crypto) with
-  | Client Ready, Tls_auth tls_auth ->
+  | Client Ready, (Tls_auth _ | Tls_crypt _) ->
       let session, channel, out = init_channel () in
       (* allocate new channel, send out a rst (and await a rst) *)
       let state = Client (Rekeying channel) in
-      let out = hmac_and_out s.session.protocol tls_auth out in
+      let out = wrap_and_out s.session.protocol s.control_crypto out in
       ({ s with state; session }, [ out ])
   | Server Server_ready, Tls_auth tls_auth ->
       let session, channel, out = init_channel () in
       let state = Server (Server_rekeying channel) in
       let out = hmac_and_out s.session.protocol tls_auth out in
-      ({ s with state; session }, [ out ])
-  | Client Ready, Tls_crypt (tls_crypt, _) ->
-      let session, channel, out = init_channel () in
-      let state = Client (Rekeying channel) in
-      let out = encrypt_and_out s.session.protocol tls_crypt out in
       ({ s with state; session }, [ out ])
   | _, Static _ ->
       (* there's no rekey mechanism in static mode *)
@@ -1447,7 +1448,7 @@ let bytes_of_acks transport =
     (amount * Packet.id_len) + Packet.session_id_len (* remote session *)
   else amount
 
-let wrap_hmac_control now ts mtu session tls_auth key transport outs =
+let wrap_control now ts mtu session control_crypto key transport outs =
   let now_ts = ptime_to_ts_exn now in
   let acks = bytes_of_acks transport in
   let outs = split_control ~acks mtu outs in
@@ -1471,7 +1472,7 @@ let wrap_hmac_control now ts mtu session tls_auth key transport outs =
               (session, transport, `Control (op, (header, sn, out)))
         in
         (* hmac each outgoing frame and encode *)
-        let out = hmac_and_out session.protocol tls_auth (key, p) in
+        let out = wrap_and_out session.protocol control_crypto (key, p) in
         let out_packets =
           match p with
           | `Ack _ -> transport.out_packets
@@ -1519,40 +1520,12 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt needs_wkc key transport
         assert false
     | None, _ -> (session, transport, None, outs)
   in
-  (* we split the remainder control packets *)
-  let acks = bytes_of_acks transport in
-  let outs = split_control ~acks mtu outs in
   let session, transport, outs =
-    List.fold_left
-      (fun (session, transport, acc) (typ, out) ->
-        (* add the OpenVPN header *)
-        let session, transport, p =
-          match typ with
-          | `Ack ->
-              let session, transport, header =
-                header session transport now_ts
-              in
-              (session, transport, `Ack header)
-          | (`Control | `Reset_server | `Reset) as typ ->
-              let op = op_of_typ typ in
-              let session, transport, header =
-                header session transport now_ts
-              in
-              let transport, sn = next_sequence_number transport in
-              (session, transport, `Control (op, (header, sn, out)))
-        in
-        let out = encrypt_and_out session.protocol tls_crypt (key, p) in
-        let out_packets =
-          match p with
-          | `Ack _ -> transport.out_packets
-          | `Control (_, (_, sn, _)) as p ->
-              IM.add sn (ts, (key, p)) transport.out_packets
-        in
-        (session, { transport with out_packets }, out :: acc))
-      (session, transport, []) outs
+    (* We don't need wkc here so we fake it with [None] *)
+    let control_crypto = Tls_crypt (tls_crypt, None) in
+    wrap_control now ts mtu session control_crypto key transport outs
   in
   let outs =
-    let outs = List.rev outs in
     Option.fold ~none:outs ~some:(fun c_wkc -> c_wkc :: outs) maybe_out
   in
   (session, transport, outs)
@@ -1678,8 +1651,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         control_mtu config state.control_crypto state.session
                       in
                       let session, transport, encs =
-                        wrap_hmac_control (state.now ()) (state.ts ()) my_mtu
-                          state.session tls_auth key ch.transport out'
+                        wrap_control (state.now ()) (state.ts ()) my_mtu
+                          state.session state.control_crypto key ch.transport
+                          out'
                       in
                       let out = out @ encs
                       and ch = { ch with transport }
@@ -1921,7 +1895,7 @@ let handshake_timeout next_or_fail t s ts =
           let+ t, action = next_or_fail t (-1) 0 in
           (t, [], Some action))
 
-let handle_client_tls_auth t s tls_auth ev =
+let handle_client t s ev =
   let open Result.Syntax in
   let now = t.now () and ts = t.ts () in
   match resolve_connect_client t ts s ev with
@@ -1934,58 +1908,23 @@ let handle_client_tls_auth t s tls_auth ev =
           let protocol = match remote idx with _, _, proto -> proto in
           let session = init_session ~my_session_id ~protocol () in
           let session, channel, out =
-            init_channel Packet.Hard_reset_client_v2 session 0 now ts
-          in
-          let state = Client (Handshaking (idx, ts)) in
-          let out = hmac_and_out t.session.protocol tls_auth out in
-          Ok ({ t with state; channel; session }, [ out ], [])
-      | s, `Tick -> (
-          let* t, out, action_opt = handshake_timeout next_or_fail t s ts in
-          let out = List.map (hmac_and_out t.session.protocol tls_auth) out in
-          match action_opt with
-          | Some action -> Ok (t, out, [ action ])
-          | None -> (
-              match maybe_ping_timeout t with
-              | Some `Exit -> Ok (t, out, [ `Exit ])
-              | Some `Restart ->
-                  let+ t, action = next_or_fail t (-1) 0 in
-                  (t, out, [ action ])
-              | None ->
-                  let t', outs = timer t in
-                  Ok (t', out @ outs, [])))
-      | _, `Data cs -> incoming t cs
-      | s, ev ->
-          Result.error_msgf "handle_client: unexpected event %a in state %a"
-            pp_event ev pp_client_state s)
-
-let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
-  let open Result.Syntax in
-  let now = t.now () and ts = t.ts () in
-  match resolve_connect_client t ts s ev with
-  | Ok (t, action) -> Ok (t, [], Option.to_list action)
-  | Error (`Msg _) as e -> e
-  | Error (`Not_handled (remote, next_or_fail)) -> (
-      match (s, ev) with
-      | Connecting (idx, _, _), `Connected ->
-          let my_session_id = Randomconv.int64 t.rng in
-          let protocol = match remote idx with _, _, proto -> proto in
-          let session = init_session ~my_session_id ~protocol () in
-          let session, channel, out =
-            match wkc_opt with
-            | None -> init_channel Packet.Hard_reset_client_v2 session 0 now ts
-            | Some wkc ->
+            match t.control_crypto with
+            | Tls_crypt (_, Some wkc) ->
                 let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
                 let session = { session with my_replay_id = 0x0f000001l } in
                 init_channel ~payload:wkc Packet.Hard_reset_client_v3 session 0
                   now ts
+            | Tls_crypt (_, None) | Tls_auth _ ->
+                init_channel Packet.Hard_reset_client_v2 session 0 now ts
+            | Static _ -> assert false
           in
           let state = Client (Handshaking (idx, ts)) in
-          let out = encrypt_and_out t.session.protocol tls_crypt out in
+          let out = wrap_and_out t.session.protocol t.control_crypto out in
           Ok ({ t with state; channel; session }, [ out ], [])
       | s, `Tick -> (
           let* t, out, action_opt = handshake_timeout next_or_fail t s ts in
           let out =
-            List.map (encrypt_and_out t.session.protocol tls_crypt) out
+            List.map (wrap_and_out t.session.protocol t.control_crypto) out
           in
           match action_opt with
           | Some action -> Ok (t, out, [ action ])
@@ -2095,10 +2034,7 @@ let handle_static_client t s keys ev =
 
 let handle t ?is_not_taken ev =
   match (t.state, t.control_crypto) with
-  | Client state, Tls_auth tls_auth ->
-      handle_client_tls_auth t state tls_auth ev
+  | Client state, (Tls_auth _ | Tls_crypt _) -> handle_client t state ev
   | Client state, Static keys -> handle_static_client t state keys ev
-  | Client state, Tls_crypt (tls_crypt, wkc_opt) ->
-      handle_client_tls_crypt t state tls_crypt wkc_opt ev
   | Server state, Tls_auth _ -> handle_server ?is_not_taken t state ev
   | Server _, _ -> Error (`Msg "server only supports tls_auth so far")
