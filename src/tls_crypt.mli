@@ -41,9 +41,7 @@ module Wrapped_key : sig
   val wrap : key:V2_server.t -> tls_crypt -> Metadata.t -> t
 
   val unwrap :
-    key:V2_server.t ->
-    t ->
-    (tls_crypt * Metadata.t, [> `Msg of string ]) result
+    key:V2_server.t -> t -> (tls_crypt * Metadata.t, [> `Msg of string ]) result
 
   val unsafe_to_cstruct : t -> Cstruct.t
   val equal : t -> t -> bool

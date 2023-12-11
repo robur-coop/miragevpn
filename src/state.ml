@@ -231,8 +231,8 @@ let pp_session ppf t =
 
 type client_state =
   | Resolving of
-      int * int64 * int (* index [into remote], timestamp, retry count *)
-  | Connecting of int * int64 * int (* index [into remote], ts, retry count *)
+      int * int64 * int (* index into [remote], timestamp, retry count *)
+  | Connecting of int * int64 * int (* index into [remote], ts, retry count *)
   | Handshaking of int * int64 (* index into [remote], ts *)
   | Ready
   | Rekeying of channel
@@ -260,7 +260,6 @@ type tls_auth = {
   their_hmac : Cstruct.t;
 }
 
-type tls_crypt_key = Mirage_crypto.Cipher_block.AES.CTR.key
 type tls_crypt = { my : Tls_crypt.Key.t; their : Tls_crypt.Key.t }
 
 type state =

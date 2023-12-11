@@ -1777,10 +1777,9 @@ let eq : eq =
             Tls_crypt.equal k0 k1
             && Tls_crypt.Wrapped_key.equal wkc0 wkc1
             && force_cookie = force_cookie'
-        | ( Tls_crypt_v2_server, (k0, force_cookie0), (k1, force_cookie1) ) ->
-          Tls_crypt.V2_server.equal k0 k1 && force_cookie0 = force_cookie1
-        | ( Tls_crypt, k0, k1 ) ->
-          Tls_crypt.equal k0 k1
+        | Tls_crypt_v2_server, (k0, force_cookie0), (k1, force_cookie1) ->
+            Tls_crypt.V2_server.equal k0 k1 && force_cookie0 = force_cookie1
+        | Tls_crypt, k0, k1 -> Tls_crypt.equal k0 k1
         | _ ->
             (*TODO non-polymorphic comparison*)
             let eq = v = v2 in
