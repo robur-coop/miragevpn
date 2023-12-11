@@ -281,7 +281,8 @@ let client ?pkcs12_password config ts now rng =
       let state =
         {
           config;
-          state = Client_static { keys; state };
+          state = Client state;
+          control_crypto = Static keys;
           linger = Cstruct.empty;
           rng;
           ts;
@@ -300,7 +301,8 @@ let client ?pkcs12_password config ts now rng =
       let state =
         {
           config;
-          state = Client_tls_crypt { state; tls_crypt = (tls_crypt, None) };
+          control_crypto = Tls_crypt (tls_crypt, None);
+          state = Client state;
           linger = Cstruct.empty;
           rng;
           ts;
@@ -319,7 +321,8 @@ let client ?pkcs12_password config ts now rng =
       let state =
         {
           config;
-          state = Client_tls_crypt { state; tls_crypt = (tls_crypt, Some wkc) };
+          control_crypto = Tls_crypt (tls_crypt, Some wkc);
+          state = Client state;
           linger = Cstruct.empty;
           rng;
           ts;
@@ -338,7 +341,8 @@ let client ?pkcs12_password config ts now rng =
       let state =
         {
           config;
-          state = Client_tls_auth { state; tls_auth };
+          control_crypto = Tls_auth tls_auth;
+          state = Client state;
           linger = Cstruct.empty;
           rng;
           ts;
@@ -371,8 +375,8 @@ let new_connection server =
   let channel = new_channel 0 current_ts in
   {
     config = server.server_config;
-    state =
-      Server_tls_auth { state = Server_handshaking; tls_auth = server.tls_auth };
+    control_crypto = Tls_auth server.tls_auth;
+    state = Server Server_handshaking;
     linger = Cstruct.empty;
     rng = server.server_rng;
     ts = server.server_ts;
@@ -947,23 +951,23 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       else Error (`Msg "expected push request")
   | _, _ -> Error (`No_transition (channel, op, data))
 
-let incoming_control is_not_taken config rng state session channel now ts key op
-    data =
+let incoming_control is_not_taken config rng state control_crypto session
+    channel now ts key op data =
   Log.info (fun m ->
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
-  match state with
-  | Client_tls_auth _ | Client_tls_crypt _ ->
+  match (state, control_crypto) with
+  | Client _, (Tls_auth _ | Tls_crypt _) ->
       let open Result.Syntax in
       let+ est, config', ch'', outs =
         incoming_control_client config rng session channel now op data
       in
       (est, config', session, ch'', outs)
-  | Server_tls_auth _ ->
+  | Server _, (Tls_auth _ | Tls_crypt _) ->
       incoming_control_server is_not_taken config rng session channel now ts key
         op data
-  | Client_static _ ->
-      Error (`Msg "client with static keys, no control packets expected")
+  | _, Static _ ->
+      Error (`Msg "endpoint with static keys, no control packets expected")
 
 let expected_packet session transport data =
   let open Result.Syntax in
@@ -1161,8 +1165,8 @@ let outgoing s data =
   let incr ch out =
     { ch with packets = succ ch.packets; bytes = Cstruct.length out + ch.bytes }
   in
-  match (s.state, keys_opt s.channel) with
-  | Client_static { keys; state }, _ ->
+  match (s.control_crypto, keys_opt s.channel) with
+  | Static keys, _ ->
       let add_timestamp = ptime_to_ts_exn (s.now ()) in
       let hmac_algorithm = Config.get Auth s.config in
       let keys, out =
@@ -1170,8 +1174,8 @@ let outgoing s data =
           s.session.protocol s.rng data
       in
       let channel = incr s.channel out in
-      let state = Client_static { keys; state } in
-      Ok ({ s with state; channel; last_sent = s.ts () }, out)
+      let control_crypto = Static keys in
+      Ok ({ s with control_crypto; channel; last_sent = s.ts () }, out)
   | _, None -> Error `Not_ready
   | _, Some ctx ->
       let sess = s.session in
@@ -1216,32 +1220,27 @@ let maybe_init_rekey s =
   let init_channel () =
     init_channel Packet.Soft_reset_v2 s.session keyid (s.now ()) (s.ts ())
   in
-  match s.state with
-  | Client_tls_auth { state = Ready; tls_auth } ->
+  match (s.state, s.control_crypto) with
+  | Client Ready, Tls_auth tls_auth ->
       let session, channel, out = init_channel () in
       (* allocate new channel, send out a rst (and await a rst) *)
-      let state = Client_tls_auth { state = Rekeying channel; tls_auth } in
+      let state = Client (Rekeying channel) in
       let out = hmac_and_out s.session.protocol tls_auth out in
       ({ s with state; session }, [ out ])
-  | Server_tls_auth { state = Server_ready; tls_auth } ->
+  | Server Server_ready, Tls_auth tls_auth ->
       let session, channel, out = init_channel () in
-      let state =
-        Server_tls_auth { state = Server_rekeying channel; tls_auth }
-      in
+      let state = Server (Server_rekeying channel) in
       let out = hmac_and_out s.session.protocol tls_auth out in
       ({ s with state; session }, [ out ])
-  | Client_tls_crypt { state = Ready; tls_crypt = tls_crypt, wkc_opt } ->
+  | Client Ready, Tls_crypt (tls_crypt, _) ->
       let session, channel, out = init_channel () in
-      let state =
-        Client_tls_crypt
-          { state = Rekeying channel; tls_crypt = (tls_crypt, wkc_opt) }
-      in
+      let state = Client (Rekeying channel) in
       let out = encrypt_and_out s.session.protocol tls_crypt out in
       ({ s with state; session }, [ out ])
-  | Client_static _ ->
+  | _, Static _ ->
       (* there's no rekey mechanism in static mode *)
       (s, [])
-  | Client_tls_auth _ | Client_tls_crypt _ | Server_tls_auth _ ->
+  | _, _ ->
       Log.warn (fun m ->
           m "maybe init rekey, but not in client or server ready %a" pp_state
             s.state);
@@ -1564,43 +1563,22 @@ let find_channel state key op =
   | None -> (
       Log.warn (fun m -> m "no channel found! %d" key);
       match (state.state, op) with
-      | Client_tls_auth { state = Ready; tls_auth }, Packet.Soft_reset_v2 ->
+      | Client Ready, Packet.Soft_reset_v2 ->
+          let channel = new_channel key (state.ts ()) in
+          Some (channel, fun s ch -> { s with state = Client (Rekeying ch) })
+      | Server Server_ready, Packet.Soft_reset_v2 ->
           let channel = new_channel key (state.ts ()) in
           Some
-            ( channel,
-              fun s ch ->
-                {
-                  s with
-                  state = Client_tls_auth { state = Rekeying ch; tls_auth };
-                } )
-      | Server_tls_auth { state = Server_ready; tls_auth }, Packet.Soft_reset_v2
-        ->
-          let channel = new_channel key (state.ts ()) in
-          Some
-            ( channel,
-              fun s ch ->
-                {
-                  s with
-                  state =
-                    Server_tls_auth { state = Server_rekeying ch; tls_auth };
-                } )
-      | Client_tls_crypt { state = Ready; tls_crypt }, Packet.Soft_reset_v2 ->
-          let channel = new_channel key (state.ts ()) in
-          Some
-            ( channel,
-              fun s ch ->
-                {
-                  s with
-                  state = Client_tls_crypt { state = Rekeying ch; tls_crypt };
-                } )
-      | ( ( Client_static _ | Client_tls_auth _ | Client_tls_crypt _
-          | Server_tls_auth _ ),
+            (channel, fun s ch -> { s with state = Server (Server_rekeying ch) })
+      | ( ( Client (Resolving _ | Connecting _ | Handshaking _ | Rekeying _)
+          | Server (Server_handshaking | Server_rekeying _) ),
           Packet.Soft_reset_v2 ) ->
           Log.warn (fun m ->
               m "ignoring soft_reset_v2 in non-ready state %a" pp state);
           None
-      | ( ( Client_static _ | Client_tls_auth _ | Client_tls_crypt _
-          | Server_tls_auth _ ),
+      | ( ( Client
+              (Resolving _ | Connecting _ | Handshaking _ | Ready | Rekeying _)
+          | Server (Server_handshaking | Server_ready | Server_rekeying _) ),
           Packet.(
             ( Control | Ack | Data_v1 | Hard_reset_client_v2
             | Hard_reset_server_v2 | Hard_reset_client_v3 | Control_wkc )) ) ->
@@ -1645,9 +1623,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
               Log.debug (fun m ->
                   m "channel %a - received key %u op %a" pp_channel ch key
                     Packet.pp_operation op);
-              match (op, state.state) with
-              | _, Client_static _ ->
-                  (* This function is not meant to be called from static client *)
+              match (op, state.control_crypto) with
+              | _, Static _ ->
+                  (* This function is not meant to be called from static endpoints *)
                   assert false
               | Packet.Data_v1, _ ->
                   let+ state, payload =
@@ -1660,9 +1638,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   (state, out, acts)
               | Packet.Hard_reset_client_v3, _ ->
                   Error (`No_transition (ch, op, payload))
-              | ( op,
-                  ( Client_tls_auth { tls_auth; _ }
-                  | Server_tls_auth { tls_auth; _ } ) ) -> (
+              | op, Tls_auth tls_auth -> (
                   let hmac_len =
                     Mirage_crypto.Hash.digest_size tls_auth.hmac_algorithm
                   in
@@ -1684,8 +1660,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   | `Control (_, (_, _, data)) -> (
                       let* est, config, session, ch, out' =
                         incoming_control is_not_taken state.config state.rng
-                          state.state state.session ch (state.now ())
-                          (state.ts ()) key op data
+                          state.state state.control_crypto state.session ch
+                          (state.now ()) (state.ts ()) key op data
                       in
                       Log.debug (fun m ->
                           m "out channel %a, pkts %d" pp_channel ch
@@ -1699,7 +1675,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       in
                       (* now prepare outgoing packets *)
                       let my_mtu =
-                        control_mtu config state.state state.session
+                        control_mtu config state.control_crypto state.session
                       in
                       let session, transport, encs =
                         wrap_hmac_control (state.now ()) (state.ts ()) my_mtu
@@ -1720,7 +1696,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                                  mtu)
                           in
                           (state, out, est @ acts)))
-              | _, Client_tls_crypt { tls_crypt = tls_crypt, wkc_opt; _ } -> (
+              | _, Tls_crypt (tls_crypt, wkc_opt) -> (
                   let* cleartext, encrypted =
                     Packet.Tls_crypt.decode_cleartext_header payload
                   in
@@ -1768,8 +1744,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   | `Control (_, (_, _, data)) -> (
                       let* est, config, session, ch, out' =
                         incoming_control is_not_taken state.config state.rng
-                          state.state state.session ch (state.now ())
-                          (state.ts ()) key op data
+                          state.state state.control_crypto state.session ch
+                          (state.now ()) (state.ts ()) key op data
                       in
                       Log.debug (fun m ->
                           m "out channel %a, pkts %d" pp_channel ch
@@ -1783,7 +1759,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       in
                       (* now prepare outgoing packets *)
                       let my_mtu =
-                        control_mtu config state.state state.session
+                        control_mtu config state.control_crypto state.session
                       in
                       let session, transport, encs =
                         wrap_tls_crypt_control (state.now ()) (state.ts ())
@@ -1854,7 +1830,7 @@ let retransmit timeout ts transport =
   in
   ({ transport with out_packets }, out)
 
-let resolve_connect_client make_state t ts s ev =
+let resolve_connect_client t ts s ev =
   let open Result.Syntax in
   let remote, next_remote =
     let remotes = Config.get Remote t.config in
@@ -1886,13 +1862,13 @@ let resolve_connect_client make_state t ts s ev =
       in
       (* We reset [linger] to enforce the invariant that [linger] is empty when
          we are connecting (or resolving) *)
-      Ok ({ t with linger = Cstruct.empty; state = make_state state }, action)
+      Ok ({ t with linger = Cstruct.empty; state = Client state }, action)
   in
   match (s, ev) with
   | Resolving (idx, _, retry), `Resolved ip ->
       (* TODO enforce ipv4/ipv6 *)
       let endp = match remote idx with _, port, dp -> (ip, port, dp) in
-      let t = { t with state = make_state (Connecting (idx, ts, retry)) } in
+      let t = { t with state = Client (Connecting (idx, ts, retry)) } in
       Ok (t, Some (`Connect endp))
   | Resolving (idx, _, retry), `Resolve_failed ->
       let+ t, action = next_or_fail t idx retry in
@@ -1919,13 +1895,13 @@ let resolve_connect_client make_state t ts s ev =
       (t, Some action)
   | _ -> Error (`Not_handled (remote, next_or_fail))
 
-let handshake_timeout next_or_fail client t s ts =
+let handshake_timeout next_or_fail t s ts =
   let open Result.Syntax in
   match
     match (t.session.protocol, s) with
     | `Udp, Handshaking _ -> Some (t.channel, fun channel -> { t with channel })
     | `Udp, Rekeying ch ->
-        Some (ch, fun channel -> { t with state = client (Rekeying channel) })
+        Some (ch, fun channel -> { t with state = Client (Rekeying channel) })
     | _ -> None
   with
   | None -> Ok (t, [], None)
@@ -1948,8 +1924,7 @@ let handshake_timeout next_or_fail client t s ts =
 let handle_client_tls_auth t s tls_auth ev =
   let open Result.Syntax in
   let now = t.now () and ts = t.ts () in
-  let client state = Client_tls_auth { state; tls_auth } in
-  match resolve_connect_client client t ts s ev with
+  match resolve_connect_client t ts s ev with
   | Ok (t, action) -> Ok (t, [], Option.to_list action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
@@ -1961,13 +1936,11 @@ let handle_client_tls_auth t s tls_auth ev =
           let session, channel, out =
             init_channel Packet.Hard_reset_client_v2 session 0 now ts
           in
-          let state = client (Handshaking (idx, ts)) in
+          let state = Client (Handshaking (idx, ts)) in
           let out = hmac_and_out t.session.protocol tls_auth out in
           Ok ({ t with state; channel; session }, [ out ], [])
       | s, `Tick -> (
-          let* t, out, action_opt =
-            handshake_timeout next_or_fail client t s ts
-          in
+          let* t, out, action_opt = handshake_timeout next_or_fail t s ts in
           let out = List.map (hmac_and_out t.session.protocol tls_auth) out in
           match action_opt with
           | Some action -> Ok (t, out, [ action ])
@@ -1988,10 +1961,7 @@ let handle_client_tls_auth t s tls_auth ev =
 let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
   let open Result.Syntax in
   let now = t.now () and ts = t.ts () in
-  let client state =
-    Client_tls_crypt { state; tls_crypt = (tls_crypt, wkc_opt) }
-  in
-  match resolve_connect_client client t ts s ev with
+  match resolve_connect_client t ts s ev with
   | Ok (t, action) -> Ok (t, [], Option.to_list action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
@@ -2009,13 +1979,11 @@ let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
                 init_channel ~payload:wkc Packet.Hard_reset_client_v3 session 0
                   now ts
           in
-          let state = client (Handshaking (idx, ts)) in
+          let state = Client (Handshaking (idx, ts)) in
           let out = encrypt_and_out t.session.protocol tls_crypt out in
           Ok ({ t with state; channel; session }, [ out ], [])
       | s, `Tick -> (
-          let* t, out, action_opt =
-            handshake_timeout next_or_fail client t s ts
-          in
+          let* t, out, action_opt = handshake_timeout next_or_fail t s ts in
           let out =
             List.map (encrypt_and_out t.session.protocol tls_crypt) out
           in
@@ -2059,8 +2027,7 @@ let handle_server ?is_not_taken t s ev =
 let handle_static_client t s keys ev =
   let open Result.Syntax in
   let ts = t.ts () in
-  let client state = Client_static { keys; state } in
-  match resolve_connect_client client t ts s ev with
+  match resolve_connect_client t ts s ev with
   | Ok (t, action) -> Ok (t, [], Option.to_list action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
@@ -2079,9 +2046,11 @@ let handle_static_client t s keys ev =
                 static_out ~add_timestamp keys hmac_algorithm t.session.compress
                   protocol t.rng ping
               in
-              let state = Client_static { keys; state = Ready } in
+              let state = Client Ready and control_crypto = Static keys in
               Ok
-                ({ t with state; session; last_sent = ts }, [ payload ], [ est ])
+                ( { t with state; control_crypto; session; last_sent = ts },
+                  [ payload ],
+                  [ est ] )
           | _ -> Error (`Msg "expected IPv4 addresses"))
       | _, `Tick -> (
           match maybe_ping_timeout t with
@@ -2125,11 +2094,11 @@ let handle_static_client t s keys ev =
             pp_client_state s)
 
 let handle t ?is_not_taken ev =
-  match t.state with
-  | Client_tls_auth { state; tls_auth } ->
+  match (t.state, t.control_crypto) with
+  | Client state, Tls_auth tls_auth ->
       handle_client_tls_auth t state tls_auth ev
-  | Client_static { state; keys } -> handle_static_client t state keys ev
-  | Server_tls_auth { state; tls_auth = _ } ->
-      handle_server ?is_not_taken t state ev
-  | Client_tls_crypt { state; tls_crypt = tls_crypt, wkc_opt } ->
+  | Client state, Static keys -> handle_static_client t state keys ev
+  | Client state, Tls_crypt (tls_crypt, wkc_opt) ->
       handle_client_tls_crypt t state tls_crypt wkc_opt ev
+  | Server state, Tls_auth _ -> handle_server ?is_not_taken t state ev
+  | Server _, _ -> Error (`Msg "server only supports tls_auth so far")
