@@ -109,8 +109,10 @@ let hmac_and_out protocol { hmac_algorithm; my_hmac; _ }
   let p' = Packet.with_header { header with Packet.hmac } p in
   Packet.encode protocol (key, p')
 
-let encrypt_and_out protocol { my_key; my_hmac; _ }
+let encrypt_and_out protocol { my; _ }
     (key, (p : [< Packet.ack | Packet.control ])) =
+  let my_key = Tls_crypt.Key.cipher_key my in
+  let my_hmac = Tls_crypt.Key.hmac my in
   let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
   let hmac = Mirage_crypto.Hash.SHA256.hmac ~key:my_hmac to_be_signed in
   let iv = Cstruct.sub hmac 0 16 in
@@ -155,34 +157,15 @@ let secret config =
 let tls_crypt config =
   match Config.find Tls_crypt config with
   | None -> Error (`Msg "no tls-crypt payload in config")
-  | Some (their_key, their_hmac, my_key, my_hmac) ->
-      let hm cs = Cstruct.sub cs 0 Packet.Tls_crypt.hmac_len in
-      let cipher cs =
-        Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 32)
-      in
-      Ok
-        {
-          my_key = cipher my_key;
-          my_hmac = hm my_hmac;
-          their_key = cipher their_key;
-          their_hmac = hm their_hmac;
-        }
+  | Some kc ->
+      Ok { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc }
 
 let tls_crypt_v2 config =
   match Config.find Tls_crypt_v2_client config with
   | None -> Error (`Msg "no tls-crypt-v2 payload in config")
-  | Some ((their_key, their_hmac, my_key, my_hmac), wkc, force_cookie) ->
-      let hm cs = Cstruct.sub cs 0 Packet.Tls_crypt.hmac_len in
-      let cipher cs =
-        Mirage_crypto.Cipher_block.AES.CTR.of_secret (Cstruct.sub cs 0 32)
-      in
+  | Some (kc, wkc, force_cookie) ->
       Ok
-        ( {
-            my_key = cipher my_key;
-            my_hmac = hm my_hmac;
-            their_key = cipher their_key;
-            their_hmac = hm their_hmac;
-          },
+        ( { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc },
           wkc,
           force_cookie )
 
@@ -1510,6 +1493,7 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt needs_wkc key transport
   let session, transport, maybe_out, outs =
     match (needs_wkc, outs) with
     | Some wkc, (`Control, data) :: rest ->
+        let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
         let acks = bytes_of_acks transport in
         let l = min (mtu - acks - Cstruct.length wkc) (Cstruct.length data) in
         let data, data' = Cstruct.split data l in
@@ -1744,7 +1728,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   let iv = Cstruct.sub cleartext.hmac 0 16 in
                   let ctr = Aes_ctr.ctr_of_cstruct iv in
                   let decrypted =
-                    Aes_ctr.decrypt ~key:tls_crypt.their_key ~ctr encrypted
+                    let key = Tls_crypt.Key.cipher_key tls_crypt.their in
+                    Aes_ctr.decrypt ~key ~ctr encrypted
                   in
                   let* p =
                     Packet.Tls_crypt.decode_decrypted_ack_or_control cleartext
@@ -1762,8 +1747,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                   in
                   let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
                   let computed_hmac =
-                    Mirage_crypto.Hash.SHA256.hmac ~key:tls_crypt.their_hmac
-                      to_be_signed
+                    let key = Tls_crypt.Key.hmac tls_crypt.their in
+                    Mirage_crypto.Hash.SHA256.hmac ~key to_be_signed
                   in
                   let* () =
                     if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
@@ -2019,6 +2004,7 @@ let handle_client_tls_crypt t s tls_crypt wkc_opt ev =
             match wkc_opt with
             | None -> init_channel Packet.Hard_reset_client_v2 session 0 now ts
             | Some wkc ->
+                let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
                 let session = { session with my_replay_id = 0x0f000001l } in
                 init_channel ~payload:wkc Packet.Hard_reset_client_v3 session 0
                   now ts

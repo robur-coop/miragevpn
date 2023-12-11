@@ -261,18 +261,12 @@ type tls_auth = {
 }
 
 type tls_crypt_key = Mirage_crypto.Cipher_block.AES.CTR.key
-
-type tls_crypt = {
-  my_key : tls_crypt_key;
-  my_hmac : Cstruct.t;
-  their_key : tls_crypt_key;
-  their_hmac : Cstruct.t;
-}
+type tls_crypt = { my : Tls_crypt.Key.t; their : Tls_crypt.Key.t }
 
 type state =
   | Client_tls_auth of { tls_auth : tls_auth; state : client_state }
   | Client_tls_crypt of {
-      tls_crypt : tls_crypt * Cstruct.t option;
+      tls_crypt : tls_crypt * Tls_crypt.Wrapped_key.t option;
       state : client_state;
     }
   | Client_static of { keys : keys; state : client_state }

@@ -1,4 +1,4 @@
 module Config = Config
-module Tls_crypt_v2 = Tls_crypt_v2
+module Tls_crypt = Tls_crypt
 include State
 include Engine
