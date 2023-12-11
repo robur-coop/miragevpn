@@ -13,10 +13,6 @@ end
 
 type t
 
-module Tls_crypt : sig
-  type nonrec t = t
-end
-
 module Metadata : sig
   type t
 
@@ -38,24 +34,25 @@ module V2_server : sig
 end
 
 module Wrapped_key : sig
+  type tls_crypt := t
   type t
 
   val of_cstruct : Cstruct.t -> (Cstruct.t * t, [> `Msg of string ]) result
-  val wrap : key:V2_server.t -> Tls_crypt.t -> Metadata.t -> t
+  val wrap : key:V2_server.t -> tls_crypt -> Metadata.t -> t
 
   val unwrap :
     key:V2_server.t ->
     t ->
-    (Tls_crypt.t * Metadata.t, [> `Msg of string ]) result
+    (tls_crypt * Metadata.t, [> `Msg of string ]) result
 
   val unsafe_to_cstruct : t -> Cstruct.t
   val equal : t -> t -> bool
 end
 
 val load_tls_crypt_v2_client :
-  string Seq.t -> (Tls_crypt.t * Wrapped_key.t, [> `Msg of string ]) result
+  string Seq.t -> (t * Wrapped_key.t, [> `Msg of string ]) result
 
-val save_tls_crypt_v2_client : Tls_crypt.t -> Wrapped_key.t -> string Seq.t
+val save_tls_crypt_v2_client : t -> Wrapped_key.t -> string Seq.t
 val server_key : t -> Key.t
 val client_key : t -> Key.t
 val load_v1 : string Seq.t -> (t, [> `Msg of string ]) result
