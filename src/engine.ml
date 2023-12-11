@@ -989,6 +989,7 @@ type error =
   | `Mismatch_my_session_id of int64 * int64
   | `Bad_mac of t * Cstruct.t * Packet.t
   | `No_transition of channel * Packet.operation * Cstruct.t
+  | `No_channel of int
   | `Tls of
     [ `Alert of Tls.Packet.alert_type | `Eof | `Fail of Tls.Engine.failure ]
   | `Msg of string ]
@@ -1014,6 +1015,10 @@ let pp_error ppf = function
   | `No_transition (channel, op, data) ->
       Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
         Packet.pp_operation op pp_channel channel Cstruct.hexdump_pp data
+  | `No_channel keyid ->
+      Fmt.pf ppf
+        "no channel found for keyid %u, and not in the right state for rekeying"
+        keyid
   | `Tls tls_e -> pp_tls_error ppf tls_e
   | `Msg msg -> Fmt.string ppf msg
 
@@ -1576,10 +1581,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         let state = { state with linger } in
         let* state, out, acts =
           match find_channel state key op with
-          | None ->
-              (* XXX(reynir): why do we ignore it? Because the channel is unknown to us and we are not rekeying? *)
-              (* this is good for UDP (where packets may be lost), but is it good for TCP (where it indicates that something went wrong)? *)
-              Ok (state, out, acts)
+          | None -> Error (`No_channel key)
           | Some (ch, set_ch) -> (
               Log.debug (fun m ->
                   m "channel %a - received key %u op %a" pp_channel ch key
