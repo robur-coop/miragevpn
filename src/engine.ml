@@ -1397,14 +1397,6 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
     None)
   else Some data'
 
-let check_control_integrity err key p hmac_algorithm hmac_key =
-  let open Result.Syntax in
-  let computed_mac, packet_mac =
-    (compute_hmac key p hmac_algorithm hmac_key, Packet.((header p).hmac))
-  in
-  let+ () = guard (Cstruct.equal computed_mac packet_mac) (err computed_mac) in
-  Log.info (fun m -> m "mac good")
-
 let split_control ~acks mtu outs =
   (* only the first control/ack packet is carrying acks *)
   List.rev
@@ -1530,6 +1522,19 @@ let wrap_tls_crypt_control now ts mtu session tls_crypt needs_wkc key transport
   in
   (session, transport, outs)
 
+let wrap_control state needs_wkc key transport outs =
+  let now = state.now ()
+  and ts = state.ts ()
+  and my_mtu = control_mtu state.config state.control_crypto state.session in
+  match state.control_crypto with
+  | Tls_auth _ ->
+      wrap_control now ts my_mtu state.session state.control_crypto key
+        transport outs
+  | Tls_crypt (tls_crypt, _) ->
+      wrap_tls_crypt_control now ts my_mtu state.session tls_crypt needs_wkc key
+        transport outs
+  | Static _ -> assert false (* never being called *)
+
 let find_channel state key op =
   match channel_of_keyid key state with
   | Some _ as c -> c
@@ -1575,6 +1580,55 @@ let received_data state key ch set_ch payload =
       in
       (set_ch state ch, payload)
 
+let validate_control state op key payload =
+  let open Result.Syntax in
+  match state.control_crypto with
+  | Tls_auth { hmac_algorithm; their_hmac; _ } ->
+      let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+      let* p = Packet.decode_ack_or_control op ~hmac_len payload in
+      let computed_mac = compute_hmac key p hmac_algorithm their_hmac in
+      let+ () =
+        guard
+          (Cstruct.equal computed_mac Packet.((header p).hmac))
+          (`Bad_mac (state, computed_mac, ((key, p) :> Packet.t)))
+      in
+      (p, None)
+  | Tls_crypt ({ their; _ }, wkc_opt) ->
+      let* cleartext, encrypted =
+        Packet.Tls_crypt.decode_cleartext_header payload
+      in
+      let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
+      let iv = Cstruct.sub cleartext.hmac 0 16 in
+      let ctr = Aes_ctr.ctr_of_cstruct iv in
+      let decrypted =
+        let key = Tls_crypt.Key.cipher_key their in
+        Aes_ctr.decrypt ~key ~ctr encrypted
+      in
+      let* p =
+        Packet.Tls_crypt.decode_decrypted_ack_or_control cleartext op decrypted
+      in
+      let* needs_wkc =
+        match (p, wkc_opt) with
+        | `Control (Packet.Hard_reset_server_v2, (_, _, data)), Some wkc ->
+            let+ needs_wkc = Packet.decode_early_negotiation_tlvs data in
+            if needs_wkc then Some wkc else None
+        | _ -> Ok None
+      in
+      let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
+      let computed_hmac =
+        let key = Tls_crypt.Key.hmac their in
+        Mirage_crypto.Hash.SHA256.hmac ~key to_be_signed
+      in
+      let+ () =
+        guard
+          (Eqaf_cstruct.equal computed_hmac cleartext.hmac)
+          (`Bad_mac (state, computed_hmac, ((key, p) :> Packet.t)))
+      in
+      (p, needs_wkc)
+  | Static _ ->
+      (* This function is not meant to be called from static endpoints *)
+      assert false
+
 let incoming ?(is_not_taken = fun _ip -> false) state buf =
   let open Result.Syntax in
   let state = { state with last_received = state.ts () } in
@@ -1596,11 +1650,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
               Log.debug (fun m ->
                   m "channel %a - received key %u op %a" pp_channel ch key
                     Packet.pp_operation op);
-              match (op, state.control_crypto) with
-              | _, Static _ ->
-                  (* This function is not meant to be called from static endpoints *)
-                  assert false
-              | Packet.Data_v1, _ ->
+              match op with
+              | Packet.Data_v1 ->
                   let+ state, payload =
                     received_data state key ch set_ch payload
                   in
@@ -1609,20 +1660,10 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         `Payload p :: acts)
                   in
                   (state, out, acts)
-              | Packet.Hard_reset_client_v3, _ ->
+              | Packet.Hard_reset_client_v3 ->
                   Error (`No_transition (ch, op, payload))
-              | op, Tls_auth tls_auth -> (
-                  let hmac_len =
-                    Mirage_crypto.Hash.digest_size tls_auth.hmac_algorithm
-                  in
-                  let* p = Packet.decode_ack_or_control op ~hmac_len payload in
-                  let bad_mac hmac =
-                    `Bad_mac (state, hmac, ((key, p) :> Packet.t))
-                  in
-                  let* () =
-                    check_control_integrity bad_mac key p
-                      tls_auth.hmac_algorithm tls_auth.their_hmac
-                  in
+              | op -> (
+                  let* p, needs_wkc = validate_control state op key payload in
                   let* session, transport =
                     expected_packet state.session ch.transport p
                   in
@@ -1639,7 +1680,6 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                       Log.debug (fun m ->
                           m "out channel %a, pkts %d" pp_channel ch
                             (List.length out'));
-                      let state = { state with session } in
                       (* each control needs to be acked! *)
                       let out' =
                         match out' with
@@ -1647,98 +1687,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state buf =
                         | xs -> xs
                       in
                       (* now prepare outgoing packets *)
-                      let my_mtu =
-                        control_mtu config state.control_crypto state.session
-                      in
-                      let session, transport, encs =
-                        wrap_control (state.now ()) (state.ts ()) my_mtu
-                          state.session state.control_crypto key ch.transport
-                          out'
-                      in
-                      let out = out @ encs
-                      and ch = { ch with transport }
-                      and state = { state with config; session } in
-                      match est with
-                      | None -> Ok (set_ch state ch, out, acts)
-                      | Some ip_config ->
-                          let state = { state with channel = ch } in
-                          let+ state, mtu = transition_to_established state in
-                          let est =
-                            Option.to_list
-                              (Option.map
-                                 (fun mtu -> `Established (ip_config, mtu))
-                                 mtu)
-                          in
-                          (state, out, est @ acts)))
-              | _, Tls_crypt (tls_crypt, wkc_opt) -> (
-                  let* cleartext, encrypted =
-                    Packet.Tls_crypt.decode_cleartext_header payload
-                  in
-                  let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
-                  let iv = Cstruct.sub cleartext.hmac 0 16 in
-                  let ctr = Aes_ctr.ctr_of_cstruct iv in
-                  let decrypted =
-                    let key = Tls_crypt.Key.cipher_key tls_crypt.their in
-                    Aes_ctr.decrypt ~key ~ctr encrypted
-                  in
-                  let* p =
-                    Packet.Tls_crypt.decode_decrypted_ack_or_control cleartext
-                      op decrypted
-                  in
-                  let* needs_wkc =
-                    match (p, wkc_opt) with
-                    | ( `Control (Packet.Hard_reset_server_v2, (_, _, data)),
-                        Some wkc ) ->
-                        let+ needs_wkc =
-                          Packet.decode_early_negotiation_tlvs data
-                        in
-                        if needs_wkc then Some wkc else None
-                    | _ -> Ok None
-                  in
-                  let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
-                  let computed_hmac =
-                    let key = Tls_crypt.Key.hmac tls_crypt.their in
-                    Mirage_crypto.Hash.SHA256.hmac ~key to_be_signed
-                  in
-                  let* () =
-                    if Eqaf_cstruct.equal computed_hmac cleartext.hmac then
-                      Ok ()
-                    else
-                      Error
-                        (`Bad_mac
-                          (state, computed_hmac, ((key, p) :> Packet.t)))
-                  in
-                  let* session, transport =
-                    expected_packet state.session ch.transport p
-                  in
-                  let state = { state with session }
-                  and ch = { ch with transport } in
-                  match p with
-                  | `Ack _ -> Ok (set_ch state ch, out, acts)
-                  | `Control (_, (_, _, data)) -> (
-                      let* est, config, session, ch, out' =
-                        incoming_control is_not_taken state.config state.rng
-                          state.state state.control_crypto state.session ch
-                          (state.now ()) (state.ts ()) key op data
-                      in
-                      Log.debug (fun m ->
-                          m "out channel %a, pkts %d" pp_channel ch
-                            (List.length out'));
                       let state = { state with session } in
-                      (* each control needs to be acked! *)
-                      let out' =
-                        match out' with
-                        | [] -> [ (`Ack, Cstruct.empty) ]
-                        | xs -> xs
-                      in
-                      (* now prepare outgoing packets *)
-                      let my_mtu =
-                        control_mtu config state.control_crypto state.session
-                      in
                       let session, transport, encs =
-                        wrap_tls_crypt_control (state.now ()) (state.ts ())
-                          my_mtu state.session tls_crypt needs_wkc key
-                          ch.transport out'
+                        wrap_control state needs_wkc key ch.transport out'
                       in
                       let out = out @ encs
                       and ch = { ch with transport }
