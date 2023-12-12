@@ -393,9 +393,9 @@ let channel_of_keyid keyid s =
             Some (channel, set)
         | _ -> None)
 
-let transition_to_established t control_crypto =
-  match (control_crypto, t.state) with
-  | #control_tls, Client (Handshaking _) ->
+let transition_to_established t =
+  match t.state with
+  | Client (Handshaking _) ->
       let compress =
         match Config.find Comp_lzo t.config with
         | None -> false
@@ -404,18 +404,18 @@ let transition_to_established t control_crypto =
       let session = { t.session with compress }
       and mtu = data_mtu t.config t.session in
       Ok ({ t with state = Client Ready; session }, Some mtu)
-  | #control_tls, Client (Rekeying _) ->
+  | Client (Rekeying _) ->
       (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
       let lame_duck = Some (t.channel, t.ts ()) in
       Ok ({ t with state = Client Ready; lame_duck }, None)
-  | #control_tls, Server Server_handshaking ->
+  | Server Server_handshaking ->
       let mtu = data_mtu t.config t.session in
       Ok ({ t with state = Server Server_ready }, Some mtu)
-  | #control_tls, Server (Server_rekeying _) ->
+  | Server (Server_rekeying _) ->
       (* TODO: may cipher (i.e. mtu) or compress (or IP?) change between rekeys? *)
       let lame_duck = Some (t.channel, t.ts ()) in
       Ok ({ t with state = Server Server_ready; lame_duck }, None)
-  | #control_tls, state ->
+  | state ->
       Error
         (`Msg
           (Fmt.str "couldn't transition to established, state %a" pp_state state))
