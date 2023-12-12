@@ -33,7 +33,7 @@ module Make
 
   (* TODO some way to tear down the connection gracefully *)
 
-  val read : t -> Cstruct.t Lwt.t
+  val read : t -> Cstruct.t list Lwt.t
   val write : t -> Cstruct.t -> bool Lwt.t
 end
 

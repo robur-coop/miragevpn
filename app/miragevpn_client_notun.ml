@@ -38,12 +38,17 @@ let resolve (name, ip_version) =
           `Resolve_failed
       | Ok ip -> `Resolved (Ipaddr.V6 ip))
 
-type action = [ Miragevpn.action | `Suspend | `Transmit of Cstruct.t ]
+type action =
+  [ Miragevpn.action
+  | `Suspend
+  | `Transmit of Cstruct.t
+  | `Payload of Cstruct.t ]
 
 let pp_action ppf = function
   | #Miragevpn.action as action -> Miragevpn.pp_action ppf action
   | `Suspend -> Fmt.pf ppf "suspend"
-  | `Transmit data -> Fmt.pf ppf "transmit %d bytes" (Cstruct.length data)
+  | `Transmit data -> Fmt.pf ppf "transmit %u bytes" (Cstruct.length data)
+  | `Payload data -> Fmt.pf ppf "payload %u bytes" (Cstruct.length data)
 
 let event k (tick : [ `Tick ] Lwt.t) client actions ev =
   Logs.debug (fun m -> m "event %a" Miragevpn.pp_event ev);
@@ -52,9 +57,11 @@ let event k (tick : [ `Tick ] Lwt.t) client actions ev =
   | Error e ->
       Logs.err (fun m -> m "miragevpn handle failed %a" Miragevpn.pp_error e);
       exit 4
-  | Ok (client, outs, new_actions) ->
+  | Ok (client, outs, payloads, new_action) ->
       let new_actions =
-        List.map (fun out -> `Transmit out) outs @ (new_actions :> action list)
+        List.map (fun p -> `Payload p) payloads
+        @ List.map (fun out -> `Transmit out) outs
+        @ (Option.to_list new_action :> action list)
       in
       k tick client (actions @ new_actions)
 

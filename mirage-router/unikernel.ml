@@ -244,11 +244,12 @@ struct
 
   (* packets received over the tunnel *)
   let rec ovpn_recv t =
-    O.read t.ovpn >>= fun data ->
+    O.read t.ovpn >>= fun datas ->
     let ts = M.elapsed_ns () in
+    Lwt_list.fold_left_s (fun c data ->
     (match Ipv4_packet.Unmarshal.of_cstruct data with
     | Ok (hdr, payload) ->
-        let c, pkt = Fragments.process t.ovpn_fragments ts hdr payload in
+        let c, pkt = Fragments.process c ts hdr payload in
         (match pkt with
         | None -> ()
         | Some (hdr, payload) ->
@@ -305,7 +306,8 @@ struct
     | Error msg ->
         Logs.err (fun m ->
             m "failed to decode ipv4 packet %s: %a" msg Cstruct.hexdump_pp data);
-        Lwt.return t.ovpn_fragments)
+        Lwt.return c)
+    t.ovpn_fragments datas
     >>= fun frags ->
     t.ovpn_fragments <- frags;
     ovpn_recv t
