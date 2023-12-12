@@ -257,6 +257,7 @@ struct
     mutable o_client : Miragevpn.t;
     mutable peer :
       [ `Udp of UDP.t * (int * Ipaddr.t * int) | `Tcp of TCP.flow ] option;
+    mutable est_switch : Lwt_switch.t;
     data_mvar : Cstruct.t Lwt_mvar.t;
     est_mvar : (Miragevpn.ip_config * int) Lwt_mvar.t;
     event_mvar : Miragevpn.event Lwt_mvar.t;
@@ -368,25 +369,21 @@ struct
             Ipaddr.pp src src_port Ipaddr.pp peer_ip their_port our_port port);
       Lwt.return_unit)
 
-  (* TODO the "sw" argument is not used and should be removed! *)
-  let connect_tcp sw s (ip, port) =
+  let connect_tcp s (ip, port) =
     TCP.create_connection (S.tcp s) (ip, port) >|= function
     | Ok flow ->
         Log.info (fun m ->
             m "connection to %a:%d established" Ipaddr.pp ip port);
-        (sw, Some flow)
+        Some flow
     | Error tcp_err ->
         Log.err (fun m ->
             m "failed to connect to %a:%d: %a" Ipaddr.pp ip port TCP.pp_error
               tcp_err);
-        (sw, None)
-
-  (* TODO could be part of type conn above *)
-  let conn_est = ref (Lwt_switch.create ())
+        None
 
   let handle_action s conn = function
     | `Resolve (name, _ip_version) ->
-        Lwt_switch.turn_off !conn_est >>= fun () ->
+        Lwt_switch.turn_off conn.est_switch >>= fun () ->
         resolve_hostname s name >>= fun r ->
         let ev =
           match r with None -> `Resolve_failed | Some x -> `Resolved x
@@ -394,8 +391,8 @@ struct
         Lwt_mvar.put conn.event_mvar ev
     | `Connect (ip, port, `Udp) ->
         (* we don't use the switch, but an earlier connection attempt may have used TCP *)
-        Lwt_switch.turn_off !conn_est >>= fun () ->
-        conn_est := Lwt_switch.create ();
+        Lwt_switch.turn_off conn.est_switch >>= fun () ->
+        conn.est_switch <- Lwt_switch.create ();
         (* TODO we may wish to filter certain ports (< 1024) *)
         let our_port = Randomconv.int16 R.generate in
         let peer = (our_port, ip, port) in
@@ -406,11 +403,11 @@ struct
            (timeout should work, but ICMP refused/.. won't be delivered here) *)
         Lwt_mvar.put conn.event_mvar `Connected
     | `Connect (ip, port, `Tcp) ->
-        Lwt_switch.turn_off !conn_est >>= fun () ->
+        Lwt_switch.turn_off conn.est_switch >>= fun () ->
         let sw = Lwt_switch.create () in
-        conn_est := sw;
-        connect_tcp sw s (ip, port) >>= fun (sw', r) ->
-        if Lwt_switch.is_on sw' then
+        conn.est_switch <- sw;
+        connect_tcp s (ip, port) >>= fun r ->
+        if Lwt_switch.is_on sw then
           let ev =
             match r with
             | None -> `Connection_failed
@@ -481,7 +478,7 @@ struct
         let data_mvar = Lwt_mvar.create_empty ()
         and est_mvar = Lwt_mvar.create_empty ()
         and event_mvar = Lwt_mvar.create_empty () in
-        let conn = { o_client; peer = None; data_mvar; est_mvar; event_mvar } in
+        let conn = { o_client; peer = None; est_switch = Lwt_switch.create (); data_mvar; est_mvar; event_mvar } in
         (* handle initial action *)
         Lwt.async (fun () -> event s conn);
         let rec tick () =
