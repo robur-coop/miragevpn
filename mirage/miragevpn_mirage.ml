@@ -277,9 +277,10 @@ struct
     let ip, port = TCP.dst flow in
     Log.debug (fun m ->
         m "sending %d bytes to %a:%d" (Cstruct.lenv data) Ipaddr.pp ip port);
-    TCP.writev flow data >|= function
-    | Ok () -> true
+    TCP.writev flow data >>= function
+    | Ok () -> Lwt.return true
     | Error e ->
+        TCP.close flow >>= fun () ->
         Log.err (fun m -> m "tcp write failed %a" TCP.pp_write_error e);
         false
 
@@ -450,22 +451,20 @@ struct
     match Miragevpn.handle conn.o_client ev with
     | Error e ->
         Log.err (fun m -> m "miragevpn handle failed %a" Miragevpn.pp_error e);
-        Lwt.return_unit
+        handle_action s conn `Exit
     | Ok (t', outs, actions) ->
         conn.o_client <- t';
-        List.iter
-          (fun a ->
-            Log.debug (fun m -> m "handling action %a" Miragevpn.pp_action a))
-          actions;
         (match outs with
         | [] -> ()
-        | _ ->
-            Lwt.async (fun () ->
-                transmit conn.peer outs >>= function
-                | true -> Lwt.return_unit
-                | false -> Lwt_mvar.put conn.event_mvar `Connection_failed));
+        | _ -> (
+            transmit conn.peer outs >>= function
+            | true -> Lwt.return_unit
+            | false -> Lwt_mvar.put conn.event_mvar `Connection_failed))
+        >>= fun () ->
         List.iter
-          (fun a -> Lwt.async (fun () -> handle_action s conn a))
+          (fun a ->
+            Log.debug (fun m -> m "handling action %a" Miragevpn.pp_action a);
+            Lwt.async (fun () -> handle_action s conn a))
           actions;
         event s conn
 
@@ -478,7 +477,16 @@ struct
         let data_mvar = Lwt_mvar.create_empty ()
         and est_mvar = Lwt_mvar.create_empty ()
         and event_mvar = Lwt_mvar.create_empty () in
-        let conn = { o_client; peer = None; est_switch = Lwt_switch.create (); data_mvar; est_mvar; event_mvar } in
+        let conn =
+          {
+            o_client;
+            peer = None;
+            est_switch = Lwt_switch.create ();
+            data_mvar;
+            est_mvar;
+            event_mvar;
+          }
+        in
         (* handle initial action *)
         Lwt.async (fun () -> event s conn);
         let rec tick () =
