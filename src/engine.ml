@@ -1637,9 +1637,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                       | None -> Ok (set_ch state ch, out, acts)
                       | Some ip_config ->
                           let state = { state with channel = ch } in
-                          let+ state, mtu =
-                            transition_to_established state control_crypto
-                          in
+                          let+ state, mtu = transition_to_established state in
                           let est =
                             Option.to_list
                               (Option.map
