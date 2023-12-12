@@ -306,7 +306,7 @@ struct
     | Error msg ->
         Logs.err (fun m ->
             m "failed to decode ipv4 packet %s: %a" msg Cstruct.hexdump_pp data);
-        Lwt.return c)
+        Lwt.return c))
     t.ovpn_fragments datas
     >>= fun frags ->
     t.ovpn_fragments <- frags;
