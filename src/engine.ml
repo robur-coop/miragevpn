@@ -1646,7 +1646,14 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                           let act =
                             match (act_opt, est) with
                             | None, None -> None
-                            | _, (Some _ as a) | (Some _ as a), None -> a
+                            | None, (Some _ as a) | (Some _ as a), None -> a
+                            | Some a_old, (Some a_new as a) ->
+                                Log.warn (fun m ->
+                                    m
+                                      "Producing another action; ignoring \
+                                       older %a and using newer %a"
+                                      pp_action a_old pp_action a_new);
+                                a
                           in
                           (state, out, payloads, act))))
         in
