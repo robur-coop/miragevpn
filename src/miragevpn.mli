@@ -279,8 +279,7 @@ type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
-type action =
-  [ initial_action | `Disconnect | `Exit | `Established of ip_config * int ]
+type action = [ initial_action | `Exit | `Established of ip_config * int ]
 
 val pp_action : action Fmt.t
 

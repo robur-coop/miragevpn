@@ -232,9 +232,6 @@ let rec established_action proto fd incoming ifconfig tick client actions =
           Logs.app (fun m -> m "Received pong icmp_seq=%d" seq_no)
       | Error msg -> Logs.app (fun m -> m "Received unexpected data: %s" msg));
       established_action proto fd incoming ifconfig tick client actions
-  | `Disconnect ->
-      let* () = safe_close fd in
-      event connecting_action tick client actions `Connection_failed
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
   | `Transmit data ->
       let* r = transmit proto fd data in
@@ -275,9 +272,6 @@ and connected_action proto fd incoming tick client actions =
           m "Connection established! %a" Miragevpn.pp_ip_config (fst ifconfig));
       let ifconfig = mk_ifconfig ifconfig in
       established_action proto fd incoming ifconfig tick client actions
-  | `Disconnect ->
-      let* () = safe_close fd in
-      event connecting_action tick client actions `Connection_failed
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
   | `Transmit data ->
       let* r = transmit proto fd data in
@@ -333,8 +327,6 @@ and connecting_action tick client actions =
       let* ev, k = connect in
       event k tick client actions ev
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
-  | `Disconnect ->
-      event connecting_action tick client actions `Connection_failed
   | `Established _ | `Payload _ | `Transmit _ ->
       Logs.err (fun m -> m "Unexpected action %a" pp_action action);
       assert false

@@ -267,15 +267,6 @@ let handle_action conn = function
       else (
         Logs.warn (fun m -> m "connection cancelled by switch");
         match r with None -> Lwt.return_unit | Some x -> safe_close x)
-  | `Disconnect -> (
-      match conn.peer with
-      | None ->
-          Logs.err (fun m -> m "cannot disconnect: no open connection");
-          Lwt.return_unit
-      | Some (`Tcp fd) | Some (`Udp fd) ->
-          Logs.warn (fun m -> m "disconnecting!");
-          conn.peer <- None;
-          safe_close fd)
   | `Exit -> failwith "exit called"
   | `Established (ip, mtu) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
