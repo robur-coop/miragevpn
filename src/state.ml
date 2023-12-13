@@ -137,8 +137,7 @@ type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
-type action =
-  [ initial_action | `Disconnect | `Exit | `Established of ip_config * int ]
+type action = [ initial_action | `Exit | `Established of ip_config * int ]
 
 let pp_ip_version ppf = function
   | `Ipv4 -> Fmt.string ppf "ipv4"
@@ -154,7 +153,6 @@ let pp_action ppf = function
       Fmt.pf ppf "resolve %a (%a)" Domain_name.pp host pp_ip_version ip_version
   | `Connect (ip, port, proto) ->
       Fmt.pf ppf "connect %a %a:%d" pp_proto proto Ipaddr.pp ip port
-  | `Disconnect -> Fmt.string ppf "disconect"
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) ->
       Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu

@@ -423,20 +423,6 @@ struct
         else (
           Log.warn (fun m -> m "ignoring connection (cancelled by switch)");
           match r with None -> Lwt.return_unit | Some f -> TCP.close f)
-    | `Disconnect -> (
-        (* TODO not sure, should maybe signal successful close (to be able to initiate new connection) *)
-        match conn.peer with
-        | None ->
-            Log.err (fun m -> m "cannot disconnect no flow");
-            Lwt.return_unit
-        | Some (`Udp _) ->
-            Log.err (fun m -> m "unsure how to disconnect UDP");
-            Lwt.return_unit
-        | Some (`Tcp f) ->
-            let ip, port = TCP.dst f in
-            Log.err (fun m -> m "disconnecting flow %a:%d" Ipaddr.pp ip port);
-            conn.peer <- None;
-            TCP.close f)
     | `Exit -> failwith "exit called"
     | `Established (ip, mtu) ->
         Log.debug (fun m -> m "action = established");
