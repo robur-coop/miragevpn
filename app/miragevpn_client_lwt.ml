@@ -229,7 +229,7 @@ type conn = {
   mutable peer :
     [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
-  data_mvar : Cstruct.t Lwt_mvar.t;
+  data_mvar : Cstruct.t list Lwt_mvar.t;
   est_mvar : (Miragevpn.ip_config * int, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
@@ -277,7 +277,6 @@ let handle_action conn = function
           conn.peer <- None;
           safe_close fd)
   | `Exit -> failwith "exit called"
-  | `Payload data -> Lwt_mvar.put conn.data_mvar data
   | `Established (ip, mtu) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
       Lwt_mvar.put conn.est_mvar (Ok (ip, mtu))
@@ -290,36 +289,34 @@ let rec event conn =
   | Error e ->
       Logs.err (fun m -> m "miragevpn handle failed: %a" Miragevpn.pp_error e);
       Lwt_mvar.put conn.est_mvar (Error ()) >>= fun () -> Lwt.return_unit
-  | Ok (t', outs, actions) ->
+  | Ok (t', outs, payloads, action) ->
       conn.o_client <- t';
-      List.iter
-        (fun a ->
-          Logs.debug (fun m -> m "handling action %a" Miragevpn.pp_action a))
-        actions;
       (match outs with
-      | [] -> ()
-      | _ ->
-          Lwt.async (fun () ->
-              transmit outs conn.peer >>= function
-              | true -> Lwt.return_unit
-              | false -> Lwt_mvar.put conn.event_mvar `Connection_failed));
-      List.iter (fun a -> Lwt.async (fun () -> handle_action conn a)) actions;
-      event conn
+      | [] -> Lwt.return_unit
+      | _ -> (
+          transmit outs conn.peer >>= function
+          | true -> Lwt.return_unit
+          | false -> Lwt_mvar.put conn.event_mvar `Connection_failed))
+      >>= fun () ->
+      Option.iter
+        (fun a ->
+          Logs.debug (fun m -> m "handling action %a" Miragevpn.pp_action a);
+          Lwt.async (fun () -> handle_action conn a))
+        action;
+      Lwt_mvar.put conn.data_mvar payloads >>= fun () -> event conn
 
 let send_recv conn config ip_config _mtu =
   open_tun config ip_config (* TODO mtu *) >>= function
   | Error (`Msg msg) -> failwith ("error opening tun " ^ msg)
   | Ok (_, tun_fd) ->
       let rec process_incoming () =
-        ( Lwt_mvar.take conn.data_mvar >>= fun pkt ->
-          (* not using write_to_fd here because partial writes to a tun
-             interface are semantically different from single write()s: *)
-          Lwt_cstruct.write tun_fd pkt >|= function
-          | written when written = Cstruct.length pkt -> true
-          | _ -> false )
-        >>= function
-        | true -> process_incoming ()
-        | false -> Lwt_result.fail (`Msg "partial write to tun interface")
+        Lwt_mvar.take conn.data_mvar >>= fun pkts ->
+        (* not using write_to_fd here because partial writes to a tun
+           interface are semantically different from single write()s: *)
+        Lwt_list.iter_p
+          (fun pkt -> Lwt_cstruct.write tun_fd pkt >|= ignore)
+          pkts
+        >>= fun () -> process_incoming ()
       in
       let rec process_outgoing tun_fd =
         let open Lwt_result.Infix in
@@ -401,7 +398,6 @@ let jump _ filename pkcs12 =
     (parse_config filename >>= function
      | Error (`Msg s) -> failwith ("config parser: " ^ s)
      | Ok config -> establish_tunnel config pkcs12)
-(* <- Lwt_main.run *)
 
 let reporter_with_ts ~dst () =
   let pp_tags f tags =

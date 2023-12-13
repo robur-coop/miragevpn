@@ -1571,15 +1571,15 @@ let validate_control state control_crypto op key payload =
 let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
   let open Result.Syntax in
   let state = { state with last_received = state.ts () } in
-  let rec multi buf (state, out, acts) =
+  let rec multi buf (state, out, payloads, act_opt) =
     match Packet.decode_key_op state.session.protocol buf with
     | (Error (`Unknown_operation _) | Error `Partial) as e -> e
     | Error `Tcp_partial ->
         (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
-        Ok ({ state with linger = buf }, out, acts)
-    | Ok (op, key, payload, linger) ->
+        Ok ({ state with linger = buf }, out, payloads, act_opt)
+    | Ok (op, key, received, linger) ->
         let state = { state with linger } in
-        let* state, out, acts =
+        let* state, out, payloads, act_opt =
           match find_channel state key op with
           | None -> Error (`No_channel key)
           | Some (ch, set_ch) -> (
@@ -1589,18 +1589,18 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
               match op with
               | Packet.Data_v1 ->
                   let+ state, payload =
-                    received_data state key ch set_ch payload
+                    received_data state key ch set_ch received
                   in
-                  let acts =
-                    Option.fold payload ~none:acts ~some:(fun p ->
-                        `Payload p :: acts)
+                  let payloads =
+                    Option.fold payload ~none:payloads ~some:(fun p ->
+                        p :: payloads)
                   in
-                  (state, out, acts)
+                  (state, out, payloads, act_opt)
               | Packet.Hard_reset_client_v3 ->
-                  Error (`No_transition (ch, op, payload))
+                  Error (`No_transition (ch, op, received))
               | op -> (
                   let* p, needs_wkc =
-                    validate_control state control_crypto op key payload
+                    validate_control state control_crypto op key received
                   in
                   let* session, transport =
                     expected_packet state.session ch.transport p
@@ -1608,7 +1608,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                   let state = { state with session }
                   and ch = { ch with transport } in
                   match p with
-                  | `Ack _ -> Ok (set_ch state ch, out, acts)
+                  | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
                   | `Control (_, (_, _, data)) -> (
                       let* est, config, session, ch, out' =
                         incoming_control is_not_taken state.config state.rng
@@ -1634,31 +1634,44 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                       and ch = { ch with transport }
                       and state = { state with config; session } in
                       match est with
-                      | None -> Ok (set_ch state ch, out, acts)
+                      | None -> Ok (set_ch state ch, out, payloads, act_opt)
                       | Some ip_config ->
                           let state = { state with channel = ch } in
                           let+ state, mtu = transition_to_established state in
                           let est =
-                            Option.to_list
-                              (Option.map
-                                 (fun mtu -> `Established (ip_config, mtu))
-                                 mtu)
+                            Option.map
+                              (fun mtu -> `Established (ip_config, mtu))
+                              mtu
                           in
-                          (state, out, est @ acts))))
+                          let act =
+                            match (act_opt, est) with
+                            | None, None -> None
+                            | None, (Some _ as a) | (Some _ as a), None -> a
+                            | Some a_old, (Some a_new as a) ->
+                                Log.warn (fun m ->
+                                    m
+                                      "Producing another action; ignoring \
+                                       older %a and using newer %a"
+                                      pp_action a_old pp_action a_new);
+                                a
+                          in
+                          (state, out, payloads, act))))
         in
         (* Invariant: [linger] is always empty for UDP *)
-        if Cstruct.is_empty linger then Ok (state, out, acts)
-        else multi linger (state, out, acts)
+        if Cstruct.is_empty linger then Ok (state, out, payloads, act_opt)
+        else multi linger (state, out, payloads, act_opt)
   in
-  let+ s', out, acts =
-    multi (Cstruct.append state.linger buf) (state, [], [])
+  let+ s', out, payloads, act_opt =
+    multi (Cstruct.append state.linger buf) (state, [], [], None)
   in
-  let acts' = List.rev acts in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
-      m "%d outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
-  Log.debug (fun m -> m "actions %a" Fmt.(list ~sep:(any "@ ") pp_action) acts');
-  (s', out, acts')
+      m "%u outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
+  Log.debug (fun m ->
+      m "%u payloads (%d bytes)" (List.length payloads) (Cstruct.lenv payloads));
+  Log.debug (fun m ->
+      m "action %a" Fmt.(option ~none:(any "none") pp_action) act_opt);
+  (s', out, List.rev payloads, act_opt)
 
 let maybe_ping_timeout state =
   (* timeout fires if no data was received within the configured interval *)
@@ -1789,7 +1802,7 @@ let handle_client t control_crypto s ev =
   let open Result.Syntax in
   let now = t.now () and ts = t.ts () in
   match resolve_connect_client t ts s ev with
-  | Ok (t, action) -> Ok (t, [], Option.to_list action)
+  | Ok (t, action) -> Ok (t, [], [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
@@ -1810,7 +1823,7 @@ let handle_client t control_crypto s ev =
           in
           let state = Client (Handshaking (idx, ts)) in
           let out = wrap_and_out t.session.protocol control_crypto keyid out in
-          Ok ({ t with state; channel; session }, [ out ], [])
+          Ok ({ t with state; channel; session }, [ out ], [], None)
       | s, `Tick -> (
           let* t, out, action_opt = handshake_timeout next_or_fail t s ts in
           let out =
@@ -1820,16 +1833,16 @@ let handle_client t control_crypto s ev =
               out
           in
           match action_opt with
-          | Some action -> Ok (t, out, [ action ])
+          | Some action -> Ok (t, out, [], Some action)
           | None -> (
               match maybe_ping_timeout t with
-              | Some `Exit -> Ok (t, out, [ `Exit ])
+              | Some `Exit -> Ok (t, out, [], Some `Exit)
               | Some `Restart ->
                   let+ t, action = next_or_fail t (-1) 0 in
-                  (t, out, [ action ])
+                  (t, out, [], Some action)
               | None ->
                   let t', outs = timer t in
-                  Ok (t', out @ outs, [])))
+                  Ok (t', out @ outs, [], None)))
       | _, `Data cs -> incoming t control_crypto cs
       | s, ev ->
           Result.error_msgf "handle_client: unexpected event %a in state %a"
@@ -1845,13 +1858,13 @@ let handle_server ?is_not_taken t cc s ev =
   | _, `Data cs -> incoming ?is_not_taken t cc cs
   | (Server_ready | Server_rekeying _), `Tick -> (
       match maybe_ping_timeout t with
-      | Some _ -> Ok (t, [], [ `Exit ])
+      | Some _ -> Ok (t, [], [], Some `Exit)
       | None ->
           let t', outs = timer t in
-          Ok (t', outs, []))
+          Ok (t', outs, [], None))
   | Server_handshaking, `Tick ->
       Log.warn (fun m -> m "ignoring tick in handshaking");
-      Ok (t, [], [])
+      Ok (t, [], [], None)
   | s, ev ->
       Result.error_msgf "handle_server: unexpected event %a in state %a"
         pp_event ev pp_server_state s
@@ -1860,7 +1873,7 @@ let handle_static_client t s keys ev =
   let open Result.Syntax in
   let ts = t.ts () in
   match resolve_connect_client t ts s ev with
-  | Ok (t, action) -> Ok (t, [], Option.to_list action)
+  | Ok (t, action) -> Ok (t, [], [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
@@ -1873,7 +1886,7 @@ let handle_static_client t s keys ev =
               let protocol = match remote idx with _, _, proto -> proto in
               let session = { t.session with protocol } in
               let hmac_algorithm = Config.get Auth t.config in
-              let keys, payload =
+              let keys, out =
                 let add_timestamp = ptime_to_ts_exn (t.now ()) in
                 static_out ~add_timestamp keys hmac_algorithm t.session.compress
                   protocol t.rng ping
@@ -1881,18 +1894,19 @@ let handle_static_client t s keys ev =
               let state = Client Ready and control_crypto = `Static keys in
               Ok
                 ( { t with state; control_crypto; session; last_sent = ts },
-                  [ payload ],
-                  [ est ] )
+                  [ out ],
+                  [],
+                  Some est )
           | _ -> Error (`Msg "expected IPv4 addresses"))
       | _, `Tick -> (
           match maybe_ping_timeout t with
-          | Some `Exit -> Ok (t, [], [ `Exit ])
+          | Some `Exit -> Ok (t, [], [], Some `Exit)
           | Some `Restart ->
               let+ t, action = next_or_fail t (-1) 0 in
-              (t, [], [ action ])
+              (t, [], [], Some action)
           | None ->
               let t', outs = timer t in
-              Ok (t', outs, []))
+              Ok (t', outs, [], None))
       | _, `Data cs ->
           let t = { t with last_received = ts } in
           let add_timestamp = true
@@ -1913,13 +1927,11 @@ let handle_static_client t s keys ev =
                     incoming_data ~add_timestamp bad_mac keys hmac_algorithm
                       compress cs
                   in
-                  let acc =
-                    Option.fold d ~none:acc ~some:(fun p -> `Payload p :: acc)
-                  in
+                  let acc = Option.fold d ~none:acc ~some:(fun p -> p :: acc) in
                   process_one acc linger
           in
-          let+ t, acts = process_one [] (Cstruct.append t.linger cs) in
-          (t, [], List.rev acts)
+          let+ t, payloads = process_one [] (Cstruct.append t.linger cs) in
+          (t, [], List.rev payloads, None)
       | s, ev ->
           Result.error_msgf
             "handle_static_client: unexpected event %a in state %a" pp_event ev

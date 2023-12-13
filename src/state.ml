@@ -138,11 +138,7 @@ type initial_action =
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
 type action =
-  [ initial_action
-  | `Disconnect
-  | `Exit
-  | `Established of ip_config * int
-  | `Payload of Cstruct.t ]
+  [ initial_action | `Disconnect | `Exit | `Established of ip_config * int ]
 
 let pp_ip_version ppf = function
   | `Ipv4 -> Fmt.string ppf "ipv4"
@@ -162,7 +158,6 @@ let pp_action ppf = function
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) ->
       Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
-  | `Payload x -> Fmt.pf ppf "payload (%d bytes)" (Cstruct.length x)
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with
