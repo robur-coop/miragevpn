@@ -201,6 +201,7 @@ struct
             Log.err (fun m -> m "error in timer %a" Miragevpn.pp_error e);
             Lwt.return acc
         | Ok (_t', _out, _payloads, Some `Exit) ->
+            (* TODO anything to do with "_out" or "_payloads"? *)
             Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
             Lwt.return acc
         | Ok (t', out, payloads, act) -> (
