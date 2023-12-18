@@ -294,7 +294,10 @@ let rec event conn =
           Logs.debug (fun m -> m "handling action %a" Miragevpn.pp_action a);
           Lwt.async (fun () -> handle_action conn a))
         action;
-      Lwt_mvar.put conn.data_mvar payloads >>= fun () -> event conn
+      (match payloads with
+      | [] -> Lwt.return_unit
+      | _ -> Lwt_mvar.put conn.data_mvar payloads)
+      >>= fun () -> event conn
 
 let send_recv conn config ip_config _mtu =
   open_tun config ip_config (* TODO mtu *) >>= function
