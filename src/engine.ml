@@ -1214,10 +1214,10 @@ let maybe_rekey state =
     with
     | Some y, _, _
       when y <= Duration.to_sec (Int64.sub (state.ts ()) state.channel.started)
-      ->
+           && y > 0 ->
         true
-    | _, Some b, _ when b <= state.channel.bytes -> true
-    | _, _, Some p when p <= state.channel.packets -> true
+    | _, Some b, _ when b <= state.channel.bytes && b > 0 -> true
+    | _, _, Some p when p <= state.channel.packets && p > 0 -> true
     | _ -> false
   in
   if should_rekey then maybe_init_rekey state else (state, [])
