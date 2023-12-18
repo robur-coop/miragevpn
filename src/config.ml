@@ -2278,7 +2278,11 @@ let client_generate_connect_options t =
         | B (Link_mtu, _) -> true
         | B (Pull, _) -> true
         | B (Tls_mode, `Client) -> true
-        | B (Auth, _) -> true
+        | B (Auth, _) ->
+            not
+              (Conf_map.mem Tls_crypt t
+              || Conf_map.mem Tls_crypt_v2_client t
+              || Conf_map.mem Tls_crypt_v2_server t)
         | _ -> false)
       t
   in
