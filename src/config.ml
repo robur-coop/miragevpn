@@ -2284,10 +2284,6 @@ let client_generate_connect_options t =
                tls-crypt(-v2) the hmac is hardcoded. For tls-auth we still want
                to send it because it is used for authenticating the control
                channel *)
-            not
-              (Conf_map.mem Tls_crypt t
-              || Conf_map.mem Tls_crypt_v2_client t
-              || Conf_map.mem Tls_crypt_v2_server t)
         | _ -> false)
       t
   in
