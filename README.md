@@ -90,6 +90,12 @@ is specified.  If it is desired to use the certificates from the PKCS#12 file
 to authenticate the remote the certificates can be added with the "ca" option
 by extracting the certificates with e.g. `openssl pkcs12`.
 
+For tls clients (as opposed to static key clients) we only support data channel
+AEAD ciphers. This means the `--auth` option is ignored for data channel
+authentication for tls clients. For `--tls-auth` it is still used to choose the
+hmac used for the control channel while for `--tls-crypt` and `--tls-crypt-v2`
+the hmac is hardcoded (as per OpenVPN™).
+
 ## Funding
 
 This project was funded in 2019 for six months by the [German federal ministry for education and research](https://www.bmbf.de) via the [Prototypefund](https://prototypefund.de) - the amount was 47500 EUR.

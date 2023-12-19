@@ -2279,6 +2279,11 @@ let client_generate_connect_options t =
         | B (Pull, _) -> true
         | B (Tls_mode, `Client) -> true
         | B (Auth, _) ->
+            (* Assumption: we only support AEAD ciphers in tls clients. Thus
+               [Auth] option is ignored for the data channel, and for
+               tls-crypt(-v2) the hmac is hardcoded. For tls-auth we still want
+               to send it because it is used for authenticating the control
+               channel *)
             not
               (Conf_map.mem Tls_crypt t
               || Conf_map.mem Tls_crypt_v2_client t
