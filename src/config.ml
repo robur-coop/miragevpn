@@ -1595,6 +1595,8 @@ let a_not_implemented =
       string "up";
       string "dh";
       string "explicit-exit-notify";
+      string "tun-ipv6";
+      string "ifconfig-ipv6";
     ]
   >>= fun key ->
   a_line not_control_char >>| fun rest ->
