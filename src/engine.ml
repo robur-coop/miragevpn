@@ -1571,9 +1571,23 @@ let validate_control state control_crypto op key payload =
 let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
   let open Result.Syntax in
   let state = { state with last_received = state.ts () } in
+  let udp_ignore = function
+    | Error `Udp_ignore ->
+        (* XXX: probably we want to track how many bad packets we get? *)
+        Ok (state, [], [], None)
+    | Error #error as r -> r
+    | Ok _ as r -> r
+  in
+  let ignore_udp_error r =
+    match (state.session.protocol, r) with
+    | `Udp, Error e ->
+        Log.info (fun m -> m "Ignoring bad packet: %a" pp_error e);
+        Error `Udp_ignore
+    | _, r -> (r : (_, error) result :> (_, [ error | `Udp_ignore ]) result)
+  in
   let rec multi buf (state, out, payloads, act_opt) =
     match Packet.decode_key_op state.session.protocol buf with
-    | (Error (`Unknown_operation _) | Error `Partial) as e -> e
+    | (Error (`Unknown_operation _) | Error `Partial) as e -> ignore_udp_error e
     | Error `Tcp_partial ->
         (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
         Ok ({ state with linger = buf }, out, payloads, act_opt)
@@ -1581,7 +1595,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         let state = { state with linger } in
         let* state, out, payloads, act_opt =
           match find_channel state key op with
-          | None -> Error (`No_channel key)
+          | None -> ignore_udp_error (Error (`No_channel key))
           | Some (ch, set_ch) -> (
               Log.debug (fun m ->
                   m "channel %a - received key %u op %a" pp_channel ch key
@@ -1589,7 +1603,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
               match op with
               | Packet.Data_v1 ->
                   let+ state, payload =
-                    received_data state key ch set_ch received
+                    ignore_udp_error
+                      (received_data state key ch set_ch received)
                   in
                   let payloads =
                     Option.fold payload ~none:payloads ~some:(fun p ->
@@ -1597,13 +1612,15 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                   in
                   (state, out, payloads, act_opt)
               | Packet.Hard_reset_client_v3 ->
-                  Error (`No_transition (ch, op, received))
+                  ignore_udp_error (Error (`No_transition (ch, op, received)))
               | op -> (
                   let* p, needs_wkc =
-                    validate_control state control_crypto op key received
+                    ignore_udp_error
+                      (validate_control state control_crypto op key received)
                   in
                   let* session, transport =
-                    expected_packet state.session ch.transport p
+                    ignore_udp_error
+                      (expected_packet state.session ch.transport p)
                   in
                   let state = { state with session }
                   and ch = { ch with transport } in
@@ -1661,9 +1678,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         if Cstruct.is_empty linger then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let+ s', out, payloads, act_opt =
-    multi (Cstruct.append state.linger buf) (state, [], [], None)
-  in
+  let r = multi (Cstruct.append state.linger buf) (state, [], [], None) in
+  let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
       m "%u outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
