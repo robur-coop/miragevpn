@@ -367,6 +367,48 @@ let cert_key_mismatch () =
   | Error (`Msg e) ->
       Alcotest.failf "Got error %S, expected \"key and cert do not match\"" e
 
+let key_direction () =
+  let expected =
+    Miragevpn.Config.add Tls_auth
+      ( Some `Incoming,
+        Cstruct.create 64,
+        Cstruct.create 64,
+        Cstruct.create 64,
+        Cstruct.create 64 )
+      minimal_config
+  in
+  let with_key_direction =
+    Fmt.str
+      {|%a
+key-direction 1
+<tls-auth>
+-----BEGIN OpenVPN Static key V1-----
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+00000000000000000000000000000000
+-----END OpenVPN Static key V1-----
+</tls-auth>
+|}
+      Miragevpn.Config.pp minimal_config
+  in
+  Alcotest.(check (result conf_map pmsg))
+    "Use key-direction" (Ok expected)
+    (parse_noextern_client with_key_direction)
+
+
 let whitespace_after_tls_auth () =
   let expected =
     Miragevpn.Config.add Tls_auth
@@ -761,6 +803,7 @@ let tests =
     ("rport precedence", `Quick, rport_precedence);
     ("cert key mismatch", `Quick, cert_key_mismatch);
     ("trailing whitespace after <tls-auth>", `Quick, whitespace_after_tls_auth);
+    ("key-direction", `Quick, key_direction);
     ("remote entries are in order", `Quick, remotes_in_order);
     ("remote entries with port are in order", `Quick, remotes_in_order_with_port);
     ( "parsing 'minimal-client'",
