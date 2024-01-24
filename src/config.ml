@@ -952,13 +952,18 @@ let a_key_direction_option =
       return None;
     ]
 
+let a_key_direction = string "key-direction"
+
 let a_tls_auth =
-  a_option_with_single_path "tls-auth" () >>= fun source ->
-  (* --key-direction or the optional arg here:
-     0 -> CN_OUTGOING
-     1 -> CN_INCOMING
-  *)
-  a_key_direction_option >>| fun direction ->
+  let with_key_direction =
+    a_key_direction *> a_whitespace *> a_key_direction_option >>| fun direction ->
+    `Need_inline (), direction in
+  let with_tls_auth =
+   a_option_with_single_path "tls-auth" () >>= fun source ->
+   a_key_direction_option >>| fun direction ->
+   source, direction in
+  
+  (with_tls_auth <|> with_key_direction) >>| fun (source, direction) ->
   match source with
   | `Need_inline () -> `Need_inline (`Tls_auth direction)
   | `Path (path, ()) -> `Path (path, `Tls_auth direction)
