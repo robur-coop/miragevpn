@@ -1266,7 +1266,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length dec >= hdr_len)
-            (Result.msgf "payload too short (need %d bytes)" hdr_len)
+            (Result.msgf "payload too short (need %u bytes): %u" hdr_len (Cstruct.length dec))
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
@@ -1278,8 +1278,8 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length data >= Packet.id_len + tag_len)
-            (Result.msgf "payload too short (need %d bytes)"
-               (Packet.id_len + tag_len))
+            (Result.msgf "payload too short (need %u bytes): %u"
+               (Packet.id_len + tag_len) (Cstruct.length data))
         in
         let replay_id, tag, payload =
           let sn, rest = Cstruct.split data Packet.id_len in
@@ -1301,8 +1301,8 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length data >= Packet.id_len + tag_len)
-            (Result.msgf "payload too short (need %d bytes)"
-               (Packet.id_len + tag_len))
+            (Result.msgf "payload too short (need %u bytes): %u"
+               (Packet.id_len + tag_len) (Cstruct.length data))
         in
         let replay_id, tag, payload =
           let sn, rest = Cstruct.split data Packet.id_len in
