@@ -1266,7 +1266,8 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length dec >= hdr_len)
-            (Result.msgf "payload too short (need %u bytes): %u" hdr_len (Cstruct.length dec))
+            (Result.msgf "payload too short (need %u bytes): %u" hdr_len
+               (Cstruct.length dec))
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
