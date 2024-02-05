@@ -381,7 +381,6 @@ let key_direction () =
     Fmt.str
       {|%a
 key-direction 1
-tls-auth [inline]
 <tls-auth>
 -----BEGIN OpenVPN Static key V1-----
 00000000000000000000000000000000
