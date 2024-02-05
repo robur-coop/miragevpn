@@ -381,6 +381,7 @@ let key_direction () =
     Fmt.str
       {|%a
 key-direction 1
+tls-auth [inline]
 <tls-auth>
 -----BEGIN OpenVPN Static key V1-----
 00000000000000000000000000000000
@@ -407,7 +408,6 @@ key-direction 1
   Alcotest.(check (result conf_map pmsg))
     "Use key-direction" (Ok expected)
     (parse_noextern_client with_key_direction)
-
 
 let whitespace_after_tls_auth () =
   let expected =
