@@ -1,3 +1,4 @@
+(* mirage >= 4.4.2 & < 4.5.0 *)
 open Mirage
 
 let private_netif = netif ~group:"private" "private"
@@ -80,24 +81,14 @@ let syslog =
     ~keys:[ name; syslog ] ~connect "Logs_syslog_mirage.Udp"
     (pclock @-> stackv4v6 @-> job)
 
-type i0 = I0
-
-let i0 = Functoria.Type.v I0
-let no0 = Functoria.impl "Int" job
-
-type n1 = N1
-
-let n1 = Functoria.Type.v N1
-let noop1 = Functoria.impl "Set.Make" (job @-> job)
-
 let optional_monitoring time pclock stack =
   if_impl
     (Key.value enable_monitoring)
     (monitoring $ time $ pclock $ stack)
-    (noop1 $ no0)
+    noop
 
 let optional_syslog pclock stack =
-  if_impl (Key.value enable_monitoring) (syslog $ pclock $ stack) (noop1 $ no0)
+  if_impl (Key.value enable_monitoring) (syslog $ pclock $ stack) noop
 
 let () =
   register "ovpn-router"
