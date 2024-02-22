@@ -1044,7 +1044,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
       =
       let nonce, replay_id =
         let b = Cstruct.create_unsafe (Packet.id_len + Cstruct.length my_implicit_iv) in
-        Cstruct.BE.set_uint32 b 0 ctx.my_replay_id;
+        set_replay_id b 0;
         Cstruct.blit my_implicit_iv 0 b 4 (Cstruct.length my_implicit_iv);
         (* We reuse the replay id part of the nonce to avoid another allocation *)
         b, Cstruct.sub b 0 4
