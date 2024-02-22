@@ -1050,11 +1050,14 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
         b, Cstruct.sub b 0 4
       in
       let data =
-        let b = Cstruct.create (Bool.to_int compress + Cstruct.length data) in
-        (* 0xFA is "no compression" *)
-        Cstruct.memset (Cstruct.sub b 0 (Bool.to_int compress)) 0xfa;
-        Cstruct.blit data 0 b (Bool.to_int compress) (Cstruct.length data);
-        b
+        if compress then
+          let b = Cstruct.create (Bool.to_int compress + Cstruct.length data) in
+          (* 0xFA is "no compression" *)
+          Cstruct.memset (Cstruct.sub b 0 1) 0xfa;
+          Cstruct.blit data 0 b 1 (Cstruct.length data);
+          b
+       else
+         data
       in
       let enc, tag =
         authenticate_encrypt_tag
