@@ -1,0 +1,36 @@
+(rule
+ (copy# ../src/state.ml state.ml))
+(rule
+ (copy# ../src/engine.ml engine.ml))
+(rule
+ (copy# ../src/packet.ml packet.ml))
+(rule
+ (copy# ../src/config.ml config.ml))
+(rule
+ (copy# ../src/result.ml result.ml))
+(rule
+ (copy# ../src/tls_crypt.ml tls_crypt.ml))
+
+(executable
+ (name bench_engine)
+ (libraries  bechamel bechamel-perf bechamel-notty
+  ptime.clock.os
+  mtime.clock.os
+  mirage-crypto-rng.unix
+  ; miragevpn
+  fmt
+  logs
+  cstruct
+  ptime
+  decompress.lzo
+  mirage-crypto
+  tls
+  x509
+  duration
+  angstrom
+  hex
+  domain-name
+  ipaddr
+  gmap
+  randomconv
+  base64))
