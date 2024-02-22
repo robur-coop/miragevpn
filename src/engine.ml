@@ -1060,11 +1060,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
         authenticate_encrypt_tag
           ~key:my_key ~nonce ~adata:replay_id data
       in
-      let res = Cstruct.create (4 + Cstruct.length tag + Cstruct.length enc) in
-      set_replay_id res 0;
-      Cstruct.blit tag 0 res 4 (Cstruct.length tag);
-      Cstruct.blit enc 0 res (4 + Cstruct.length tag) (Cstruct.length enc);
-      res
+      Cstruct.concat [ replay_id ; tag ; enc ]
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
     match ctx.keys with
