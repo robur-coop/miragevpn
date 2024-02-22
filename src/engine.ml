@@ -1022,15 +1022,6 @@ let pp_error ppf = function
   | `Tls tls_e -> pp_tls_error ppf tls_e
   | `Msg msg -> Fmt.string ppf msg
 
-let pad block_size cs =
-  let pad_len =
-    let l = Cstruct.length cs mod block_size in
-    if l = 0 then block_size else block_size - l
-  in
-  let out = Cstruct.create pad_len in
-  Cstruct.memset out pad_len;
-  Cstruct.append cs out
-
 let unpad block_size cs =
   let l = Cstruct.length cs in
   let amount = Cstruct.get_uint8 cs (pred l) in
@@ -1042,20 +1033,39 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let replay_id =
-    let buf = Cstruct.create Packet.id_len in
-    Cstruct.BE.set_uint32 buf 0 ctx.my_replay_id;
-    buf
+  let set_replay_id dest off =
+    Cstruct.BE.set_uint32 dest off ctx.my_replay_id;
   in
-  let compression =
-    if compress then (
-      let buf = Cstruct.create 1 in
-      (* 0xFA is "no compression" *)
-      Cstruct.set_uint8 buf 0 0xfa;
-      buf)
-    else Cstruct.empty
+  let aead (type key)
+      (authenticate_encrypt_tag :
+         key: key -> nonce: Cstruct.t -> ?adata: Cstruct.t -> Cstruct.t -> Cstruct.t * Cstruct.t)
+      (my_key : key)
+      my_implicit_iv
+      =
+      let nonce, replay_id =
+        let b = Cstruct.create_unsafe (Packet.id_len + Cstruct.length my_implicit_iv) in
+        Cstruct.BE.set_uint32 b 0 ctx.my_replay_id;
+        Cstruct.blit my_implicit_iv 0 b 4 (Cstruct.length my_implicit_iv);
+        (* We reuse the replay id part of the nonce to avoid another allocation *)
+        b, Cstruct.sub b 0 4
+      in
+      let data =
+        let b = Cstruct.create (Bool.to_int compress + Cstruct.length data) in
+        (* 0xFA is "no compression" *)
+        Cstruct.memset (Cstruct.sub b 0 (Bool.to_int compress)) 0xfa;
+        Cstruct.blit data 0 b (Bool.to_int compress) (Cstruct.length data);
+        b
+      in
+      let enc, tag =
+        authenticate_encrypt_tag
+          ~key:my_key ~nonce ~adata:replay_id data
+      in
+      let res = Cstruct.create (4 + Cstruct.length tag + Cstruct.length enc) in
+      set_replay_id res 0;
+      Cstruct.blit tag 0 res 4 (Cstruct.length tag);
+      Cstruct.blit enc 0 res (4 + Cstruct.length tag) (Cstruct.length enc);
+      res
   in
-  let data = Cstruct.append compression data in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
     match ctx.keys with
     | AES_CBC { my_key; my_hmac; _ } ->
@@ -1065,38 +1075,36 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
            - hmac over the entire encrypted payload
              - timestamp only used in static key mode (32bit, seconds since unix epoch)
         *)
-        let ts =
-          let ts_len = Option.fold ~none:0 ~some:(fun _ -> 4) add_timestamp in
-          let ts_buf = Cstruct.create ts_len in
-          Option.iter
-            (fun ts -> Cstruct.BE.set_uint32 ts_buf 0 ts)
-            add_timestamp;
-          ts_buf
-        in
-        let hdr = Cstruct.append replay_id ts in
         let open Mirage_crypto in
-        let iv = rng Cipher_block.AES.CBC.block_size
-        and data =
-          pad Cipher_block.AES.CBC.block_size (Cstruct.append hdr data)
+        let hdr_len = 4 + if Option.is_some add_timestamp then 4 else 0 in
+        let data =
+          let unpad_len = hdr_len + Bool.to_int compress + Cstruct.length data in
+          let pad_len =
+            let l = unpad_len mod Cipher_block.AES.CBC.block_size in
+            Cipher_block.AES.CBC.block_size - l
+          in
+          let b = Cstruct.create (unpad_len + pad_len) in
+          set_replay_id b 0;
+          Option.iter (fun ts -> Cstruct.BE.set_uint32 b 4 ts) add_timestamp;
+          (* 0xFA is "no compression" *)
+          Cstruct.memset (Cstruct.sub b hdr_len (Bool.to_int compress)) 0xfa;
+          Cstruct.blit data 0 b (hdr_len + Bool.to_int compress) (Cstruct.length data);
+          Cstruct.memset (Cstruct.sub b unpad_len pad_len) pad_len;
+          b
         in
+        let iv = rng Cipher_block.AES.CBC.block_size in
         let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
-        let payload = Cstruct.append iv enc in
-        let hmac = Hash.mac hmac_algorithm ~key:my_hmac payload in
-        Cstruct.append hmac payload
+        let hmac =
+          Hash.maci hmac_algorithm ~key:my_hmac
+            (fun feed -> feed iv; feed enc)
+        in
+        Cstruct.concat [hmac; iv; enc]
     | AES_GCM { my_key; my_implicit_iv; _ } ->
-        let nonce = Cstruct.append replay_id my_implicit_iv in
-        let enc, tag =
-          Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag
-            ~key:my_key ~nonce ~adata:replay_id data
-        in
-        Cstruct.concat [ replay_id; tag; enc ]
+        aead Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag
+          my_key my_implicit_iv
     | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
-        let nonce = Cstruct.append replay_id my_implicit_iv in
-        let enc, tag =
-          Mirage_crypto.Chacha20.authenticate_encrypt_tag ~key:my_key ~nonce
-            ~adata:replay_id data
-        in
-        Cstruct.concat [ replay_id; tag; enc ] )
+        aead Mirage_crypto.Chacha20.authenticate_encrypt_tag
+          my_key my_implicit_iv)
 
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
