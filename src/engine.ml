@@ -1053,7 +1053,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
         if compress then
           let b = Cstruct.create (Bool.to_int compress + Cstruct.length data) in
           (* 0xFA is "no compression" *)
-          Cstruct.set_uint8 0 0xfa;
+          Cstruct.set_uint8 b 0 0xfa;
           Cstruct.blit data 0 b 1 (Cstruct.length data);
           b
        else
