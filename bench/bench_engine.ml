@@ -9,44 +9,6 @@ let tls_auth =
     Cstruct.create 64,
     Cstruct.create 64 )
 
-let () =
-  let reporter_with_ts ~dst () =
-    let pp_tags f tags =
-      let pp tag () =
-        let (Logs.Tag.V (def, value)) = tag in
-        Format.fprintf f " %s=%a" (Logs.Tag.name def) (Logs.Tag.printer def)
-          value;
-        ()
-      in
-      Logs.Tag.fold pp tags ()
-    in
-    let report src level ~over k msgf =
-      let tz_offset_s = Ptime_clock.current_tz_offset_s () in
-      let posix_time = Ptime_clock.now () in
-      let src = Logs.Src.name src in
-      let k _ =
-        over ();
-        k ()
-      in
-      msgf @@ fun ?header ?tags fmt ->
-      Format.kfprintf k dst
-        ("%a:%a %a [%s] @[" ^^ fmt ^^ "@]@.")
-        (Ptime.pp_rfc3339 ?tz_offset_s ())
-        posix_time
-        Fmt.(option ~none:(any "") pp_tags)
-        tags Logs_fmt.pp_header (level, header) src
-    in
-    { Logs.report }
-  in
-  Fmt_tty.setup_std_outputs ();
-  Logs.set_level (Some Logs.Info);
-  List.iter
-    (fun src ->
-      if String.starts_with ~prefix:"ovpn" (Logs.Src.name src) then
-        Logs.Src.set_level src (Some Logs.Debug))
-    (Logs.Src.list ());
-  Logs.set_reporter (reporter_with_ts ~dst:Format.std_formatter ())
-
 let key = X509.Private_key.generate ~bits:2048 `RSA
 
 let ca, cert =
@@ -165,18 +127,16 @@ let established_client, establish_server =
         (fun (state, outs) input ->
           match Engine.handle ~is_not_taken state (`Data input) with
           | Ok (state, outs', _application_data, None) ->
-              Format.eprintf "%s state @[<1>%a@]\n%!" role State.pp state;
               (state, outs' :: outs)
-          | Ok (state, outs', _application_data, Some act) ->
-              Format.eprintf "Produced %s action %a\n%!" role State.pp_action act;
+          | Ok (state, outs', _application_data, Some _act) ->
+              (* TODO: add argument whether an action is expected, and fail on
+                 unexpected actions. *)
               (state, outs' :: outs)
           | Error e ->
               Format.kasprintf failwith "%s error: %a" role Engine.pp_error e)
         (state, []) inputs
     in
     let outs = List.concat (List.rev outs) in
-    Printf.eprintf "Drained %d packets resulting in %d %s packets\n%!"
-      (List.length inputs) (List.length outs) role;
     (state, outs)
   in
   let server, server_outs = drain "Server" initial_server inital_client_outs in
@@ -188,6 +148,55 @@ let established_client, establish_server =
   let server, server_outs = drain "Server" server client_outs in
   let client, client_outs = drain "Client" client server_outs in
   let server, server_outs = drain "Server" server client_outs in
-  Printf.eprintf "server_outs %d\n%!" (List.length server_outs);
-  ignore server_outs;
+  assert (server_outs = []);
   (client, server)
+
+open Bechamel
+
+let test_send_data =
+  let staged =
+    let data = Cstruct.create 1024 in
+    Staged.stage @@ fun () ->
+    match Engine.outgoing established_client data with
+    | Ok _ -> ()
+    | Error `Not_ready -> failwith "Not ready"
+  in
+  Test.make ~name:"Client encode"
+    staged
+
+let benchmark () =
+  let ols =
+    Analyze.ols ~bootstrap:0 ~r_square:true ~predictors:Measure.[| run |]
+  in
+  let instances =
+    Toolkit.Instance.[ minor_allocated; major_allocated; monotonic_clock ]
+  in
+  let cfg =
+    Benchmark.cfg ~limit:2000 ~quota:(Time.second 0.5) ~kde:(Some 1000) ()
+  in
+  let raw_results = Benchmark.all cfg instances test_send_data in
+  let results =
+    List.map (fun instance -> Analyze.all ols instance raw_results) instances
+  in
+  let results = Analyze.merge ols instances results in
+  (results, raw_results)
+
+let () =
+  List.iter
+    (fun v -> Bechamel_notty.Unit.add v (Measure.unit v))
+    Toolkit.Instance.[ minor_allocated; major_allocated; monotonic_clock ]
+
+let img (window, results) =
+  Bechamel_notty.Multiple.image_of_ols_results ~rect:window
+    ~predictor:Measure.run results
+
+open Notty_unix
+
+let () =
+  let window =
+    match winsize Unix.stdout with
+    | Some (w, h) -> { Bechamel_notty.w; h }
+    | None -> { Bechamel_notty.w = 80; h = 1 }
+  in
+  let results, _ = benchmark () in
+  img (window, results) |> eol |> output_image

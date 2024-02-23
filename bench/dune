@@ -22,6 +22,7 @@
   bechamel
   bechamel-perf
   bechamel-notty
+  notty.unix
   ptime.clock.os
   mtime.clock.os
   mirage-crypto-rng.unix
