@@ -596,7 +596,7 @@ let decode_tls_data ?(with_premaster = false) buf =
       let p_start = u_start + 2 + u_len in
       let p_len = Cstruct.BE.get_uint16 buf p_start in
       let* () =
-        guard (Cstruct.length buf >= p_start + 2 + u_len + p_len) `Partial
+        guard (Cstruct.length buf >= p_start + 2 + p_len) `Partial
       in
       let* p = maybe_string "password" buf (p_start + 2) p_len in
       let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
