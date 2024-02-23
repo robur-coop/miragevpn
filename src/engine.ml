@@ -833,22 +833,23 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         Option.to_list (Option.map (fun c -> (`Control, c)) tls_response)
       in
       (None, config, session, { channel with channel_st }, out)
-  | TLS_established (tls, keys), Packet.Control ->
+  | TLS_established (tls, keys), Packet.Control -> (
       let open Result.Syntax in
       let* tls', d = incoming_tls_without_reply tls data in
-      let* d =
-        Option.to_result
-          ~none:(`Msg "TLS established, expected data, received nothing") d
-      in
-      let+ (channel_st, ip_config), out =
-        kex_server config session keys tls' d
-      in
-      (* keys established, move forward to "expect push request (reply with push reply)" *)
-      ( ip_config,
-        config,
-        session,
-        { channel with channel_st },
-        [ (`Control, out) ] )
+      match d with
+      | Some d ->
+          let+ (channel_st, ip_config), out =
+            kex_server config session keys tls' d
+          in
+          (* keys established, move forward to "expect push request (reply with push reply)" *)
+          ( ip_config,
+            config,
+            session,
+            { channel with channel_st },
+            [ (`Control, out) ] )
+      | None ->
+          let channel_st = TLS_established (tls', keys) in
+          Ok (None, config, session, { channel with channel_st }, []))
   | Push_request_sent (tls, key, tls_data), Packet.Control ->
       (* TODO naming: this is actually server_stuff sent, awaiting push request *)
       let open Result.Syntax in
