@@ -56,70 +56,75 @@ let ca, cert =
   in
   (cert, cert)
 
-let minimal_config =
-  let open Config in
-  empty
-  (* from {!Miragevpn.Config.Defaults.client_config} *)
-  |> add Ping_interval `Not_configured
-  |> add Ping_timeout (`Restart 120)
-  |> add Renegotiate_seconds 3600
-  |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
-  |> add Handshake_window 60 |> add Transition_window 3600 |> add Tls_timeout 2
-  |> add Resolv_retry `Infinite |> add Auth_retry `None
-  |> add Connect_timeout 120
-  |> add Connect_retry_max `Unlimited
-  |> add Proto (None, `Tcp None)
-  |> add Auth `SHA1
-  (* Minimal contents of actual config file: *)
-  |> add Cipher `AES_256_CBC
-  |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
-  |> add Tls_mode `Client
-  |> add Auth_user_pass ("testuser", "testpass")
-  |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Tcp) ]
-  |> add Tls_auth tls_auth |> add Ca [ ca ]
-
-let minimal_server_config =
-  let open Config in
-  empty
-  (* from {!Miragevpn.Config.Defaults.client_config} *)
-  |> add Ping_interval `Not_configured
-  |> add Ping_timeout (`Restart 120)
-  |> add Renegotiate_seconds 3600
-  |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
-  |> add Handshake_window 60 |> add Transition_window 3600 |> add Tls_timeout 2
-  |> add Resolv_retry `Infinite |> add Auth_retry `None
-  |> add Connect_timeout 120
-  |> add Connect_retry_max `Unlimited
-  |> add Proto (None, `Tcp None)
-  |> add Auth `SHA1
-  (* Minimal contents of actual config file: *)
-  |> add Cipher `AES_256_CBC
-  |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
-  |> add Tls_mode `Server
-  |> add Server (Ipaddr.V4.Prefix.of_string_exn "10.0.1.0/24")
-  |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Tls_cert cert
-  |> add Tls_key key
-
-let[@ocaml.warning "-8"] initial_client, inital_client_outs, _application, None
-    =
-  let pre_connect =
-    match Engine.client minimal_config ts now Mirage_crypto_rng.generate with
-    | Ok (s, _) -> s
-    | Error (`Msg e) -> Format.ksprintf failwith "Client config error: %s" e
+let established cipher =
+  let minimal_config =
+    let open Config in
+    empty
+    (* from {!Miragevpn.Config.Defaults.client_config} *)
+    |> add Ping_interval `Not_configured
+    |> add Ping_timeout (`Restart 120)
+    |> add Renegotiate_seconds 3600
+    |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
+    |> add Handshake_window 60 |> add Transition_window 3600
+    |> add Tls_timeout 2 |> add Resolv_retry `Infinite |> add Auth_retry `None
+    |> add Connect_timeout 120
+    |> add Connect_retry_max `Unlimited
+    |> add Proto (None, `Tcp None)
+    |> add Auth `SHA1
+    (* Minimal contents of actual config file: *)
+    |> add Cipher `AES_256_CBC
+    |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
+    |> add Tls_mode `Client
+    |> add Auth_user_pass ("testuser", "testpass")
+    |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Tcp) ]
+    |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Cipher cipher
   in
-  Engine.handle pre_connect `Connected |> Result.get_ok
-
-let initial_server =
-  let server =
-    match
-      Engine.server minimal_server_config ts now Mirage_crypto_rng.generate
-    with
-    | Ok (s, _, _) -> s
-    | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
+  let minimal_server_config =
+    let open Config in
+    empty
+    (* from {!Miragevpn.Config.Defaults.client_config} *)
+    |> add Ping_interval `Not_configured
+    |> add Ping_timeout (`Restart 120)
+    |> add Renegotiate_seconds 3600
+    |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
+    |> add Handshake_window 60 |> add Transition_window 3600
+    |> add Tls_timeout 2 |> add Resolv_retry `Infinite |> add Auth_retry `None
+    |> add Connect_timeout 120
+    |> add Connect_retry_max `Unlimited
+    |> add Proto (None, `Tcp None)
+    |> add Auth `SHA1
+    (* Minimal contents of actual config file: *)
+    |> add Cipher `AES_256_CBC
+    |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
+    |> add Tls_mode `Server
+    |> add Server (Ipaddr.V4.Prefix.of_string_exn "10.0.1.0/24")
+    |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Tls_cert cert
+    |> add Tls_key key |> add Cipher cipher
   in
-  Engine.new_connection server
 
-let established_client, establish_server =
+  let[@ocaml.warning "-8"] ( initial_client,
+                             inital_client_outs,
+                             _application,
+                             None ) =
+    let pre_connect =
+      match Engine.client minimal_config ts now Mirage_crypto_rng.generate with
+      | Ok (s, _) -> s
+      | Error (`Msg e) -> Format.ksprintf failwith "Client config error: %s" e
+    in
+    Engine.handle pre_connect `Connected |> Result.get_ok
+  in
+
+  let initial_server =
+    let server =
+      match
+        Engine.server minimal_server_config ts now Mirage_crypto_rng.generate
+      with
+      | Ok (s, _, _) -> s
+      | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
+    in
+    Engine.new_connection server
+  in
+
   let is_not_taken _ = true in
   let drain role state inputs =
     let state, outs =
@@ -152,8 +157,11 @@ let established_client, establish_server =
 
 open Bechamel
 
-let test_send_data =
+let ciphers = [ `AES_256_CBC; `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
+
+let test_send_data cipher =
   let staged =
+    let established_client, _ = established cipher in
     let data = Cstruct.create 1024 in
     Staged.stage @@ fun () ->
     match Engine.outgoing established_client data with
@@ -162,11 +170,12 @@ let test_send_data =
   in
   Test.make ~name:"encode data" staged
 
-let test_receive_data =
+let test_receive_data cipher =
   let staged =
+    let established_client, established_server = established cipher in
     let data = Cstruct.create 1024 in
     let pkt =
-      match Engine.outgoing establish_server data with
+      match Engine.outgoing established_server data with
       | Ok (_state, pkt) -> pkt
       | Error `Not_ready -> assert false
     in
@@ -178,7 +187,13 @@ let test_receive_data =
   Test.make ~name:"decode data" staged
 
 let test_client =
-  Test.make_grouped ~name:"Client" [ test_send_data; test_receive_data ]
+  Test.make_grouped ~name:"Client"
+    (List.map
+       (fun cipher ->
+         Test.make_grouped
+           ~name:(Config.cipher_to_string cipher)
+           [ test_send_data cipher; test_receive_data cipher ])
+       ciphers)
 
 let benchmark () =
   let ols =
