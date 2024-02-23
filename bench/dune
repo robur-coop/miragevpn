@@ -1,22 +1,32 @@
 (rule
  (copy# ../src/state.ml state.ml))
+
 (rule
  (copy# ../src/engine.ml engine.ml))
+
 (rule
  (copy# ../src/packet.ml packet.ml))
+
 (rule
  (copy# ../src/config.ml config.ml))
+
 (rule
  (copy# ../src/result.ml result.ml))
+
 (rule
  (copy# ../src/tls_crypt.ml tls_crypt.ml))
 
 (executable
  (name bench_engine)
- (libraries  bechamel bechamel-perf bechamel-notty
+ (libraries
+  bechamel
+  bechamel-perf
+  bechamel-notty
   ptime.clock.os
   mtime.clock.os
   mirage-crypto-rng.unix
+  logs.fmt
+  fmt.tty
   ; miragevpn
   fmt
   logs
