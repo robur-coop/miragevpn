@@ -158,17 +158,18 @@ let initial_server =
   Engine.new_connection server
 
 let established_client, establish_server =
+  let is_not_taken _ = true in
   let drain role state inputs =
     let state, outs =
       List.fold_left
         (fun (state, outs) input ->
-          match Engine.handle state (`Data input) with
-          | Ok (state, outs', _application, None) ->
+          match Engine.handle ~is_not_taken state (`Data input) with
+          | Ok (state, outs', _application_data, None) ->
               Format.eprintf "%s state @[<1>%a@]\n%!" role State.pp state;
               (state, outs' :: outs)
-          | Ok (_, _, _, Some act) ->
-              Format.kasprintf failwith "Unexpected action %a" State.pp_action
-                act
+          | Ok (state, outs', _application_data, Some act) ->
+              Format.eprintf "Produced %s action %a\n%!" role State.pp_action act;
+              (state, outs' :: outs)
           | Error e ->
               Format.kasprintf failwith "%s error: %a" role Engine.pp_error e)
         (state, []) inputs
@@ -185,5 +186,8 @@ let established_client, establish_server =
   let server, server_outs = drain "Server" server client_outs in
   let client, client_outs = drain "Client" client server_outs in
   let server, server_outs = drain "Server" server client_outs in
+  let client, client_outs = drain "Client" client server_outs in
+  let server, server_outs = drain "Server" server client_outs in
+  Printf.eprintf "server_outs %d\n%!" (List.length server_outs);
   ignore server_outs;
   (client, server)
