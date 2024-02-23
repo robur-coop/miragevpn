@@ -159,10 +159,30 @@ let test_send_data =
     Staged.stage @@ fun () ->
     match Engine.outgoing established_client data with
     | Ok _ -> ()
-    | Error `Not_ready -> failwith "Not ready"
+    | Error `Not_ready -> assert false
   in
-  Test.make ~name:"Client encode"
-    staged
+  Test.make ~name:"encode data" staged
+
+let test_receive_data =
+  let staged =
+    let data = Cstruct.create 1024 in
+    let pkt =
+      match Engine.outgoing establish_server data with
+      | Ok (_state, pkt) -> pkt
+      | Error `Not_ready -> assert false
+    in
+    Staged.stage @@ fun () ->
+    match Engine.handle established_client (`Data pkt) with
+    | Ok _ -> ()
+    | Error _ -> assert false
+  in
+  Test.make ~name:"decode data" staged
+
+let test_client =
+  Test.make_grouped ~name:"Client" [
+    test_send_data;
+    test_receive_data;
+  ]
 
 let benchmark () =
   let ols =
@@ -174,7 +194,7 @@ let benchmark () =
   let cfg =
     Benchmark.cfg ~limit:2000 ~quota:(Time.second 0.5) ~kde:(Some 1000) ()
   in
-  let raw_results = Benchmark.all cfg instances test_send_data in
+  let raw_results = Benchmark.all cfg instances test_client in
   let results =
     List.map (fun instance -> Analyze.all ols instance raw_results) instances
   in
