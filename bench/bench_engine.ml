@@ -183,5 +183,7 @@ let established_client, establish_server =
   let server, server_outs = drain "Server" server client_outs in
   let client, client_outs = drain "Client" client server_outs in
   let server, server_outs = drain "Server" server client_outs in
+  let client, client_outs = drain "Client" client server_outs in
+  let server, server_outs = drain "Server" server client_outs in
   ignore server_outs;
   (client, server)
