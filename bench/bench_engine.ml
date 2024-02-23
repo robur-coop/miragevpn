@@ -126,8 +126,7 @@ let established_client, establish_server =
       List.fold_left
         (fun (state, outs) input ->
           match Engine.handle ~is_not_taken state (`Data input) with
-          | Ok (state, outs', _application_data, None) ->
-              (state, outs' :: outs)
+          | Ok (state, outs', _application_data, None) -> (state, outs' :: outs)
           | Ok (state, outs', _application_data, Some _act) ->
               (* TODO: add argument whether an action is expected, and fail on
                  unexpected actions. *)
@@ -179,10 +178,7 @@ let test_receive_data =
   Test.make ~name:"decode data" staged
 
 let test_client =
-  Test.make_grouped ~name:"Client" [
-    test_send_data;
-    test_receive_data;
-  ]
+  Test.make_grouped ~name:"Client" [ test_send_data; test_receive_data ]
 
 let benchmark () =
   let ols =
