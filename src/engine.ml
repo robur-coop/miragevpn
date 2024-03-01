@@ -1969,7 +1969,14 @@ let handle_static_client t s keys ev =
                   let acc = Option.fold d ~none:acc ~some:(fun p -> p :: acc) in
                   process_one acc linger
           in
-          let+ t, payloads = process_one [] (Cstruct.append t.linger cs) in
+          let+ t, payloads =
+            let cs =
+              if Cstruct.is_empty t.linger then
+                cs
+              else
+                Cstruct.append t.linger cs
+            in
+            process_one [] cs in
           (t, [], List.rev payloads, None)
       | s, ev ->
           Result.error_msgf
