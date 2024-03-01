@@ -122,7 +122,7 @@ let encrypt_and_out protocol { my; _ } key
   let buf, enc_off, enc_len = Packet.Tls_crypt.encode protocol (key, p) in
   let encrypted =
     Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
-      (Cstruct.sub buf enc_off enc_len)
+      (Cstruct_ext.sub buf enc_off enc_len)
   in
   Cstruct.blit encrypted 0 buf enc_off enc_len;
   buf
@@ -1027,7 +1027,7 @@ let unpad block_size cs =
   let l = Cstruct.length cs in
   let amount = Cstruct.get_uint8 cs (pred l) in
   let len = l - amount in
-  if len >= 0 && amount <= block_size then Ok (Cstruct.sub cs 0 len)
+  if len >= 0 && amount <= block_size then Ok (Cstruct_ext.sub cs 0 len)
   else Error (`Msg "bad padding")
 
 let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
@@ -1125,7 +1125,7 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
 let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
   let ctx, payload = out ~add_timestamp ctx hmac_algorithm compress rng data in
   let prefix = Packet.encode_protocol protocol (Cstruct.length payload) in
-  let out = Cstruct.append prefix payload in
+  let out = Cstruct_ext.append_nocopy prefix payload in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length payload) ctx.my_replay_id);
@@ -1692,7 +1692,9 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         if Cstruct.is_empty linger then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let r = multi (Cstruct.append state.linger buf) (state, [], [], None) in
+  let r =
+    multi (Cstruct_ext.append_nocopy state.linger buf) (state, [], [], None)
+  in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
@@ -1960,7 +1962,9 @@ let handle_static_client t s keys ev =
                   let acc = Option.fold d ~none:acc ~some:(fun p -> p :: acc) in
                   process_one acc linger
           in
-          let+ t, payloads = process_one [] (Cstruct.append t.linger cs) in
+          let+ t, payloads =
+            process_one [] (Cstruct_ext.append_nocopy t.linger cs)
+          in
           (t, [], List.rev payloads, None)
       | s, ev ->
           Result.error_msgf
