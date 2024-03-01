@@ -1692,7 +1692,16 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         if Cstruct.is_empty linger then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let r = multi (Cstruct.append state.linger buf) (state, [], [], None) in
+  let r =
+    let buf =
+      (* Cstruct.append always allocates; avoid copying if inger is empty. *)
+      if Cstruct.is_empty state.linger then
+        buf
+      else
+        Cstruct.append state.linger buf
+    in
+    multi buf (state, [], [], None)
+  in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
