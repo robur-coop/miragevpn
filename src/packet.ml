@@ -27,25 +27,26 @@ type operation =
   | Hard_reset_client_v3
   | Control_wkc
 
-let operation_to_int, int_to_operation =
-  let ops =
-    [
-      (Soft_reset_v2, 3);
-      (Control, 4);
-      (Ack, 5);
-      (Data_v1, 6);
-      (Hard_reset_client_v2, 7);
-      (Hard_reset_server_v2, 8);
-      (Hard_reset_client_v3, 10);
-      (Control_wkc, 11);
-    ]
-  in
-  let rev_ops = List.map (fun (a, b) -> (b, a)) ops in
-  ( (fun k -> List.assoc k ops),
-    fun i ->
-      match List.assoc_opt i rev_ops with
-      | Some x -> Ok x
-      | None -> Error (`Unknown_operation i) )
+let operation_to_int = function
+  | Soft_reset_v2 -> 3
+  | Control -> 4
+  | Ack -> 5
+  | Data_v1 -> 6
+  | Hard_reset_client_v2 -> 7
+  | Hard_reset_server_v2 -> 8
+  | Hard_reset_client_v3 -> 10
+  | Control_wkc -> 11
+
+let int_to_operation = function
+  | 3 -> Ok Soft_reset_v2
+  | 4 -> Ok Control
+  | 5 -> Ok Ack
+  | 6 -> Ok Data_v1
+  | 7 -> Ok Hard_reset_client_v2
+  | 8 -> Ok Hard_reset_server_v2
+  | 10 -> Ok Hard_reset_client_v3
+  | 11 -> Ok Control_wkc
+  | i -> Error (`Unknown_operation i)
 
 let pp_operation ppf op =
   Fmt.string ppf
