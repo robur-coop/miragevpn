@@ -1,3 +1,9 @@
+let cipher_to_string = function
+  | `AES_128_GCM -> "AES-128-GCM"
+  | `AES_256_GCM -> "AES-256-GCM"
+  | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305"
+  | `AES_256_CBC -> "AES-256-CBC"
+
 let () = Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
 let now = Ptime_clock.now
 let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
@@ -58,7 +64,7 @@ let ca, cert =
 
 let established cipher =
   let minimal_config =
-    let open Config in
+    let open Miragevpn.Config in
     empty
     (* from {!Miragevpn.Config.Defaults.client_config} *)
     |> add Ping_interval `Not_configured
@@ -80,7 +86,7 @@ let established cipher =
     |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Cipher cipher
   in
   let minimal_server_config =
-    let open Config in
+    let open Miragevpn.Config in
     empty
     (* from {!Miragevpn.Config.Defaults.client_config} *)
     |> add Ping_interval `Not_configured
@@ -107,22 +113,22 @@ let established cipher =
                              _application,
                              None ) =
     let pre_connect =
-      match Engine.client minimal_config ts now Mirage_crypto_rng.generate with
+      match Miragevpn.client minimal_config ts now Mirage_crypto_rng.generate with
       | Ok (s, _) -> s
       | Error (`Msg e) -> Format.ksprintf failwith "Client config error: %s" e
     in
-    Engine.handle pre_connect `Connected |> Result.get_ok
+    Miragevpn.handle pre_connect `Connected |> Result.get_ok
   in
 
   let initial_server =
     let server =
       match
-        Engine.server minimal_server_config ts now Mirage_crypto_rng.generate
+        Miragevpn.server minimal_server_config ts now Mirage_crypto_rng.generate
       with
       | Ok (s, _, _) -> s
       | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
     in
-    Engine.new_connection server
+    Miragevpn.new_connection server
   in
 
   let is_not_taken _ = true in
@@ -130,14 +136,14 @@ let established cipher =
     let state, outs =
       List.fold_left
         (fun (state, outs) input ->
-          match Engine.handle ~is_not_taken state (`Data input) with
+          match Miragevpn.handle ~is_not_taken state (`Data input) with
           | Ok (state, outs', _application_data, None) -> (state, outs' :: outs)
           | Ok (state, outs', _application_data, Some _act) ->
               (* TODO: add argument whether an action is expected, and fail on
                  unexpected actions. *)
               (state, outs' :: outs)
           | Error e ->
-              Format.kasprintf failwith "%s error: %a" role Engine.pp_error e)
+              Format.kasprintf failwith "%s error: %a" role Miragevpn.pp_error e)
         (state, []) inputs
     in
     let outs = List.concat (List.rev outs) in
@@ -164,7 +170,7 @@ let test_send_data cipher =
     let established_client, _ = established cipher in
     let data = Cstruct.create 1024 in
     Staged.stage @@ fun () ->
-    match Engine.outgoing established_client data with
+    match Miragevpn.outgoing established_client data with
     | Ok _ -> ()
     | Error `Not_ready -> assert false
   in
@@ -175,12 +181,12 @@ let test_receive_data cipher =
     let established_client, established_server = established cipher in
     let data = Cstruct.create 1024 in
     let pkt =
-      match Engine.outgoing established_server data with
+      match Miragevpn.outgoing established_server data with
       | Ok (_state, pkt) -> pkt
       | Error `Not_ready -> assert false
     in
     Staged.stage @@ fun () ->
-    match Engine.handle established_client (`Data pkt) with
+    match Miragevpn.handle established_client (`Data pkt) with
     | Ok _ -> ()
     | Error _ -> assert false
   in
@@ -191,7 +197,7 @@ let test_client =
     (List.map
        (fun cipher ->
          Test.make_grouped
-           ~name:(Config.cipher_to_string cipher)
+           ~name:(cipher_to_string cipher)
            [ test_send_data cipher; test_receive_data cipher ])
        ciphers)
 

@@ -1,21 +1,3 @@
-(rule
- (copy# ../src/state.ml state.ml))
-
-(rule
- (copy# ../src/engine.ml engine.ml))
-
-(rule
- (copy# ../src/packet.ml packet.ml))
-
-(rule
- (copy# ../src/config.ml config.ml))
-
-(rule
- (copy# ../src/result.ml result.ml))
-
-(rule
- (copy# ../src/tls_crypt.ml tls_crypt.ml))
-
 (executable
  (name bench_engine)
  (libraries
@@ -28,7 +10,7 @@
   mirage-crypto-rng.unix
   logs.fmt
   fmt.tty
-  ; miragevpn
+  miragevpn
   fmt
   logs
   cstruct
