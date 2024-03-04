@@ -1125,7 +1125,7 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
 let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
   let ctx, payload = out ~add_timestamp ctx hmac_algorithm compress rng data in
   let prefix = Packet.encode_protocol protocol (Cstruct.length payload) in
-  let out = Cstruct_ext.append_nocopy prefix payload in
+  let out = Cstruct_ext.append' prefix payload in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length payload) ctx.my_replay_id);
@@ -1692,9 +1692,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         if Cstruct.is_empty linger then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let r =
-    multi (Cstruct_ext.append_nocopy state.linger buf) (state, [], [], None)
-  in
+  let r = multi (Cstruct_ext.append' state.linger buf) (state, [], [], None) in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
@@ -1962,9 +1960,7 @@ let handle_static_client t s keys ev =
                   let acc = Option.fold d ~none:acc ~some:(fun p -> p :: acc) in
                   process_one acc linger
           in
-          let+ t, payloads =
-            process_one [] (Cstruct_ext.append_nocopy t.linger cs)
-          in
+          let+ t, payloads = process_one [] (Cstruct_ext.append' t.linger cs) in
           (t, [], List.rev payloads, None)
       | s, ev ->
           Result.error_msgf

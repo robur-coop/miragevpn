@@ -14,7 +14,7 @@ let shift cs len = or_empty (Cstruct.shift cs len)
 
 (* If we append the empty cstruct and we don't need a fresh copy we can do
    nothing. This has different semantics than Cstruct.append. *)
-let append_nocopy cs cs' =
+let append' cs cs' =
   if Cstruct.is_empty cs then cs'
   else if Cstruct.is_empty cs' then cs
   else Cstruct.append cs cs'
