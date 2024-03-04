@@ -105,10 +105,8 @@ let compute_hmac key p hmac_algorithm hmac_key =
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } key
     (p : [< Packet.ack | Packet.control ]) =
   (* A dummy hmac. Unfortunately, it has to be the correct length for now *)
-  let hmac = Cstruct.create (Mirage_crypto.Hash.digest_size hmac_algorithm) in
-  let header = Packet.header p in
-  let p' = Packet.with_header { header with Packet.hmac } p in
-  let buf, feeder = Packet.encode protocol (key, p') in
+  let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+  let buf, feeder = Packet.encode protocol hmac_len (key, p) in
   let hmac = Mirage_crypto.Hash.maci hmac_algorithm ~key:my_hmac feeder in
   Packet.set_hmac buf protocol hmac;
   buf

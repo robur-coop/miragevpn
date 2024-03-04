@@ -122,12 +122,12 @@ let decode_header ~hmac_len buf =
     },
     hdr_len hmac_len + (id_len * arr_len) + rs )
 
-let encode_header op_buf buf hdr =
+let encode_header hmac_len op_buf buf hdr =
   let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
   let rsid = if id_arr_len = 0 then 0 else 8 in
-  let hmac_len = Cstruct.length hdr.hmac in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session;
-  Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
+  (* hmac is set later using [set_hmac] *)
+  (* Cstruct.blit hdr.hmac 0 buf 8 hmac_len; *)
   Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.replay_id;
   Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp;
   Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_sequence_numbers);
@@ -211,8 +211,8 @@ let decode_ack_or_control op ~hmac_len buf =
       let+ control = decode_control ~hmac_len buf in
       `Control (op, control)
 
-let encode_control op_buf buf (header, sequence_number, payload) =
-  let len, feeder = encode_header op_buf buf header in
+let encode_control hmac_len op_buf buf (header, sequence_number, payload) =
+  let len, feeder = encode_header hmac_len op_buf buf header in
   Cstruct.BE.set_uint32 buf len sequence_number;
   Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload);
   fun feed ->
@@ -272,12 +272,12 @@ let encode_protocol proto len =
       buf
   | `Udp -> Cstruct.empty
 
-let encode proto (key, (p : [`Ack of header | `Control of (operation * _)])) =
+let encode proto hmac_len (key, (p : [< `Ack of header | `Control of (operation * _)])) =
   let hdr = header p in
   let len =
     let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
     protocol_len proto + 1
-    + hdr_len (Cstruct.length hdr.hmac)
+    + hdr_len hmac_len
     + id_arr_len
     + (if id_arr_len = 0 then 0 else 8)
     +
@@ -293,8 +293,8 @@ let encode proto (key, (p : [`Ack of header | `Control of (operation * _)])) =
   let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
   let feeder =
     match p with
-    | `Ack ack -> snd (encode_header op_buf to_encode ack)
-    | `Control (_, control) -> encode_control op_buf to_encode control
+    | `Ack ack -> snd (encode_header hmac_len op_buf to_encode ack)
+    | `Control (_, control) -> encode_control hmac_len op_buf to_encode control
   in
   (buf, feeder)
 
