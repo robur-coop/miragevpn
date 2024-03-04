@@ -115,13 +115,13 @@ let encrypt_and_out protocol { my; _ } key
     (p : [< Packet.ack | Packet.control ]) =
   let my_key = Tls_crypt.Key.cipher_key my in
   let my_hmac = Tls_crypt.Key.hmac my in
-  let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
-  let hmac = Mirage_crypto.Hash.SHA256.hmac ~key:my_hmac to_be_signed in
+  let buf, enc_off, enc_len, feeder =
+    Packet.Tls_crypt.encode protocol (key, p)
+  in
+  let hmac = Mirage_crypto.Hash.SHA256.hmaci ~key:my_hmac feeder in
   let iv = Cstruct.sub hmac 0 16 in
   let ctr = Mirage_crypto.Cipher_block.AES.CTR.ctr_of_cstruct iv in
-  let header = Packet.header p in
-  let p = Packet.with_header { header with Packet.hmac } p in
-  let buf, enc_off, enc_len = Packet.Tls_crypt.encode protocol (key, p) in
+  Packet.Tls_crypt.set_hmac buf protocol hmac;
   let encrypted =
     Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
       (Cstruct_ext.sub buf enc_off enc_len)
