@@ -104,10 +104,14 @@ let compute_hmac key p hmac_algorithm hmac_key =
 
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } key
     (p : [< Packet.ack | Packet.control ]) =
-  let hmac = compute_hmac key p hmac_algorithm my_hmac in
+  (* A dummy hmac. Unfortunately, it has to be the correct length for now *)
+  let hmac = Cstruct.create (Mirage_crypto.Hash.digest_size hmac_algorithm) in
   let header = Packet.header p in
   let p' = Packet.with_header { header with Packet.hmac } p in
-  Packet.encode protocol (key, p')
+  let buf, feeder = Packet.encode protocol (key, p') in
+  let hmac = Mirage_crypto.Hash.maci hmac_algorithm ~key:my_hmac feeder in
+  Packet.set_hmac buf protocol hmac;
+  buf
 
 let encrypt_and_out protocol { my; _ } key
     (p : [< Packet.ack | Packet.control ]) =
@@ -1116,7 +1120,7 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
   let ctx, payload = out ?add_timestamp ctx hmac_algorithm compress rng data in
-  let out = Packet.encode protocol (key, `Data payload) in
+  let out = Packet.encode_data protocol key payload in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length out) ctx.my_replay_id);

@@ -87,6 +87,8 @@ let pp_header ppf hdr =
     Fmt.(option ~none:(any " ") uint64)
     hdr.remote_session
 
+let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
+
 let decode_header ~hmac_len buf =
   let open Result.Syntax in
   let* () = guard (Cstruct.length buf >= hdr_len hmac_len) `Partial in
@@ -120,11 +122,10 @@ let decode_header ~hmac_len buf =
     },
     hdr_len hmac_len + (id_len * arr_len) + rs )
 
-let encode_header hdr =
+let encode_header op_buf buf hdr =
   let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
   let rsid = if id_arr_len = 0 then 0 else 8 in
   let hmac_len = Cstruct.length hdr.hmac in
-  let buf = Cstruct.create (hdr_len hmac_len + rsid + id_arr_len) in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session;
   Cstruct.blit hdr.hmac 0 buf 8 hmac_len;
   Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.replay_id;
@@ -138,7 +139,19 @@ let encode_header hdr =
   | Some v ->
       assert (rsid <> 0);
       Cstruct.BE.set_uint64 buf (hdr_len hmac_len + id_arr_len) v);
-  (buf, hdr_len hmac_len + rsid + id_arr_len)
+  ( hdr_len hmac_len + rsid + id_arr_len,
+    fun feed ->
+      (* replay_id ++ timestamp *)
+      feed (Cstruct.sub buf (hmac_len + 8) (4 + 4));
+      (* operation *)
+      feed op_buf;
+      (* session_id *)
+      feed (Cstruct.sub buf 0 8);
+      (* ack_len ++ acks (++ remote_session) *)
+      feed
+        (Cstruct.sub buf (hmac_len + 16)
+           (1 + id_arr_len + if Option.is_some hdr.remote_session then 8 else 0))
+  )
 
 let to_be_signed_header ?(more = 0) op header =
   (* replay_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ sequence_number *)
@@ -198,12 +211,13 @@ let decode_ack_or_control op ~hmac_len buf =
       let+ control = decode_control ~hmac_len buf in
       `Control (op, control)
 
-let encode_control (header, sequence_number, payload) =
-  let hdr_buf, len = encode_header header in
-  let sequence_number_buf = Cstruct.create 4 in
-  Cstruct.BE.set_uint32 sequence_number_buf 0 sequence_number;
-  ( Cstruct.concat [ hdr_buf; sequence_number_buf; payload ],
-    len + Cstruct.length payload + 4 )
+let encode_control op_buf buf (header, sequence_number, payload) =
+  let len, feeder = encode_header op_buf buf header in
+  Cstruct.BE.set_uint32 buf len sequence_number;
+  Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload);
+  fun feed ->
+    feeder feed;
+    feed (Cstruct.shift buf len)
 
 let to_be_signed_control op (header, sequence_number, payload) =
   (* rly? not length!? *)
@@ -239,6 +253,17 @@ let op_key op key =
   let op = operation_to_int op in
   (op lsl 3) lor key
 
+let protocol_len = function `Tcp -> 2 | `Udp -> 0
+
+let set_protocol buf proto =
+  match proto with
+  | `Tcp -> Cstruct.BE.set_uint16 buf 0 (Cstruct.length buf - 2)
+  | `Udp -> ()
+
+let set_hmac buf proto hmac =
+  let off = protocol_len proto + 1 + 8 in
+  Cstruct.blit hmac 0 buf off (Cstruct.length hmac)
+
 let encode_protocol proto len =
   match proto with
   | `Tcp ->
@@ -247,21 +272,40 @@ let encode_protocol proto len =
       buf
   | `Udp -> Cstruct.empty
 
-let encode proto (key, p) =
-  let payload, len =
+let encode proto (key, (p : [`Ack of header | `Control of (operation * _)])) =
+  let hdr = header p in
+  let len =
+    let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+    protocol_len proto + 1
+    + hdr_len (Cstruct.length hdr.hmac)
+    + id_arr_len
+    + (if id_arr_len = 0 then 0 else 8)
+    +
     match p with
-    | `Ack ack -> encode_header ack
-    | `Control (_, control) -> encode_control control
-    | `Data d -> (d, Cstruct.length d)
+    | `Ack _ -> 0
+    | `Control (_, (_, _, payload)) -> 4 + Cstruct.length payload
   in
-  let op_buf =
-    let b = Cstruct.create 1 in
-    let op = op_key (operation p) key in
-    Cstruct.set_uint8 b 0 op;
-    b
+  let buf = Cstruct.create len in
+  set_protocol buf proto;
+  let op = op_key (operation p) key in
+  Cstruct.set_uint8 buf (protocol_len proto) op;
+  let op_buf = Cstruct.sub buf (protocol_len proto) 1 in
+  let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
+  let feeder =
+    match p with
+    | `Ack ack -> snd (encode_header op_buf to_encode ack)
+    | `Control (_, control) -> encode_control op_buf to_encode control
   in
-  let prefix = encode_protocol proto (succ len) in
-  Cstruct.concat [ prefix; op_buf; payload ]
+  (buf, feeder)
+
+let encode_data proto key data =
+  let len = protocol_len proto + 1 + Cstruct.length data in
+  let buf = Cstruct.create_unsafe len in
+  set_protocol buf proto;
+  let op = op_key Data_v1 key in
+  Cstruct.set_uint8 buf (protocol_len proto) op;
+  Cstruct.blit data 0 buf (protocol_len proto + 1) (Cstruct.length data);
+  buf
 
 let to_be_signed key p =
   let op = op_key (operation p) key in
@@ -457,8 +501,6 @@ type ack = [ `Ack of header ]
 (* the int32 in the middle is the sequence number *)
 type control = [ `Control of operation * (header * int32 * Cstruct.t) ]
 type t = int * [ ack | control | `Data of Cstruct.t ]
-
-let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 
 let with_header hdr = function
   | `Ack _ -> `Ack hdr
