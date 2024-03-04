@@ -185,7 +185,7 @@ let decode_control ~hmac_len buf =
   let* header, off = decode_header ~hmac_len buf in
   let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
   let sequence_number = Cstruct.BE.get_uint32 buf off
-  and payload = Cstruct.shift buf (off + 4) in
+  and payload = Cstruct_ext.shift buf (off + 4) in
   (header, sequence_number, payload)
 
 let decode_ack_or_control op ~hmac_len buf =
@@ -218,7 +218,7 @@ let decode_protocol proto buf =
       let* () = guard (Cstruct.length buf >= 2) `Tcp_partial in
       let plen = Cstruct.BE.get_uint16 buf 0 in
       let+ () = guard (Cstruct.length buf - 2 >= plen) `Tcp_partial in
-      (Cstruct.sub buf 2 plen, Cstruct.shift buf (plen + 2))
+      (Cstruct.sub buf 2 plen, Cstruct_ext.shift buf (plen + 2))
   | `Udp -> Ok (buf, Cstruct.empty)
 
 let decode_key_op proto buf =
@@ -228,7 +228,7 @@ let decode_key_op proto buf =
   let opkey = Cstruct.get_uint8 buf 0 in
   let op, key = (opkey lsr 3, opkey land 0x07) in
   let+ op = int_to_operation op in
-  (op, key, Cstruct.shift buf 1, linger)
+  (op, key, Cstruct_ext.shift buf 1, linger)
 
 let operation = function
   | `Ack _ -> Ack
@@ -427,7 +427,7 @@ module Tls_crypt = struct
     let* hdr, off = decode_decrypted_header clear_hdr buf in
     let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
     let sequence_number = Cstruct.BE.get_uint32 buf off
-    and payload = Cstruct.shift buf (off + 4) in
+    and payload = Cstruct_ext.shift buf (off + 4) in
     (hdr, sequence_number, payload)
 
   let decode_decrypted_ack_or_control clear_hdr op buf =
@@ -449,7 +449,7 @@ module Tls_crypt = struct
     and timestamp = Cstruct.BE.get_uint32 buf 12
     and hmac = Cstruct.sub buf 16 hmac_len in
     ( { local_session; replay_id; timestamp; hmac },
-      Cstruct.shift buf clear_hdr_len )
+      Cstruct_ext.shift buf clear_hdr_len )
 end
 
 type ack = [ `Ack of header ]
@@ -605,9 +605,9 @@ let decode_tls_data ?(with_premaster = false) buf =
       let+ peer_info =
         if Cstruct.length buf <= peer_info_start + 2 then Ok None
         else
-          let data = Cstruct.shift buf peer_info_start in
+          let data = Cstruct_ext.shift buf peer_info_start in
           let len = Cstruct.BE.get_uint16 data 0 in
-          let data = Cstruct.shift data 2 in
+          let data = Cstruct_ext.shift data 2 in
           let* () = guard (Cstruct.length data >= len) `Partial in
           if Cstruct.length data > len then
             Log.warn (fun m ->
