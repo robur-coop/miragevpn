@@ -122,7 +122,7 @@ let decode_header ~hmac_len buf =
     },
     hdr_len hmac_len + (id_len * arr_len) + rs )
 
-let encode_header hmac_len op_buf buf hdr =
+let encode_header hmac_len buf hdr =
   let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
   let rsid = if id_arr_len = 0 then 0 else 8 in
   Cstruct.BE.set_uint64 buf 0 hdr.local_session;
@@ -139,19 +139,7 @@ let encode_header hmac_len op_buf buf hdr =
   | Some v ->
       assert (rsid <> 0);
       Cstruct.BE.set_uint64 buf (hdr_len hmac_len + id_arr_len) v);
-  ( hdr_len hmac_len + rsid + id_arr_len,
-    fun feed ->
-      (* replay_id ++ timestamp *)
-      feed (Cstruct.sub buf (hmac_len + 8) (4 + 4));
-      (* operation *)
-      feed op_buf;
-      (* session_id *)
-      feed (Cstruct.sub buf 0 8);
-      (* ack_len ++ acks (++ remote_session) *)
-      feed
-        (Cstruct.sub buf (hmac_len + 16)
-           (1 + id_arr_len + if Option.is_some hdr.remote_session then 8 else 0))
-  )
+  hdr_len hmac_len + rsid + id_arr_len
 
 let to_be_signed_header ?(more = 0) op header =
   (* replay_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ sequence_number *)
@@ -211,13 +199,10 @@ let decode_ack_or_control op ~hmac_len buf =
       let+ control = decode_control ~hmac_len buf in
       `Control (op, control)
 
-let encode_control hmac_len op_buf buf (header, sequence_number, payload) =
-  let len, feeder = encode_header hmac_len op_buf buf header in
+let encode_control hmac_len buf (header, sequence_number, payload) =
+  let len = encode_header hmac_len buf header in
   Cstruct.BE.set_uint32 buf len sequence_number;
-  Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload);
-  fun feed ->
-    feeder feed;
-    feed (Cstruct.shift buf len)
+  Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload)
 
 let to_be_signed_control op (header, sequence_number, payload) =
   (* rly? not length!? *)
@@ -272,13 +257,12 @@ let encode_protocol proto len =
       buf
   | `Udp -> Cstruct.empty
 
-let encode proto hmac_len (key, (p : [< `Ack of header | `Control of (operation * _)])) =
+let encode proto hmac_len
+    (key, (p : [< `Ack of header | `Control of operation * _ ])) =
   let hdr = header p in
   let len =
     let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
-    protocol_len proto + 1
-    + hdr_len hmac_len
-    + id_arr_len
+    protocol_len proto + 1 + hdr_len hmac_len + id_arr_len
     + (if id_arr_len = 0 then 0 else 8)
     +
     match p with
@@ -291,10 +275,19 @@ let encode proto hmac_len (key, (p : [< `Ack of header | `Control of (operation 
   Cstruct.set_uint8 buf (protocol_len proto) op;
   let op_buf = Cstruct.sub buf (protocol_len proto) 1 in
   let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
-  let feeder =
+  let () =
     match p with
-    | `Ack ack -> snd (encode_header hmac_len op_buf to_encode ack)
-    | `Control (_, control) -> encode_control hmac_len op_buf to_encode control
+    | `Ack ack -> ignore (encode_header hmac_len to_encode ack)
+    | `Control (_, control) -> encode_control hmac_len to_encode control
+  in
+  let feeder feed =
+    (* replay_id ++ timestamp *)
+    feed (Cstruct.sub to_encode (hmac_len + 8) (4 + 4));
+    feed op_buf;
+    (* local_session *)
+    feed (Cstruct.sub to_encode 0 8);
+    (* ack_len ++ acks ++ remote_session ++ sequence_number ++ payload *)
+    feed (Cstruct.shift to_encode (hmac_len + 16))
   in
   (buf, feeder)
 
