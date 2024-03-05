@@ -994,6 +994,7 @@ type error =
   | `No_channel of int
   | `Tls of
     [ `Alert of Tls.Packet.alert_type | `Eof | `Fail of Tls.Engine.failure ]
+  | `Payload_too_short of int * int
   | `Msg of string ]
 
 let pp_error ppf = function
@@ -1022,6 +1023,9 @@ let pp_error ppf = function
         "no channel found for keyid %u, and not in the right state for rekeying"
         keyid
   | `Tls tls_e -> pp_tls_error ppf tls_e
+  | `Payload_too_short (expected, actual) ->
+      Fmt.pf ppf "payload too short (need %u bytes); got %u bytes" expected
+        actual
   | `Msg msg -> Fmt.string ppf msg
 
 let unpad block_size cs =
@@ -1290,8 +1294,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length dec >= hdr_len)
-            (Result.msgf "payload too short (need %u bytes): %u" hdr_len
-               (Cstruct.length dec))
+            (`Payload_too_short (hdr_len, Cstruct.length dec))
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
@@ -1303,8 +1306,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length data >= Packet.id_len + tag_len)
-            (Result.msgf "payload too short (need %u bytes): %u"
-               (Packet.id_len + tag_len) (Cstruct.length data))
+            (`Payload_too_short (Packet.id_len + tag_len, Cstruct.length data))
         in
         let replay_id, tag, payload =
           let sn, rest = Cstruct.split data Packet.id_len in
@@ -1326,8 +1328,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let* () =
           guard
             (Cstruct.length data >= Packet.id_len + tag_len)
-            (Result.msgf "payload too short (need %u bytes): %u"
-               (Packet.id_len + tag_len) (Cstruct.length data))
+            (`Payload_too_short (Packet.id_len + tag_len, Cstruct.length data))
         in
         let replay_id, tag, payload =
           let sn, rest = Cstruct.split data Packet.id_len in
