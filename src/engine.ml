@@ -1073,7 +1073,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
     let enc, tag =
       authenticate_encrypt_tag ~key:my_key ~nonce ~adata:replay_id data
     in
-    Cstruct_ext.concat_with_empty_prefix prefix_len [ replay_id; tag; enc ]
+    Cstruct_ext.concat_with_unsafe_prefix prefix_len [ replay_id; tag; enc ]
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
     match ctx.keys with
@@ -1113,7 +1113,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
               feed iv;
               feed enc)
         in
-        Cstruct_ext.concat_with_empty_prefix prefix_len [ hmac; iv; enc ]
+        Cstruct_ext.concat_with_unsafe_prefix prefix_len [ hmac; iv; enc ]
     | AES_GCM { my_key; my_implicit_iv; _ } ->
         aead Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag my_key
           my_implicit_iv

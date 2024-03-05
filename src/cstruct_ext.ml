@@ -19,10 +19,9 @@ let append' cs cs' =
   else if Cstruct.is_empty cs' then cs
   else Cstruct.append cs cs'
 
-let concat_with_empty_prefix prefix_len css =
+let concat_with_unsafe_prefix prefix_len css =
   let len = prefix_len + Cstruct.lenv css in
   let b = Cstruct.create_unsafe len in
-  Cstruct.memset (Cstruct.sub b 0 prefix_len) 0;
   let _ : int =
     List.fold_left
       (fun off cs ->
