@@ -273,7 +273,7 @@ let encode proto hmac_len
         (* 4 is sequence number *)
         4 + Cstruct.length payload
   in
-  let buf = Cstruct.create len in
+  let buf = Cstruct.create_unsafe len in
   set_protocol buf proto;
   let op = op_key (operation p) key in
   Cstruct.set_uint8 buf (protocol_len proto) op;
@@ -410,7 +410,7 @@ module Tls_crypt = struct
       | `Control (Hard_reset_client_v3, (_, _, wkc)) -> Cstruct.length wkc
       | _ -> 0
     in
-    let buf = Cstruct.create len in
+    let buf = Cstruct.create_unsafe len in
     set_protocol buf proto;
     Cstruct.set_uint8 buf (protocol_len proto) (op_key (operation p) key);
     let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
