@@ -277,7 +277,6 @@ let encode proto hmac_len
   set_protocol buf proto;
   let op = op_key (operation p) key in
   Cstruct.set_uint8 buf (protocol_len proto) op;
-  let op_buf = Cstruct.sub buf (protocol_len proto) 1 in
   let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
   let () =
     match p with
@@ -287,9 +286,8 @@ let encode proto hmac_len
   let feeder feed =
     (* replay_id ++ timestamp *)
     feed (Cstruct.sub to_encode (hmac_len + 8) (4 + 4));
-    feed op_buf;
-    (* local_session *)
-    feed (Cstruct.sub to_encode 0 8);
+    (* op_key ++ local_session *)
+    feed (Cstruct.sub buf (protocol_len proto) 9);
     (* ack_len ++ acks ++ remote_session ++ sequence_number ++ payload *)
     feed (Cstruct.shift to_encode (hmac_len + 16))
   in
