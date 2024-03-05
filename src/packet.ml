@@ -424,10 +424,8 @@ module Tls_crypt = struct
       feed (Cstruct.sub buf l (Cstruct.length buf - l - wkc_len))
     in
     (* packet, to_encrypt_offset, to_encrypt_length, feeder *)
-    ( buf,
-      protocol_len proto + 1 + encrypted_offset,
-      len - encrypted_offset - wkc_len,
-      feeder )
+    let to_encrypt_offset = protocol_len proto + 1 + encrypted_offset in
+    (buf, to_encrypt_offset, len - to_encrypt_offset - wkc_len, feeder)
 
   let decode_decrypted_header clear_hdr buf =
     let open Result.Syntax in
