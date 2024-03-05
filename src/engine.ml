@@ -104,22 +104,23 @@ let compute_hmac key p hmac_algorithm hmac_key =
 
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } key
     (p : [< Packet.ack | Packet.control ]) =
-  let hmac = compute_hmac key p hmac_algorithm my_hmac in
-  let header = Packet.header p in
-  let p' = Packet.with_header { header with Packet.hmac } p in
-  Packet.encode protocol (key, p')
+  let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+  let buf, feeder = Packet.encode protocol hmac_len (key, p) in
+  let hmac = Mirage_crypto.Hash.maci hmac_algorithm ~key:my_hmac feeder in
+  Packet.set_hmac buf protocol hmac;
+  buf
 
 let encrypt_and_out protocol { my; _ } key
     (p : [< Packet.ack | Packet.control ]) =
   let my_key = Tls_crypt.Key.cipher_key my in
   let my_hmac = Tls_crypt.Key.hmac my in
-  let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
-  let hmac = Mirage_crypto.Hash.SHA256.hmac ~key:my_hmac to_be_signed in
+  let buf, enc_off, enc_len, feeder =
+    Packet.Tls_crypt.encode protocol (key, p)
+  in
+  let hmac = Mirage_crypto.Hash.SHA256.hmaci ~key:my_hmac feeder in
   let iv = Cstruct.sub hmac 0 16 in
   let ctr = Mirage_crypto.Cipher_block.AES.CTR.ctr_of_cstruct iv in
-  let header = Packet.header p in
-  let p = Packet.with_header { header with Packet.hmac } p in
-  let buf, enc_off, enc_len = Packet.Tls_crypt.encode protocol (key, p) in
+  Packet.Tls_crypt.set_hmac buf protocol hmac;
   let encrypted =
     Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
       (Cstruct_ext.sub buf enc_off enc_len)
@@ -1117,7 +1118,7 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
   let ctx, payload = out ?add_timestamp ctx hmac_algorithm compress rng data in
-  let out = Packet.encode protocol (key, `Data payload) in
+  let out = Packet.encode_data protocol key payload in
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length out) ctx.my_replay_id);
