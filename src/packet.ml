@@ -246,6 +246,7 @@ let set_protocol buf proto =
   | `Udp -> ()
 
 let set_hmac buf proto hmac =
+  (* protocol header, op_key, local session *)
   let off = protocol_len proto + 1 + 8 in
   Cstruct.blit hmac 0 buf off (Cstruct.length hmac)
 
@@ -262,12 +263,15 @@ let encode proto hmac_len
   let hdr = header p in
   let len =
     let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+    (* 1 is op_key, + 8 if remote session id is present *)
     protocol_len proto + 1 + hdr_len hmac_len + id_arr_len
     + (if id_arr_len = 0 then 0 else 8)
     +
     match p with
     | `Ack _ -> 0
-    | `Control (_, (_, _, payload)) -> 4 + Cstruct.length payload
+    | `Control (_, (_, _, payload)) ->
+        (* 4 is sequence number *)
+        4 + Cstruct.length payload
   in
   let buf = Cstruct.create len in
   set_protocol buf proto;
