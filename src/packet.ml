@@ -293,14 +293,10 @@ let encode proto hmac_len
   in
   (buf, feeder)
 
-let encode_data proto key data =
-  let len = protocol_len proto + 1 + Cstruct.length data in
-  let buf = Cstruct.create_unsafe len in
+let encode_data buf proto key =
   set_protocol buf proto;
   let op = op_key Data_v1 key in
-  Cstruct.set_uint8 buf (protocol_len proto) op;
-  Cstruct.blit data 0 buf (protocol_len proto + 1) (Cstruct.length data);
-  buf
+  Cstruct.set_uint8 buf (protocol_len proto) op
 
 let to_be_signed key p =
   let op = op_key (operation p) key in

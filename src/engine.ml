@@ -1031,7 +1031,8 @@ let unpad block_size cs =
   if len >= 0 && amount <= block_size then Ok (Cstruct_ext.sub cs 0 len)
   else Error (`Msg "bad padding")
 
-let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
+let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
+    =
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
@@ -1056,7 +1057,9 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     in
     let data =
       if compress then (
-        let b = Cstruct.create_unsafe (Bool.to_int compress + Cstruct.length data) in
+        let b =
+          Cstruct.create_unsafe (Bool.to_int compress + Cstruct.length data)
+        in
         (* 0xFA is "no compression" *)
         Cstruct.set_uint8 b 0 0xfa;
         Cstruct.blit data 0 b 1 (Cstruct.length data);
@@ -1066,7 +1069,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     let enc, tag =
       authenticate_encrypt_tag ~key:my_key ~nonce ~adata:replay_id data
     in
-    Cstruct.concat [ replay_id; tag; enc ]
+    Cstruct_ext.concat_with_empty_prefix prefix_len [ replay_id; tag; enc ]
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
     match ctx.keys with
@@ -1106,7 +1109,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
               feed iv;
               feed enc)
         in
-        Cstruct.concat [ hmac; iv; enc ]
+        Cstruct_ext.concat_with_empty_prefix prefix_len [ hmac; iv; enc ]
     | AES_GCM { my_key; my_implicit_iv; _ } ->
         aead Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag my_key
           my_implicit_iv
@@ -1117,20 +1120,25 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
-  let ctx, payload = out ?add_timestamp ctx hmac_algorithm compress rng data in
-  let out = Packet.encode_data protocol key payload in
+  let prefix_len = Packet.protocol_len protocol + 1 in
+  let ctx, out =
+    out ?add_timestamp prefix_len ctx hmac_algorithm compress rng data
+  in
+  Packet.encode_data out protocol key;
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
         (Cstruct.length out) ctx.my_replay_id);
   (ctx, out)
 
 let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
-  let ctx, payload = out ~add_timestamp ctx hmac_algorithm compress rng data in
-  let prefix = Packet.encode_protocol protocol (Cstruct.length payload) in
-  let out = Cstruct_ext.append' prefix payload in
+  let prefix_len = Packet.protocol_len protocol in
+  let ctx, out =
+    out ~add_timestamp prefix_len ctx hmac_algorithm compress rng data
+  in
+  Packet.set_protocol out protocol;
   Log.debug (fun m ->
       m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
-        (Cstruct.length payload) ctx.my_replay_id);
+        (Cstruct.length out) ctx.my_replay_id);
   (ctx, out)
 
 let outgoing s data =
@@ -1460,12 +1468,8 @@ let maybe_add_wkc now mtu session tls_crypt needs_wkc key transport outs =
       (* First we encrypt *)
       let out = encrypt_and_out session.protocol tls_crypt key p in
       (* Then we append wkc and fix the length if TCP *)
-      let len =
-        Cstruct.length out - match session.protocol with `Tcp -> 2 | `Udp -> 0
-      in
       let out = Cstruct.append out wkc in
-      let proto = Packet.encode_protocol session.protocol len in
-      Cstruct.blit proto 0 out 0 (Cstruct.length proto);
+      Packet.set_protocol out session.protocol;
       (session, transport, Some out, rest)
   | Some _, _ ->
       Log.err (fun m ->
