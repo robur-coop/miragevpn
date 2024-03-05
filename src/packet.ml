@@ -373,7 +373,8 @@ module Tls_crypt = struct
     (* annoyingly the replay packet id and hmac are swapped from the tls-auth header *)
     Cstruct.BE.set_uint32 buf 8 hdr.replay_id;
     Cstruct.BE.set_uint32 buf 12 hdr.timestamp;
-    Cstruct.blit hdr.hmac 0 buf 16 hmac_len;
+    (* hmac is set later using [Tls_crypt.set_hmac] *)
+    (* Cstruct.blit hdr.hmac 0 buf 16 hmac_len; *)
     Cstruct.set_uint8 buf (16 + hmac_len) (List.length hdr.ack_sequence_numbers);
     List.iteri
       (fun i v -> Cstruct.BE.set_uint32 buf (hmac_len + 17 + (i * id_len)) v)
