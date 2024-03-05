@@ -354,7 +354,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     Option.value ~default:Cstruct.empty
       (Option.map
          (fun (c, s) ->
-           let buf = Cstruct.create 16 in
+           let buf = Cstruct.create_unsafe 16 in
            Cstruct.BE.set_uint64 buf 0 c;
            Cstruct.BE.set_uint64 buf 8 s;
            buf)
@@ -1055,7 +1055,7 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
     in
     let data =
       if compress then (
-        let b = Cstruct.create (Bool.to_int compress + Cstruct.length data) in
+        let b = Cstruct.create_unsafe (Bool.to_int compress + Cstruct.length data) in
         (* 0xFA is "no compression" *)
         Cstruct.set_uint8 b 0 0xfa;
         Cstruct.blit data 0 b 1 (Cstruct.length data);
@@ -1086,11 +1086,12 @@ let out ?add_timestamp (ctx : keys) hmac_algorithm compress rng data =
             let l = unpad_len mod Cipher_block.AES.CBC.block_size in
             Cipher_block.AES.CBC.block_size - l
           in
-          let b = Cstruct.create (unpad_len + pad_len) in
+          let b = Cstruct.create_unsafe (unpad_len + pad_len) in
           set_replay_id b 0;
           Option.iter (fun ts -> Cstruct.BE.set_uint32 b 4 ts) add_timestamp;
-          (* 0xFA is "no compression" *)
-          Cstruct.memset (Cstruct.sub b hdr_len (Bool.to_int compress)) 0xfa;
+          if compress then
+            (* 0xFA is "no compression" *)
+            Cstruct.set_uint8 b hdr_len 0xfa;
           Cstruct.blit data 0 b
             (hdr_len + Bool.to_int compress)
             (Cstruct.length data);
