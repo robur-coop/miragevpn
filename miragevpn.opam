@@ -36,7 +36,7 @@ depends: [
   "mirage-crypto"
   "mirage-crypto-rng" {>= "0.11.0"}
   "ptime"
-  "tls" {>= "0.17.3"}
+  "tls" {>= "0.17.4"}
   "dns-client" {>= "7.0.0"}
   "x509" {>= "0.15.0"}
   "duration"
