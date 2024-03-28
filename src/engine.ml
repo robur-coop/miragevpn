@@ -410,18 +410,19 @@ let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
 
 let incoming_tls tls data =
   match Tls.Engine.handle_tls tls data with
+  | Error (`Alert a, `Response _) -> Error (`Tls (`Alert a))
   | Error (f, `Response _) -> Error (`Tls (`Fail f))
-  | Ok (r, `Response out, `Data d) -> (
-      match r with
-      | (`Eof | `Alert _) as e ->
+  | Ok (tls', eof, `Response out, `Data d) -> (
+      match eof with
+      | Some `Eof ->
           Log.err (fun m ->
               m "response %a, TLS payload %a"
                 Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
                 out
                 Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
                 d);
-          Error (`Tls e)
-      | `Ok tls' -> Ok (tls', out, d))
+          Error (`Tls `Eof)
+      | None -> Ok (tls', out, d))
 
 let incoming_tls_without_reply tls data =
   let open Result.Syntax in
@@ -432,7 +433,8 @@ let incoming_tls_without_reply tls data =
 
 let maybe_kex_client rng config tls =
   let open Result.Syntax in
-  if Tls.Engine.can_handle_appdata tls then
+  if Tls.Engine.handshake_in_progress tls then Ok (TLS_handshake tls, None)
+  else
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
     let* options = Config.client_generate_connect_options config in
     let pull = Config.mem Pull config in
@@ -470,7 +472,6 @@ let maybe_kex_client rng config tls =
     in
     let client_state = TLS_established (tls', my_key_material) in
     (client_state, Some payload)
-  else Ok (TLS_handshake tls, None)
 
 let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
     their_key_material =
@@ -823,12 +824,12 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
             d);
       (* if tls is established, move to next state (await tls_data) *)
       let channel_st =
-        if Tls.Engine.can_handle_appdata tls' then
+        if Tls.Engine.handshake_in_progress tls' then TLS_handshake tls'
+        else
           (* this could be generated later, but is done here to accomodate the client state machine *)
           let random1, random2 = (rng 32, rng 32)
           and pre_master = Cstruct.empty in
           TLS_established (tls', { State.pre_master; random1; random2 })
-        else TLS_handshake tls'
       in
       let out =
         Option.to_list (Option.map (fun c -> (`Control, c)) tls_response)
