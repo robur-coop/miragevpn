@@ -64,15 +64,20 @@ let open_tun config { Miragevpn.cidr; gateway } :
 let safe_close fd =
   Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
 
-let rec write_to_fd fd data =
-  if Cstruct.length data = 0 then Lwt_result.return ()
-  else
-    Lwt.catch
-      (fun () ->
-        Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
-      (fun e ->
-        safe_close fd >>= fun () ->
-        Lwt_result.lift (error_msgf "TCP write error %s" (Printexc.to_string e)))
+let write_to_fd fd data =
+  let rec write_to_fd fd data off =
+    if String.length data = off then Lwt_result.return ()
+    else
+      Lwt.catch
+        (fun () ->
+          Lwt_unix.write_string fd data off (String.length data - off)
+          >>= fun written -> write_to_fd fd data (off + written))
+        (fun e ->
+          safe_close fd >>= fun () ->
+          Lwt_result.lift
+            (error_msgf "TCP write error %s" (Printexc.to_string e)))
+  in
+  write_to_fd fd data 0
 
 let write_multiple_to_fd fd bufs =
   Lwt_list.fold_left_s
@@ -89,8 +94,9 @@ let write_multiple_to_fd fd bufs =
 let write_udp fd data =
   Lwt.catch
     (fun () ->
-      let len = Cstruct.length data in
-      Lwt_unix.send fd (Cstruct.to_bytes data) 0 len [] >|= fun sent ->
+      let len = String.length data in
+      (* Lwt_unix.send_substring doesn't exist :( *)
+      Lwt_unix.send fd (Bytes.unsafe_of_string data) 0 len [] >|= fun sent ->
       if sent <> len then
         Logs.warn (fun m ->
             m "UDP short write (length %d, written %d)" len sent);
@@ -122,10 +128,8 @@ let read_from_fd fd =
       let buf = Bytes.create bufsize in
       Lwt_unix.read fd buf 0 bufsize >>= fun count ->
       if count = 0 then failwith "end of file from server"
-      else
-        let cs = Cstruct.of_bytes ~len:count buf in
-        Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return cs)
+      else Logs.debug (fun m -> m "read %d bytes" count);
+      Lwt.return (Bytes.sub_string buf 0 count))
   |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_tcp mvar fd =
@@ -142,9 +146,8 @@ let read_udp =
   fun fd ->
     Lwt_result.catch (fun () ->
         Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, _sa) ->
-        let cs = Cstruct.of_bytes ~len:count buf in
         Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return (Some cs))
+        Lwt.return (Some (Bytes.sub_string buf 0 count)))
     |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let rec reader_udp mvar r =
@@ -229,7 +232,7 @@ type conn = {
   mutable peer :
     [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
-  data_mvar : Cstruct.t list Lwt_mvar.t;
+  data_mvar : string list Lwt_mvar.t;
   est_mvar : (Miragevpn.ip_config * int, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
@@ -308,16 +311,18 @@ let send_recv conn config ip_config _mtu =
         (* not using write_to_fd here because partial writes to a tun
            interface are semantically different from single write()s: *)
         Lwt_list.iter_p
-          (fun pkt -> Lwt_cstruct.write tun_fd pkt >|= ignore)
+          (fun pkt ->
+            Lwt_unix.write_string tun_fd pkt 0 (String.length pkt) >|= ignore)
           pkts
         >>= fun () -> process_incoming ()
       in
       let rec process_outgoing tun_fd =
         let open Lwt_result.Infix in
-        let buf = Cstruct.create 1500 in
-        Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= Cstruct.sub buf 0
-        >>= fun buf ->
-        match Miragevpn.outgoing conn.o_client buf with
+        let buf = Bytes.create 1500 in
+        Lwt_unix.read tun_fd buf 0 (Bytes.length buf)
+        |> Lwt_result.ok >|= Bytes.sub_string buf 0
+        >>= fun data ->
+        match Miragevpn.outgoing conn.o_client data with
         | Error `Not_ready -> failwith "tunnel not ready, dropping data"
         | Ok (s', out) ->
             conn.o_client <- s';
