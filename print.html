@@ -1,0 +1,546 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>MirageVPN - a VPN as an unikernel</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="index.html">Introduction</a></li><li class="chapter-item expanded "><a href="simple_openvpn_server.html"><strong aria-hidden="true">1.</strong> Deploy a OpenVPN server</a></li><li class="chapter-item expanded "><a href="simple_miragevpn_client.html"><strong aria-hidden="true">2.</strong> Deploy our MirageVPN client</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">MirageVPN - a VPN as an unikernel</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
+<p>This tutorial explains how to set up our MirageVPN solution. Among other things,
+it will cover the deployment of a MirageVPN client (with an OpenVPN server) on a
+machine in order to encrypt all your traffic.</p>
+<div style="break-before: page; page-break-before: always;"></div><p>Before we can start using our client, we need to have a server available. This
+short tutorial will show you how to set up a simple OpenVPN server with the aim
+of testing our client: we strongly advise you <strong>not</strong> to consider our
+configuration as 'production-ready'. We'll be using Debian 12 and OpenVPN 2.6.3.</p>
+<h2 id="installation--generation"><a class="header" href="#installation--generation">Installation &amp; Generation</a></h2>
+<p>So you probably have SSH access on your server. Let's connect to the server and
+install OpenVPN.</p>
+<pre><code class="language-sh">$ export OPENVPN_IP=&lt;ipv4&gt; # Must be set!
+$ ssh root@$OPENVPN_IP
+$ apt update
+$ apt upgrade
+$ apt install openvpn ufw
+</code></pre>
+<p>We then need to create a [Public Key Infrastructure][pki] so that we can manage
+who can connect via our VPN server. We'll use <code>easy-rsa</code> for this. The aim of a
+PKI is to be able to add new users without reloading our server (among other
+things). We are going to create an "authority" and create our users' keys via
+this authority. In this way, our OpenVPN server will be able to authenticate
+users not by their keys but by the fact that the keys were created via our
+authority.</p>
+<pre><code class="language-sh">$ mkdir easy-rsa
+$ ln -s /usr/share/easy-rsa/* ~/easy-rsa/
+$ chmod 700 easy-rsa
+$ cd easy-rsa
+$ cat &gt;vars&lt;&lt;EOF
+set_var EASYRSA_ALGO "ec"
+set_var EASYRSA_DIGEST "sha512"
+EOF
+$ ./easyrsa init-pki
+$ ./easyrsa build-ca nopass
+$ ./easyrsa build-dh
+$ ./easyrsa gen-req server nopass
+$ ./easyrsa sign server server
+</code></pre>
+<p>We then need to copy the elements we need to set up our server and generate the
+final material required.</p>
+<pre><code class="language-sh">$ cp pki/issued/server.crt pki/ca.crt pkg/dh.pem /etc/openvpn/server/
+$ cp pki/private/server.key /etc/openvpn/server
+$ cd /etc/openvpn/server
+$ openvpn --genkey secret ta.key
+</code></pre>
+<p>Now we need to create a client identity<sup class="footnote-reference"><a href="#note">1</a></sup>.</p>
+<pre><code class="language-sh">$ cd ~/easyrsa
+$ ./easyrsa gen-req alice nopass
+$ ./easyrsa sign-req client alice
+</code></pre>
+<p>The two files we are ultimately interested in for our client are the newly
+created <code>alice.crt</code> and <code>ta.key</code>. The first is used for authentication (to prove
+your identity to the server). The second encrypts the connection between you and
+the server.</p>
+<div class="footnote-definition" id="note"><sup class="footnote-definition-label">1</sup>
+<p>The example of generating the materials needed for the server here is
+very simplified. More robust methods (such as generating the server and client
+keys elsewhere than on the target server) are recommended. As a reminder, this
+description does <strong>not</strong> produce a "production-ready" OpenVPN server.</p>
+</div>
+<h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
+<p>We can now move on to configuring the server. This consists of a simple file and
+setting up a private network. The configuration file simply describes where the
+materials needed to launch the server are located.</p>
+<pre><code class="language-sh">$ cat &gt;/etc/openvpn/server/server.conf&lt;&lt;EOF
+proto tcp
+port 1194
+dev tun
+ca ca.crt
+server server.crt
+key server.key
+dh dh.pem
+topology subnet
+server 10.8.0.0 255.255.255.0
+ifconfig-pool-persist ipp.txt
+keepalive 10 30
+tls-auth ta.key 0
+persist-key
+persist-tun
+user nobody
+group nogroup
+EOF
+</code></pre>
+<p>There's a lot to be said for this configuration. The first is the use of
+<code>tls-auth</code> to encrypt our control channel. There are other ways of doing this,
+which we'll describe later, but let's start by having a working server. TCP is
+also used as a protocol (instead of UDP). We will also assign a specific IP for
+our <code>alice</code> client:</p>
+<pre><code class="language-sh">$ echo "alice,10.8.0.2," &gt;&gt; /etc/openvpn/server/ipp.txt
+</code></pre>
+<p>Finally, we configure our network so that our customers can communicate with
+Internet:</p>
+<pre><code class="language-sh">$ sysctl -w net.ipv4.ip_forward=1
+$ ip route list default | cut -d' ' -f5
+eth0
+$ cat &gt;&gt;/etc/ufw/before.rules&lt;&lt;EOF
+*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.8.0.0/8 -o eth0 -j MASQUERADE
+COMMIT
+EOF
+$ sed 's/DEFAULT_FORWARD_POLICY="DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' \
+  -i /etc/default/ufw
+$ ufw allow 1194/tcp
+$ ufw allow OpenSSH
+$ systemctl -f enable openvpn-server@server.service
+$ systemctl start openvpn-server@server.service
+</code></pre>
+<p>And here's a working OpenVPN server for testing our client!</p>
+<div style="break-before: page; page-break-before: always;"></div><p>We are going to use <code>mirage-router</code> as a unikernel. Unikernel can be used to
+highlight a possible network configuration for your computer. This configuration
+consists of having 2 interfaces:</p>
+<ol>
+<li>one to retrieve all the packets you want to send to Internet</li>
+<li>one to send all encrypted packets to your VPN server only</li>
+</ol>
+<div><!-- Generated by graphviz version 10.0.1 (0)
+ --><!-- Title: G Pages: 1 --><svg width="648pt" height="152pt"
+ viewBox="0.00 0.00 647.83 152.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 148)"><title>G</title><polygon fill="white" stroke="none" points="-4,4 -4,-148 643.83,-148 643.83,4 -4,4"/><!-- unikernel --><g id="node1" class="node"><title>unikernel</title><polygon fill="none" stroke="black" points="82.84,-117 0,-99 82.84,-81 165.67,-99 82.84,-117"/><text text-anchor="middle" x="82.84" y="-94.33" font-family="Times,serif" font-size="14.00">unikernel</text></g><!-- tap0 --><g id="node2" class="node"><title>tap0</title><ellipse fill="none" stroke="black" cx="262.88" cy="-126" rx="33.85" ry="18"/><text text-anchor="middle" x="262.88" y="-121.33" font-family="Times,serif" font-size="14.00">tap0</text><text text-anchor="middle" x="199.78" y="-94.7" font-family="Times,serif" font-size="14.00">10.8.0.3</text></g><!-- unikernel&#45;&gt;tap0 --><g id="edge1" class="edge"><title>unikernel&#45;&gt;tap0</title><path fill="none" stroke="black" d="M144.11,-108.14C168.54,-111.85 196.21,-116.04 218.58,-119.43"/><polygon fill="black" stroke="black" points="144.87,-104.72 134.45,-106.68 143.82,-111.64 144.87,-104.72"/><polygon fill="black" stroke="black" points="217.84,-122.86 228.26,-120.9 218.89,-115.94 217.84,-122.86"/></g><!-- tap1 --><g id="node3" class="node"><title>tap1</title><ellipse fill="none" stroke="black" cx="262.88" cy="-72" rx="33.85" ry="18"/><text text-anchor="middle" x="262.88" y="-67.33" font-family="Times,serif" font-size="14.00">tap1</text><text text-anchor="middle" x="199.78" y="-40.7" font-family="Times,serif" font-size="14.00">10.0.0.2</text></g><!-- unikernel&#45;&gt;tap1 --><g id="edge2" class="edge"><title>unikernel&#45;&gt;tap1</title><path fill="none" stroke="black" d="M144.11,-89.86C168.54,-86.15 196.21,-81.96 218.58,-78.57"/><polygon fill="black" stroke="black" points="143.82,-86.36 134.45,-91.32 144.87,-93.28 143.82,-86.36"/><polygon fill="black" stroke="black" points="218.89,-82.06 228.26,-77.1 217.84,-75.14 218.89,-82.06"/></g><!-- br0 --><g id="node4" class="node"><title>br0</title><polygon fill="none" stroke="black" points="414.08,-144 360.08,-144 360.08,-108 414.08,-108 414.08,-144"/><text text-anchor="middle" x="387.08" y="-121.33" font-family="Times,serif" font-size="14.00">br0</text><text text-anchor="middle" x="330.83" y="-94.7" font-family="Times,serif" font-size="14.00">10.8.0.2</text></g><!-- tap0&#45;&gt;br0 --><g id="edge3" class="edge"><title>tap0&#45;&gt;br0</title><path fill="none" stroke="black" d="M308.03,-126C321.36,-126 335.86,-126 348.7,-126"/><polygon fill="black" stroke="black" points="308.46,-122.5 298.46,-126 308.46,-129.5 308.46,-122.5"/><polygon fill="black" stroke="black" points="348.44,-129.5 358.44,-126 348.44,-122.5 348.44,-129.5"/></g><!-- br1 --><g id="node5" class="node"><title>br1</title><polygon fill="none" stroke="black" points="414.08,-63 360.08,-63 360.08,-27 414.08,-27 414.08,-63"/><text text-anchor="middle" x="387.08" y="-40.33" font-family="Times,serif" font-size="14.00">br1</text><text text-anchor="middle" x="384.83" y="-13.7" font-family="Times,serif" font-size="14.00">10.0.0.1</text></g><!-- tap1&#45;&gt;br1 --><g id="edge4" class="edge"><title>tap1&#45;&gt;br1</title><path fill="none" stroke="black" d="M305.77,-62.74C319.77,-59.65 335.27,-56.23 348.89,-53.22"/><polygon fill="black" stroke="black" points="305.2,-59.29 296.19,-64.86 306.71,-66.12 305.2,-59.29"/><polygon fill="black" stroke="black" points="349.32,-56.71 358.33,-51.13 347.81,-49.87 349.32,-56.71"/></g><!-- OpenVPN server --><g id="node6" class="node"><title>OpenVPN server</title><ellipse fill="none" stroke="black" cx="544.95" cy="-126" rx="94.88" ry="18"/><text text-anchor="middle" x="544.95" y="-121.33" font-family="Times,serif" font-size="14.00">OpenVPN server</text></g><!-- br0&#45;&gt;OpenVPN server --><g id="edge5" class="edge"><title>br0&#45;&gt;OpenVPN server</title><path fill="none" stroke="black" d="M425.96,-126C430.02,-126 434.29,-126 438.69,-126"/><polygon fill="black" stroke="black" points="426.03,-122.5 416.03,-126 426.03,-129.5 426.03,-122.5"/><polygon fill="black" stroke="black" points="438.34,-129.5 448.34,-126 438.34,-122.5 438.34,-129.5"/></g><!-- Computer --><g id="node7" class="node"><title>Computer</title><ellipse fill="none" stroke="black" cx="262.88" cy="-18" rx="61.2" ry="18"/><text text-anchor="middle" x="262.88" y="-13.32" font-family="Times,serif" font-size="14.00">Computer</text></g><!-- Computer&#45;&gt;br1 --><g id="edge6" class="edge"><title>Computer&#45;&gt;br1</title><path fill="none" stroke="black" d="M323.92,-31.27C332.42,-33.14 340.95,-35.03 348.84,-36.77"/><polygon fill="black" stroke="black" points="324.87,-27.89 314.35,-29.15 323.36,-34.73 324.87,-27.89"/><polygon fill="black" stroke="black" points="347.89,-40.15 358.41,-38.89 349.4,-33.31 347.89,-40.15"/></g></g></svg></div>
+<p>The unikernel will then encrypt all the packets received and send them back to
+the VPN server. The server can then decrypt them and send them to Internet.
+The reverse will also be true.</p>
+<p>One disadvantage of this method is the assignment of IP addresses. They can only
+be fixed between the client and the server.</p>
+<h1 id="network-configuration"><a class="header" href="#network-configuration">Network configuration</a></h1>
+<p>As with the virtualisation of any system, a network configuration stage is
+necessary so that the virtualised systems can communicate. The general idea is
+to create a 'bridge' to which we can attach the virtual interfaces used by our
+systems. In our configuration, 2 bridges are required. However, we need to use
+the same IP address as the one our VPN server will allocate to us. In our
+previous configuration, we assigned <code>alice</code> the IP 10.8.0.2.</p>
+<h2 id="create-our-bridges"><a class="header" href="#create-our-bridges">Create our bridges</a></h2>
+<p>Let's start by creating our bridge:</p>
+<pre><code class="language-sh">$ sudo ip link add name br0 type bridge
+$ sudo ip link set dev br0 up
+$ sudo ip address add 10.8.0.2/24 dev br0
+$ sudo ip link add name br1 type bridge
+$ sudo ip link set dev br1 up
+$ sudo ip address add 10.0.0.1/24 dev br1
+</code></pre>
+<h2 id="create-tap-interfaces"><a class="header" href="#create-tap-interfaces">Create TAP interfaces</a></h2>
+<p>A solo5 unikernel needs a <em>tap</em> interface. This is a virtual interface on which
+our unikernel will define its IP address and connect to the network. Here's how
+to create a <em>tap</em> interface.</p>
+<pre><code class="language-sh">$ sudo ip tuntap add mode tap tap0
+$ sudo ip link set dev tap0 up
+$ sudo ip link set tap0 master br0
+$ sudo ip tuntap add mode tap tap1
+$ sudo ip link set dev tap1 up
+$ sudo ip link set tap1 master br1
+</code></pre>
+<p>A <em>tap</em> interface (unlike <em>tun</em>) requires the Ethernet frame. Some will note
+that we have configured our OpenVPN server with <em>tun</em> (<code>dev tun</code>). However, our
+unikernel does not transmit packets to the OpenVPN server without the Ethernet
+frame - so our unikernel is compatible with a server using a <em>tun</em> interface.</p>
+<p>This choice is based on our observation that there are few OpenVPN server
+configurations with <em>tap</em> interfaces.</p>
+<h2 id="firewall"><a class="header" href="#firewall">Firewall</a></h2>
+<p>As with the server, we need to enable our virtual machines to communicate with
+the outside world:</p>
+<pre><code class="language-sh">$ sudo sysctl net.ipv4.ip_forward=1
+$ sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -j MASQUERADE
+</code></pre>
+<p>The aim of our last command is to let our unikernel communicate with the outside
+world even if it is using a private IP address (in our case 10.0.0.2). Note that
+this type of configuration becomes incompatible with OpenVPN as a client.</p>
+<h2 id="persistence"><a class="header" href="#persistence">Persistence</a></h2>
+<p>This configuration is not persistent, meaning that the next time you reboot your
+computer, <code>br{0,1}</code> and <code>tap{0,1}</code> will disappear. However, your system can
+manage the creation of these elements at boot time. In Debian, for example, you
+can modify the <code>/etc/network/interfaces</code> file to create your bridges at boot
+time:</p>
+<pre><code class="language-sh">$ cat &gt;&gt;/etc/network/interfaces &lt;&lt;EOF
+auto br0
+iface br0 inet static
+  address 10.8.0.2
+  netmask 255.255.255.0
+  broadcast 10.8.0.255
+  bridge_ports none
+  bridge_stp off
+  bridge_fd 0
+  bridge_maxwait 0
+
+auto br1
+iface br1 inet static
+  address 10.0.0.1
+  netmask 255.255.255.0
+  broadcast 10.0.0.255
+  bridge_ports none
+  bridge_stp off
+  bridge_fd 0
+  bridge_maxwait 0
+EOF
+</code></pre>
+<p>Other distributions (like Archlinux) use <code>netctl</code>, for example. Simply create a
+new profile such as:</p>
+<pre><code class="language-sh">$ cat &gt;/etc/netctl/openvpn-bridge&lt;&lt;EOF
+Description="OpenVPN Bridge"
+Interface=br0
+Connection=bridge
+IP=static
+Address='10.8.0.2/24'
+SkipForwardingDelay=yes
+EOF
+$ cat &gt;/etc/netctl/kvm-bridge&lt;&lt;EOF
+Description="KVM Bridge"
+Interface=br1
+Connection=bridge
+IP=static
+Address='10.0.0.1/24'
+SkipForwardingDelay=yes
+EOF
+</code></pre>
+<p>And enable it:</p>
+<pre><code class="language-sh">$ sudo netctl enable openvpn-bridge
+$ sudo netctl enable kvm-bridge
+</code></pre>
+<p>As far as <em>tap</em> interfaces are concerned, their management is often relegated to
+virtual machine managers such as <code>libvirt</code>, <a href="https://xenproject.org/">Xen</a> or
+<a href="https://github.com/robur-coop/albatross">albatross</a>. On this last point, we are going to present these
+different solutions later, particularly QubesOS, which uses Xen.</p>
+<h1 id="miragevpn-configuration"><a class="header" href="#miragevpn-configuration">MirageVPN configuration</a></h1>
+<p>We can now start configuring our client. The materials required for our client
+are:</p>
+<ol>
+<li>our <code>ca.crt</code></li>
+<li>our client's certificate <code>alice.crt</code></li>
+<li>her private key <code>alice.key</code></li>
+<li>the <code>ta.key</code> file we generated on our server</li>
+</ol>
+<p>Our unikernel has no file system. The idea is to create an image of our
+configuration which can then be used by our unikernel. Fortunately, OpenVPN
+allows you to put the content of our materials directly into the configuration
+file:</p>
+<pre><code class="language-sh">$ export OPENVPN_IP=&lt;ipv4&gt; # Must be set!
+$ cat &gt;config.sh&lt;&lt;EOF
+#!/bin/bash
+
+CA_FILE=\$1
+CRT_FILE=\$2
+KEY_FILE=\$3
+TA_FILE=\$4
+OUTPUT_FILE=\$5
+
+cat &gt;\$OUTPUT_FILE&lt;&lt;PRELUDE
+client
+proto tcp
+remote $OPENVPN_IP 1194
+nobind
+persist-key
+cipher AES-256-CBC
+remote-cert-tls server
+PRELUDE
+
+function extract() {
+  cat \$2 | sed -ne "/-BEGIN \${1}-/,/-END \${1}-/p"
+}
+
+echo "&lt;ca&gt;" &gt;&gt; \$OUTPUT_FILE
+extract "CERTIFICATE" \$CA_FILE &gt;&gt; \$OUTPUT_FILE
+echo "&lt;/ca&gt;" &gt;&gt; \$OUTPUT_FILE
+
+echo "&lt;cert&gt;" &gt;&gt; \$OUTPUT_FILE
+extract "CERTIFICATE" \$CRT_FILE &gt;&gt; \$OUTPUT_FILE
+echo "&lt;/cert&gt;" &gt;&gt; \$OUTPUT_FILE
+
+echo "&lt;key&gt;" &gt;&gt; \$OUTPUT_FILE
+extract "PRIVATE KEY" \$KEY_FILE &gt;&gt; \$OUTPUT_FILE
+echo "&lt;/key&gt;" &gt;&gt; \$OUTPUT_FILE
+
+echo "tls-auth [inline] 1" &gt;&gt; \$OUTPUT_FILE
+echo "&lt;tls-auth&gt;" &gt;&gt; \$OUTPUT_FILE
+extract "OpenVPN Static key V1" \$TA_FILE &gt;&gt; \$OUTPUT_FILE
+echo "&lt;/tls-auth&gt;" &gt;&gt; \$OUTPUT_FILE
+
+SIZE=\$(stat --printf="%s" \$OUTPUT_FILE)
+truncate -s \$(( ( ( \$SIZE + 512 - 1 ) / 512 ) * 512 )) \$OUTPUT_FILE
+EOF
+</code></pre>
+<p>In this little script, you need to set <code>$OPENVPN_IP</code> to the public IP address
+of your OpenVPN server. This little script will generate a compatible
+configuration file for our unikernel. Just run it this way:</p>
+<pre><code class="language-sh">$ scp root@$OPENVPN_IP:/root/easy-rsa/pki/ca.crt .
+$ scp root@$OPENVPN_IP:/root/easy-rsa/pki/issued/alice.crt .
+$ scp root@$OPENVPN_IP:/root/easy-rsa/pki/private/alice.key .
+$ scp root@$OPENVPN_IP:/etc/openvpn/server/ta.key .
+$ chmod +x config.sh
+$ ./config.sh ca.crt alice.crt alice.key ta.key alice.config
+</code></pre>
+<p>The last command creates a file which can be used as a "block" by our unikernel.
+The constraint is that its size must be a multiple of 512 and that the <em>extra</em>
+bytes must correspond to <code>'\000'</code>.</p>
+<h1 id="how-to-launch-your-miragevpn-client"><a class="header" href="#how-to-launch-your-miragevpn-client">How to launch your MirageVPN client</a></h1>
+<p>We can now launch our unikernel. This involves using our Solo5 "tender" and
+defining the right routes to redirect all our traffic to br1 and to ensure that
+all encrypted traffic leaving our <code>br1</code> goes to our OpenVPN server.</p>
+<p>We need to know 2 pieces of information: the interface used to communicate with
+Internet and our gateway.</p>
+<pre><code class="language-sh">$ export INTERFACE=$(ip route | grep default | cut -f5 -d' ')
+$ export GATEWAY=$(ip route | grep default | cut -f3 -d' ')
+</code></pre>
+<p>We can therefore specify that any packets destined for our OpenVPN server must
+pass through our interface via our gateway.</p>
+<pre><code class="language-sh">$ sudo ip route add $OPENVPN_IP via $GATEWAY dev $INTERFACE
+</code></pre>
+<p>Now we can launch our unikernel. It should be able to initialise a tunnel with
+your OpenVPN server. Here's the command to launch the unikernel with our Solo5
+tender:</p>
+<pre><code class="language-sh">$ solo5-hvt --block:storage=alice.config \
+  --net:service=tap1 --net:private=tap0 -- ovpn-router.hvt \
+  --private-ipv4=10.8.0.3/24 --private-ipv4-gateway=10.8.0.2 \
+  --ipv4=10.0.0.2/24 --ipv4-gateway=10.0.0.1
+</code></pre>
+<p>All we need to do now is redirect all our traffic to our unikernel. In this
+case, the unikernel uses the IP address <code>10.8.0.3</code>. So we're going to redirect
+all the packets to this IP address.</p>
+<pre><code class="language-sh">$ sudo ip route add 0.0.0.0/1 via 10.8.0.3 dev br0
+</code></pre>
+<p>And that's it! All our traffic uses our unikernel to connect directly to our
+OpenVPN server. We can confirm that, from the outside, we are recognised by the
+public IP address of our OpenVPN server rather than our real public IP address.</p>
+<pre><code class="language-sh">$ test $(curl ifconfig.me) = $OPENVPN_IP
+$ echo $?
+0
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+    </div>
+    </body>
+</html>
