@@ -219,18 +219,21 @@ let decode_protocol proto buf =
       let* () = guard (String.length buf >= 2) `Tcp_partial in
       let plen = String.get_uint16_be buf 0 in
       let+ () = guard (String.length buf - 2 >= plen) `Tcp_partial in
-      ( String.sub buf 2 plen,
-        String.sub buf (plen + 2) (String.length buf - plen - 2) )
-  | `Udp -> Ok (buf, "")
+      (2, plen)
+  | `Udp -> Ok (0, String.length buf)
 
 let decode_key_op proto buf =
   let open Result.Syntax in
-  let* buf, linger = decode_protocol proto buf in
-  let* () = guard (String.length buf >= 1) `Partial in
-  let opkey = String.get_uint8 buf 0 in
+  let* poff, plen = decode_protocol proto buf in
+  let* () = guard (plen >= 1) `Partial in
+  let opkey = String.get_uint8 buf poff in
   let op, key = (opkey lsr 3, opkey land 0x07) in
   let+ op = int_to_operation op in
-  (op, key, String.sub buf 1 (String.length buf - 1), linger)
+  let buf, linger =
+    ( String.sub buf (poff + 1) (plen - 1),
+      String.sub buf (poff + plen) (String.length buf - poff - plen) )
+  in
+  (op, key, buf, linger)
 
 let operation = function
   | `Ack _ -> Ack
