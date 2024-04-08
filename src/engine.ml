@@ -1731,7 +1731,11 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         if String.length linger = 0 then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let r = multi (state.linger ^ buf) (state, [], [], None) in
+  (* ["" ^ buf] is not cheap :/ *)
+  let buf =
+    if String.length state.linger = 0 then buf else state.linger ^ buf
+  in
+  let r = multi buf (state, [], [], None) in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m -> m "%u outgoing packets" (List.length out));
