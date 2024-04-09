@@ -68,16 +68,16 @@ let write_to_fd fd data =
   let rec write_to_fd fd data off =
     if String.length data = off then Lwt_result.return ()
     else
-      Lwt.catch
-        (fun () ->
-          Lwt_unix.write_string fd data off (String.length data - off)
-          >>= fun written -> write_to_fd fd data (off + written))
-        (fun e ->
-          safe_close fd >>= fun () ->
-          Lwt_result.lift
-            (error_msgf "TCP write error %s" (Printexc.to_string e)))
+      Lwt_unix.write_string fd data off (String.length data - off)
+      >>= fun written -> write_to_fd fd data (off + written)
   in
-  write_to_fd fd data 0
+  Lwt.catch
+    (fun () ->
+       write_to_fd fd data 0)
+    (fun e ->
+       safe_close fd >>= fun () ->
+       Lwt_result.lift
+         (error_msgf "TCP write error %s" (Printexc.to_string e)))
 
 let write_multiple_to_fd fd bufs =
   Lwt_list.fold_left_s
