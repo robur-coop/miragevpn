@@ -1637,14 +1637,13 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         Error `Udp_ignore
     | _, r -> (r : (_, error) result :> (_, [ error | `Udp_ignore ]) result)
   in
-  let rec multi buf (state, (out : string list), payloads, act_opt) =
-    match Packet.decode_key_op state.session.protocol buf with
+  let rec multi buf off (state, (out : string list), payloads, act_opt) =
+    match Packet.decode_key_op state.session.protocol buf off with
     | (Error (`Unknown_operation _) | Error `Partial) as e -> ignore_udp_error e
     | Error `Tcp_partial ->
         (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
-        Ok ({ state with linger = buf }, out, payloads, act_opt)
-    | Ok (op, key, received, linger) ->
-        let state = { state with linger } in
+        Ok ({ state with linger = Octets.sub buf ~off ~len:(String.length buf - off) }, out, payloads, act_opt)
+    | Ok (op, key, received, linger_off) ->
         let* state, out, payloads, act_opt =
           match find_channel state key op with
           | None -> ignore_udp_error (Error (`No_channel key))
@@ -1725,11 +1724,12 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                           (state, out, payloads, act))))
         in
         (* Invariant: [linger] is always empty for UDP *)
-        if String.length linger = 0 then Ok (state, out, payloads, act_opt)
-        else multi linger (state, out, payloads, act_opt)
+        if String.length buf = linger_off then Ok (state, out, payloads, act_opt)
+        else multi buf linger_off (state, out, payloads, act_opt)
   in
   let buf = Octets.append state.linger buf in
-  let r = multi buf (state, [], [], None) in
+  let state = { state with linger = "" } in
+  let r = multi buf 0 (state, [], [], None) in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m -> m "%u outgoing packets" (List.length out));
@@ -1980,7 +1980,7 @@ let handle_static_client t s keys ev =
           let rec process_one acc linger =
             if String.length linger = 0 then Ok ({ t with linger = "" }, acc)
             else
-              match Packet.decode_protocol t.session.protocol linger with
+              match Packet.decode_protocol t.session.protocol linger 0 with
               | Error `Partial -> Error `Partial
               | Error `Tcp_partial ->
                   (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)

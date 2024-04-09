@@ -212,28 +212,28 @@ let to_be_signed_control op (header, sequence_number, payload) =
   Octets.blit_string payload 0 buf (off + 4) (String.length payload);
   Bytes.unsafe_to_string buf
 
-let decode_protocol proto buf =
+let decode_protocol proto buf off =
   let open Result.Syntax in
   match proto with
   | `Tcp ->
-      let* () = guard (String.length buf >= 2) `Tcp_partial in
-      let plen = Octets.get_uint16_be buf 0 in
-      let+ () = guard (String.length buf - 2 >= plen) `Tcp_partial in
-      (2, plen)
-  | `Udp -> Ok (0, String.length buf)
+      let* () = guard (String.length buf - off >= 2) `Tcp_partial in
+      let plen = Octets.get_uint16_be buf off in
+      let+ () = guard (String.length buf - off - 2 >= plen) `Tcp_partial in
+      (off + 2, plen)
+  | `Udp -> Ok (off, String.length buf - off)
 
-let decode_key_op proto buf =
+let decode_key_op proto buf off =
   let open Result.Syntax in
-  let* poff, plen = decode_protocol proto buf in
+  let* poff, plen = decode_protocol proto buf off in
   let* () = guard (plen >= 1) `Partial in
   let opkey = Octets.get_uint8 buf poff in
   let op, key = (opkey lsr 3, opkey land 0x07) in
   let+ op = int_to_operation op in
-  let buf, linger =
+  let buf', linger_off =
     ( Octets.sub buf ~off:(poff + 1) ~len:(plen - 1),
-      Octets.sub buf ~off:(poff + plen) ~len:(String.length buf - poff - plen) )
+      poff + plen )
   in
-  (op, key, buf, linger)
+  (op, key, buf', linger_off)
 
 let operation = function
   | `Ack _ -> Ack
