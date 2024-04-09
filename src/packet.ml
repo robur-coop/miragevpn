@@ -92,11 +92,11 @@ let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 let decode_header ~hmac_len buf =
   let open Result.Syntax in
   let* () = guard (String.length buf >= hdr_len hmac_len) `Partial in
-  let local_session = String.get_int64_be buf 0
-  and hmac = String.sub buf 8 hmac_len
-  and replay_id = String.get_int32_be buf (hmac_len + 8)
-  and timestamp = String.get_int32_be buf (hmac_len + 12)
-  and arr_len = String.get_uint8 buf (hmac_len + 16) in
+  let local_session = Octets.get_int64_be buf 0
+  and hmac = Octets.sub buf ~off:8 ~len:hmac_len
+  and replay_id = Octets.get_int32_be buf (hmac_len + 8)
+  and timestamp = Octets.get_int32_be buf (hmac_len + 12)
+  and arr_len = Octets.get_uint8 buf (hmac_len + 16) in
   let rs = if arr_len = 0 then 0 else 8 in
   let+ () =
     guard
@@ -104,12 +104,12 @@ let decode_header ~hmac_len buf =
       `Partial
   in
   let ack_sequence_number idx =
-    String.get_int32_be buf (hdr_len hmac_len + (id_len * idx))
+    Octets.get_int32_be buf (hdr_len hmac_len + (id_len * idx))
   in
   let ack_sequence_numbers = List.init arr_len ack_sequence_number in
   let remote_session =
     if arr_len > 0 then
-      Some (String.get_int64_be buf (hdr_len hmac_len + (id_len * arr_len)))
+      Some (Octets.get_int64_be buf (hdr_len hmac_len + (id_len * arr_len)))
     else None
   in
   ( {
@@ -125,22 +125,21 @@ let decode_header ~hmac_len buf =
 let encode_header hmac_len buf off hdr =
   let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
   let rsid = if id_arr_len = 0 then 0 else 8 in
-  Bytes.set_int64_be buf off hdr.local_session;
+  Octets.set_int64_be buf ~off hdr.local_session;
   (* hmac is set later using [set_hmac] *)
-  (* Bytes.blit_string hdr.hmac 0 buf (off + 8) hmac_len; *)
-  Bytes.set_int32_be buf (off + hmac_len + 8) hdr.replay_id;
-  Bytes.set_int32_be buf (off + hmac_len + 12) hdr.timestamp;
-  Bytes.set_uint8 buf
-    (off + hmac_len + 16)
+  (* Octets.blit_string hdr.hmac 0 buf (off + 8) hmac_len; *)
+  Octets.set_int32_be buf ~off:(off + hmac_len + 8) hdr.replay_id;
+  Octets.set_int32_be buf ~off:(off + hmac_len + 12) hdr.timestamp;
+  Octets.set_uint8 buf
+    ~off:(off + hmac_len + 16)
     (List.length hdr.ack_sequence_numbers);
   List.iteri
-    (fun i v -> Bytes.set_int32_be buf (off + hmac_len + 17 + (i * id_len)) v)
+    (fun i v -> Octets.set_int32_be buf ~off:(off + hmac_len + 17 + (i * id_len)) v)
     hdr.ack_sequence_numbers;
-  (match hdr.remote_session with
-  | None -> ()
-  | Some v ->
-      assert (rsid <> 0);
-      Bytes.set_int64_be buf (off + hdr_len hmac_len + id_arr_len) v);
+  (match hdr.ack_sequence_numbers, hdr.remote_session with
+   | [], _ | _, None -> ()
+   | _ :: _, Some v ->
+      Octets.set_int64_be buf ~off:(off + hdr_len hmac_len + id_arr_len) v);
   hdr_len hmac_len + rsid + id_arr_len
 
 let to_be_signed_header ?(more = 0) op header =
@@ -157,21 +156,21 @@ let to_be_signed_header ?(more = 0) op header =
     + rses + more
   in
   let buf = Bytes.create buflen in
-  Bytes.set_int32_be buf 0 header.replay_id;
-  Bytes.set_int32_be buf 4 header.timestamp;
-  Bytes.set_uint8 buf 8 op;
-  Bytes.set_int64_be buf 9 header.local_session;
-  Bytes.set_uint8 buf 17 (List.length header.ack_sequence_numbers);
+  Octets.set_int32_be buf ~off:0 header.replay_id;
+  Octets.set_int32_be buf ~off:4 header.timestamp;
+  Octets.set_uint8 buf ~off:8 op;
+  Octets.set_int64_be buf ~off:9 header.local_session;
+  Octets.set_uint8 buf ~off:17 (List.length header.ack_sequence_numbers);
   let rec enc_ack off = function
     | [] -> ()
     | hd :: tl ->
-        Bytes.set_int32_be buf off hd;
+        Octets.set_int32_be buf ~off hd;
         enc_ack (off + 4) tl
   in
   enc_ack 18 header.ack_sequence_numbers;
   (match header.remote_session with
   | None -> ()
-  | Some x -> Bytes.set_int64_be buf (18 + acks) x);
+  | Some x -> Octets.set_int64_be buf ~off:(18 + acks) x);
   (buf, 18 + acks + rses)
 
 let decode_ack ~hmac_len buf =
@@ -187,8 +186,8 @@ let decode_control ~hmac_len buf =
   let open Result.Syntax in
   let* header, off = decode_header ~hmac_len buf in
   let+ () = guard (String.length buf >= off + 4) `Partial in
-  let sequence_number = String.get_int32_be buf off
-  and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
+  let sequence_number = Octets.get_int32_be buf off
+  and payload = Octets.sub buf ~off:(off + 4) ~len:(String.length buf - off - 4) in
   (header, sequence_number, payload)
 
 let decode_ack_or_control op ~hmac_len buf =
@@ -203,21 +202,22 @@ let decode_ack_or_control op ~hmac_len buf =
 
 let encode_control hmac_len buf off (header, sequence_number, payload) =
   let len = encode_header hmac_len buf off header in
-  Bytes.set_int32_be buf (off + len) sequence_number;
-  Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
+  Octets.set_int32_be buf ~off:(off + len) sequence_number;
+  Octets.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
 let to_be_signed_control op (header, sequence_number, payload) =
   (* rly? not length!? *)
-  let buf, off = to_be_signed_header ~more:id_len op header in
-  Bytes.set_int32_be buf off sequence_number;
-  Bytes.unsafe_to_string buf ^ payload
+  let buf, off = to_be_signed_header ~more:(id_len + String.length payload) op header in
+  Octets.set_int32_be buf ~off sequence_number;
+  Octets.blit_string payload 0 buf (off + 4) (String.length payload);
+  Bytes.unsafe_to_string buf
 
 let decode_protocol proto buf =
   let open Result.Syntax in
   match proto with
   | `Tcp ->
       let* () = guard (String.length buf >= 2) `Tcp_partial in
-      let plen = String.get_uint16_be buf 0 in
+      let plen = Octets.get_uint16_be buf 0 in
       let+ () = guard (String.length buf - 2 >= plen) `Tcp_partial in
       (2, plen)
   | `Udp -> Ok (0, String.length buf)
@@ -226,12 +226,12 @@ let decode_key_op proto buf =
   let open Result.Syntax in
   let* poff, plen = decode_protocol proto buf in
   let* () = guard (plen >= 1) `Partial in
-  let opkey = String.get_uint8 buf poff in
+  let opkey = Octets.get_uint8 buf poff in
   let op, key = (opkey lsr 3, opkey land 0x07) in
   let+ op = int_to_operation op in
   let buf, linger =
-    ( String.sub buf (poff + 1) (plen - 1),
-      String.sub buf (poff + plen) (String.length buf - poff - plen) )
+    ( Octets.sub buf ~off:(poff + 1) ~len:(plen - 1),
+      Octets.sub buf ~off:(poff + plen) ~len:(String.length buf - poff - plen) )
   in
   (op, key, buf, linger)
 
@@ -248,19 +248,19 @@ let protocol_len = function `Tcp -> 2 | `Udp -> 0
 
 let set_protocol buf proto =
   match proto with
-  | `Tcp -> Bytes.set_uint16_be buf 0 (Bytes.length buf - 2)
+  | `Tcp -> Octets.set_uint16_be buf ~off:0 (Bytes.length buf - 2)
   | `Udp -> ()
 
 let set_hmac buf proto hmac =
   (* protocol header, op_key, local session *)
   let off = protocol_len proto + 1 + 8 in
-  Bytes.blit_string hmac 0 buf off (String.length hmac)
+  Octets.blit_string hmac 0 buf off (String.length hmac)
 
 let encode_protocol proto len =
   match proto with
   | `Tcp ->
       let buf = Bytes.create 2 in
-      Bytes.set_uint16_be buf 0 len;
+      Octets.set_uint16_be buf ~off:0 len;
       Bytes.unsafe_to_string buf
   | `Udp -> ""
 
@@ -282,7 +282,7 @@ let encode proto hmac_len
   let buf = Bytes.create len in
   set_protocol buf proto;
   let op = op_key (operation p) key in
-  Bytes.set_uint8 buf (protocol_len proto) op;
+  Octets.set_uint8 buf ~off:(protocol_len proto) op;
   let to_encode = protocol_len proto + 1 in
   let () =
     match p with
@@ -305,7 +305,7 @@ let encode proto hmac_len
 let encode_data buf proto key =
   set_protocol buf proto;
   let op = op_key Data_v1 key in
-  Bytes.set_uint8 buf (protocol_len proto) op
+  Octets.set_uint8 buf ~off:(protocol_len proto) op
 
 let to_be_signed key p =
   let op = op_key (operation p) key in
@@ -330,7 +330,7 @@ module Tls_crypt = struct
 
   let set_hmac buf proto hmac =
     let off = protocol_len proto + 1 + hmac_offset in
-    Bytes.blit_string hmac 0 buf off (String.length hmac)
+    Octets.blit_string hmac 0 buf off (String.length hmac)
 
   let clear_hdr_len =
     hdr_len hmac_len - 1 (* not including acked sequence numbers *)
@@ -346,22 +346,22 @@ module Tls_crypt = struct
       + rses_len + more
     in
     let buf = Bytes.create buflen in
-    Bytes.set_uint8 buf 0 op;
-    Bytes.set_int64_be buf 1 header.local_session;
-    Bytes.set_int32_be buf 9 header.replay_id;
-    Bytes.set_int32_be buf 13 header.timestamp;
-    Bytes.set_uint8 buf 17 (List.length header.ack_sequence_numbers);
-    let enc_ack idx ack = Bytes.set_int32_be buf (18 + (4 * idx)) ack in
+    Octets.set_uint8 buf ~off:0 op;
+    Octets.set_int64_be buf ~off:1 header.local_session;
+    Octets.set_int32_be buf ~off:9 header.replay_id;
+    Octets.set_int32_be buf ~off:13 header.timestamp;
+    Octets.set_uint8 buf ~off:17 (List.length header.ack_sequence_numbers);
+    let enc_ack idx ack = Octets.set_int32_be buf ~off:(18 + (4 * idx)) ack in
     List.iteri enc_ack header.ack_sequence_numbers;
-    Option.iter (Bytes.set_int64_be buf (18 + acks_len)) header.remote_session;
+    Option.iter (Octets.set_int64_be buf ~off:(18 + acks_len)) header.remote_session;
     (buf, 18 + acks_len + rses_len)
 
   let to_be_signed_control op (header, sequence_number, payload) =
     let buf, off =
       to_be_signed_header op header ~more:(id_len + String.length payload)
     in
-    Bytes.set_int32_be buf off sequence_number;
-    Bytes.blit_string payload 0 buf (off + id_len) (String.length payload);
+    Octets.set_int32_be buf ~off sequence_number;
+    Octets.blit_string payload 0 buf (off + id_len) (String.length payload);
     buf
 
   let to_be_signed key p =
@@ -376,29 +376,28 @@ module Tls_crypt = struct
   let encode_header buf off hdr =
     let acks_len = id_len * List.length hdr.ack_sequence_numbers in
     let rsid_len = if acks_len = 0 then 0 else 8 in
-    Bytes.set_int64_be buf off hdr.local_session;
+    Octets.set_int64_be buf ~off hdr.local_session;
     (* annoyingly the replay packet id and hmac are swapped from the tls-auth header *)
-    Bytes.set_int32_be buf (off + 8) hdr.replay_id;
-    Bytes.set_int32_be buf (off + 12) hdr.timestamp;
+    Octets.set_int32_be buf ~off:(off + 8) hdr.replay_id;
+    Octets.set_int32_be buf ~off:(off + 12) hdr.timestamp;
     (* hmac is set later using [Tls_crypt.set_hmac] *)
-    (* Bytes.blit hdr.hmac 0 buf (off + 16) hmac_len; *)
-    Bytes.set_uint8 buf
-      (off + 16 + hmac_len)
+    (* Octets.blit hdr.hmac 0 buf (off + 16) hmac_len; *)
+    Octets.set_uint8 buf
+      ~off:(off + 16 + hmac_len)
       (List.length hdr.ack_sequence_numbers);
     List.iteri
-      (fun i v -> Bytes.set_int32_be buf (off + hmac_len + 17 + (i * id_len)) v)
+      (fun i v -> Octets.set_int32_be buf ~off:(off + hmac_len + 17 + (i * id_len)) v)
       hdr.ack_sequence_numbers;
-    Option.iter
-      (fun v ->
-        assert (rsid_len <> 0);
-        Bytes.set_int64_be buf (off + clear_hdr_len + 1 + acks_len) v)
-      hdr.remote_session;
+    (match hdr.ack_sequence_numbers, hdr.remote_session with
+     | [], _ | _, None -> ()
+     | _::_, Some v ->
+       Octets.set_int64_be buf ~off:(off + clear_hdr_len + 1 + acks_len) v);
     clear_hdr_len + 1 + acks_len + rsid_len
 
   let encode_control buf off (header, sequence_number, payload) =
     let len = encode_header buf off header in
-    Bytes.set_int32_be buf (off + len) sequence_number;
-    Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
+    Octets.set_int32_be buf ~off:(off + len) sequence_number;
+    Octets.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
   let encode proto (key, (p : [< `Ack of header | `Control of _ ])) =
     let hdr = header p in
@@ -418,7 +417,7 @@ module Tls_crypt = struct
     in
     let buf = Bytes.create len in
     set_protocol buf proto;
-    Bytes.set_uint8 buf (protocol_len proto) (op_key (operation p) key);
+    Octets.set_uint8 buf ~off:(protocol_len proto) (op_key (operation p) key);
     let to_encode = protocol_len proto + 1 in
     let () =
       match p with
@@ -439,17 +438,17 @@ module Tls_crypt = struct
   let decode_decrypted_header clear_hdr buf =
     let open Result.Syntax in
     let* () = guard (String.length buf >= 1) `Partial in
-    let arr_len = String.get_uint8 buf 0 in
+    let arr_len = Octets.get_uint8 buf 0 in
     let rs_len = if arr_len = 0 then 0 else 8 in
     let+ () =
       guard (String.length buf >= 1 + (id_len * arr_len) + rs_len) `Partial
     in
     let ack_sequence_number idx =
-      String.get_int32_be buf (1 + (id_len * idx))
+      Octets.get_int32_be buf (1 + (id_len * idx))
     in
     let ack_sequence_numbers = List.init arr_len ack_sequence_number in
     let remote_session =
-      if rs_len > 0 then Some (String.get_int64_be buf (1 + (id_len * arr_len)))
+      if rs_len > 0 then Some (Octets.get_int64_be buf (1 + (id_len * arr_len)))
       else None
     in
     let { local_session; replay_id; timestamp; hmac } = clear_hdr in
@@ -478,8 +477,8 @@ module Tls_crypt = struct
     let open Result.Syntax in
     let* hdr, off = decode_decrypted_header clear_hdr buf in
     let+ () = guard (String.length buf >= off + 4) `Partial in
-    let sequence_number = String.get_int32_be buf off
-    and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
+    let sequence_number = Octets.get_int32_be buf off
+    and payload = Octets.sub buf ~off:(off + 4) ~len:(String.length buf - off - 4) in
     (hdr, sequence_number, payload)
 
   let decode_decrypted_ack_or_control clear_hdr op buf =
@@ -496,12 +495,12 @@ module Tls_crypt = struct
     let open Result.Syntax in
     (* header up till acked sequence numbers *)
     let+ () = guard (String.length buf >= clear_hdr_len) `Partial in
-    let local_session = String.get_int64_be buf 0
-    and replay_id = String.get_int32_be buf 8
-    and timestamp = String.get_int32_be buf 12
-    and hmac = String.sub buf 16 hmac_len in
+    let local_session = Octets.get_int64_be buf 0
+    and replay_id = Octets.get_int32_be buf 8
+    and timestamp = Octets.get_int32_be buf 12
+    and hmac = Octets.sub buf ~off:16 ~len:hmac_len in
     ( { local_session; replay_id; timestamp; hmac },
-      String.sub buf clear_hdr_len (String.length buf - clear_hdr_len) )
+      Octets.sub buf ~off:clear_hdr_len ~len:(String.length buf - clear_hdr_len) )
 end
 
 type ack = [ `Ack of header ]
@@ -562,15 +561,15 @@ let key_method = 0x02
 let write_string str =
   let len = String.length str in
   let buf = Bytes.create (len + 3) in
-  Bytes.blit_string str 0 buf 2 len;
-  Bytes.set_uint16_be buf 0 (succ len);
+  Octets.blit_string str 0 buf 2 len;
+  Octets.set_uint16_be buf ~off:0 (succ len);
   Bytes.unsafe_to_string buf
 
 let encode_tls_data t =
   let prefix = Bytes.create 5 in
   (* 4 zero bytes, and one byte key_method *)
-  Bytes.fill prefix 0 4 '\000';
-  Bytes.set_uint8 prefix 4 key_method;
+  Octets.fill prefix ~off:0 ~len:4 0;
+  Octets.set_uint8 prefix ~off:4 key_method;
   (* the options field, and also username and password are zero-terminated
      in addition to be length-prefixed... *)
   let opt = write_string t.options
@@ -593,7 +592,7 @@ let encode_tls_data t =
      password string
      peer_info
   *)
-  String.concat ""
+  Octets.appends
     ([ Bytes.unsafe_to_string prefix; t.pre_master; t.random1; t.random2; opt ]
     @ u_p @ peer_info)
 
@@ -602,8 +601,8 @@ let maybe_string prefix buf off = function
   | x ->
       let actual_len = pred x in
       (* null-terminated string *)
-      let data = String.sub buf off actual_len in
-      if String.get_uint8 buf (off + actual_len) = 0x00 then Ok data
+      let data = Octets.sub buf ~off ~len:actual_len in
+      if Octets.get_uint8 buf (off + actual_len) = 0x00 then Ok data
       else Error (`Malformed (prefix ^ " is not null-terminated"))
 
 let decode_tls_data ?(with_premaster = false) buf =
@@ -620,19 +619,19 @@ let decode_tls_data ?(with_premaster = false) buf =
   let* () = guard (String.length buf >= opt_start) `Partial in
   let* () =
     guard
-      (String.get_int32_be buf 0 = 0l)
+      (Octets.get_int32_be buf 0 = 0l)
       (`Malformed "tls data must start with 32 bits set to 0")
   in
   let* () =
     guard
-      (String.get_uint8 buf 4 = key_method)
+      (Octets.get_uint8 buf 4 = key_method)
       (`Malformed "tls data key_method wrong")
   in
-  let pre_master = String.sub buf pre_master_start pre_master_len in
+  let pre_master = Octets.sub buf ~off:pre_master_start ~len:pre_master_len in
   let random_start = pre_master_start + pre_master_len in
-  let random1 = String.sub buf random_start random_len
-  and random2 = String.sub buf (random_start + random_len) random_len in
-  let opt_len = String.get_uint16_be buf (opt_start - 2) in
+  let random1 = Octets.sub buf ~off:random_start ~len:random_len
+  and random2 = Octets.sub buf ~off:(random_start + random_len) ~len:random_len in
+  let opt_len = Octets.get_uint16_be buf (opt_start - 2) in
   let* () = guard (String.length buf >= opt_start + opt_len) `Partial in
   let* options = maybe_string "TLS data options" buf opt_start opt_len in
   let+ user_pass, peer_info =
@@ -643,11 +642,11 @@ let decode_tls_data ?(with_premaster = false) buf =
       let* () =
         guard (String.length buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial
       in
-      let u_len = String.get_uint16_be buf (opt_start + opt_len) in
+      let u_len = Octets.get_uint16_be buf (opt_start + opt_len) in
       let* () = guard (String.length buf >= u_start + 4 + u_len) `Partial in
       let* u = maybe_string "username" buf (u_start + 2) u_len in
       let p_start = u_start + 2 + u_len in
-      let p_len = String.get_uint16_be buf p_start in
+      let p_len = Octets.get_uint16_be buf p_start in
       let* () = guard (String.length buf >= p_start + 2 + p_len) `Partial in
       let* p = maybe_string "password" buf (p_start + 2) p_len in
       let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
@@ -657,17 +656,17 @@ let decode_tls_data ?(with_premaster = false) buf =
       let+ peer_info =
         if String.length buf <= peer_info_start + 2 then Ok None
         else
-          let len = String.get_uint16_be buf peer_info_start in
+          let len = Octets.get_uint16_be buf peer_info_start in
           let* () =
             guard (String.length buf - peer_info_start - 2 >= len) `Partial
           in
-          let data = String.sub buf (peer_info_start + 2) len in
+          let data = Octets.sub buf ~off:(peer_info_start + 2) ~len in
           if String.length buf - peer_info_start - 2 > len then
             Log.warn (fun m ->
                 m "slack at end of tls_data@.%a" (Ohex.pp_hexdump ())
-                  (String.sub buf
-                     (peer_info_start + 2 + len)
-                     (String.length buf - peer_info_start - 2 - len)));
+                  (Octets.sub buf
+                     ~off:(peer_info_start + 2 + len)
+                     ~len:(String.length buf - peer_info_start - 2 - len)));
           Ok (if len = 0 then None else Some data)
       in
       (user_pass, Option.map (String.split_on_char '\n') peer_info)
@@ -691,12 +690,12 @@ let decode_early_negotiation_tlvs data =
     if String.length data = off then Ok acc
     else
       let* () = guard (String.length data - off >= 4) `Partial in
-      let typ = String.get_uint16_be data off
-      and len = String.get_uint16_be data (off + 2) in
+      let typ = Octets.get_uint16_be data off
+      and len = Octets.get_uint16_be data (off + 2) in
       let* () = guard (String.length data - off >= 4 + len) `Partial in
       if typ = 0x0001 (* EARLY_NEG_FLAGS *) then
         let* () = guard (len = 2) (`Malformed "Bad EARLY_NEG_FLAGS") in
-        let flags = String.get_uint16_be data (off + 4) in
+        let flags = Octets.get_uint16_be data (off + 4) in
         go (acc || flags = 0x0001 (* RESEND_WKC *)) data (off + 6)
       else (* skip *)
         go acc data (off + 4 + len)

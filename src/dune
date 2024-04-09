@@ -2,6 +2,7 @@
  (name miragevpn)
  (public_name miragevpn)
  (libraries
+  octets
   fmt
   logs
   ptime

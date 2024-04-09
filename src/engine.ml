@@ -122,14 +122,14 @@ let encrypt_and_out protocol { my; _ } key
   let hmac =
     Digestif.SHA256.(to_raw_string (hmaci_bytes ~key:my_hmac feeder))
   in
-  let iv = String.sub hmac 0 16 in
+  let iv = Octets.sub hmac ~off:0 ~len:16 in
   let ctr = Mirage_crypto.Cipher_block.AES.CTR.ctr_of_octets iv in
   Packet.Tls_crypt.set_hmac buf protocol hmac;
   let encrypted =
     Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
-      (Bytes.sub_string buf enc_off enc_len)
+      (Octets.sub_string buf ~off:enc_off ~len:enc_len)
   in
-  Bytes.blit_string encrypted 0 buf enc_off enc_len;
+  Octets.blit_string encrypted 0 buf enc_off enc_len;
   Bytes.unsafe_to_string buf
 
 let wrap_and_out protocol control_crypto key p =
@@ -150,7 +150,7 @@ let tls_auth config =
         | Some `Incoming -> (hmac2, hmac1)
         | Some `Outgoing -> (hmac1, hmac2)
       in
-      let s cs = String.sub cs 0 hmac_len in
+      let s cs = Octets.sub cs ~off:0 ~len:hmac_len in
       Ok { hmac_algorithm; my_hmac = s a; their_hmac = s b }
 
 let secret config =
@@ -159,7 +159,7 @@ let secret config =
   | Some (dir, key1, hmac1, key2, hmac2) -> (
       let module H = (val Digestif.module_of_hash' (Config.get Auth config)) in
       let hmac_len = H.digest_size in
-      let hm cs = String.sub cs 0 hmac_len and cipher cs = String.sub cs 0 32 in
+      let hm cs = Octets.sub cs ~off:0 ~len:hmac_len and cipher cs = Octets.sub cs ~off:0 ~len:32 in
       match dir with
       | None -> Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
       | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)
@@ -361,12 +361,12 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
       (Option.map
          (fun (c, s) ->
            let buf = Bytes.create 16 in
-           Bytes.set_int64_be buf 0 c;
-           Bytes.set_int64_be buf 8 s;
+           Octets.set_int64_be buf ~off:0 c;
+           Octets.set_int64_be buf ~off:8 s;
            Bytes.unsafe_to_string buf)
          sids)
   in
-  let seed = String.concat "" [ client_random; server_random; sids ] in
+  let seed = Octets.appends [ client_random; server_random; sids ] in
   Tls.Handshake_crypto.pseudo_random_function `TLS_1_0
     `RSA_WITH_AES_256_GCM_SHA384 (* cipher, does not matter for TLS 1.0 *) len
     secret label seed
@@ -454,7 +454,7 @@ let maybe_kex_client rng config tls =
       let ciphers =
         String.concat ":" (List.map Config.aead_cipher_to_string ciphers)
       in
-      Some (maybe_iv_ncp_2 @ [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers ])
+      Some (maybe_iv_ncp_2 @ [ "IV_PLAT=mirage"; Octets.append "IV_CIPHERS=" ciphers ])
     in
     let peer_info =
       let iv_proto =
@@ -464,7 +464,7 @@ let maybe_kex_client rng config tls =
       in
       Option.map
         (fun pi ->
-          ("IV_PROTO=" ^ string_of_int (Packet.Iv_proto.byte iv_proto)) :: pi)
+          (Octets.append "IV_PROTO=" (string_of_int (Packet.Iv_proto.byte iv_proto))) :: pi)
         peer_info
     in
     let td =
@@ -485,10 +485,10 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
   in
   let maybe_swap (a, b, c, d) = if server then (c, d, a, b) else (a, b, c, d) in
   let extract klen hlen =
-    ( String.sub keys 0 klen,
-      String.sub keys 64 hlen,
-      String.sub keys 128 klen,
-      String.sub keys 192 hlen )
+    ( Octets.sub keys ~off:0 ~len:klen,
+      Octets.sub keys ~off:64 ~len:hlen,
+      Octets.sub keys ~off:128 ~len:klen,
+      Octets.sub keys ~off:192 ~len:hlen )
   in
   let keys =
     match cipher with
@@ -591,7 +591,7 @@ let push_request tls =
 
 let push_reply tls data =
   (* a trailing 0 byte.. *)
-  let repl = String.concat "" [ Packet.push_reply; data; "\x00" ] in
+  let repl = Octets.appends [ Packet.push_reply; data; "\x00" ] in
   Option.to_result
     ~none:(`Msg "Tls.send application data failed for push request")
     (Tls.Engine.send_application_data tls [ repl ])
@@ -601,17 +601,17 @@ let maybe_push_reply config = function
       if String.length data = 0 then
         Error (`Msg "push request sent: empty TLS reply")
       else
-        let str = String.sub data 0 (String.length data - 1) in
+        let str = Octets.sub data ~off:0 ~len:(String.length data - 1) in
         Log.info (fun m -> m "push request sent, received TLS payload %S" str);
         let p_r = "PUSH_REPLY" in
         let p_r_len = String.length p_r in
         if String.starts_with str ~prefix:p_r then
-          let opts = String.sub str p_r_len (String.length str - p_r_len) in
+          let opts = Octets.sub str ~off:p_r_len ~len:(String.length str - p_r_len) in
           Config.merge_push_reply config opts
         else if String.starts_with str ~prefix:"AUTH_FAILED" then
           let msg =
-            "Authentication failed: "
-            ^ (List.tl (String.split_on_char ',' str) |> String.concat ",")
+            Octets.append "Authentication failed: "
+              (List.tl (String.split_on_char ',' str) |> String.concat ",")
           in
           Error (`Msg msg)
         else
@@ -869,20 +869,19 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
           | `Seconds n -> n
         and restart =
           match Config.get Ping_timeout config with
-          | `Restart n -> "ping-restart " ^ string_of_int (n / 2)
-          | `Exit n -> "ping-exit " ^ string_of_int (n / 2)
+          | `Restart n -> Octets.append "ping-restart " (string_of_int (n / 2))
+          | `Exit n -> Octets.append "ping-exit " (string_of_int (n / 2))
         in
         (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
         let reply_things =
           [
             "";
             (* need an initial , after PUSH_REPLY *)
-            "route-gateway " ^ Ipaddr.V4.to_string server_ip;
+            Octets.append "route-gateway " (Ipaddr.V4.to_string server_ip);
             "topology subnet";
-            "ping " ^ string_of_int ping;
+            Octets.append "ping " (string_of_int ping);
             restart;
-            "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
-            ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
+            Octets.appends [ "ifconfig " ; Ipaddr.V4.to_string ip ; " " ; Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr) ];
           ]
         in
         let reply = String.concat "," reply_things in
@@ -1033,9 +1032,9 @@ let pp_error ppf = function
 
 let unpad block_size cs off =
   let l = String.length cs - off in
-  let amount = String.get_uint8 cs (off + pred l) in
+  let amount = Octets.get_uint8 cs (off + pred l) in
   let len = l - amount in
-  if len >= 0 && amount <= block_size then Ok (String.sub cs off len)
+  if len >= 0 && amount <= block_size then Ok (Octets.sub cs ~off ~len)
   else Error (`Msg "bad padding")
 
 let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
@@ -1043,7 +1042,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let set_replay_id dest off = Bytes.set_int32_be dest off ctx.my_replay_id in
+  let set_replay_id dest off = Octets.set_int32_be dest ~off ctx.my_replay_id in
   let aead (type key)
       (authenticate_encrypt_tag :
         key:key -> nonce:string -> ?adata:string -> string -> string * string)
@@ -1051,17 +1050,17 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
     let nonce, replay_id =
       let b = Bytes.create (Packet.id_len + String.length my_implicit_iv) in
       set_replay_id b 0;
-      Bytes.blit_string my_implicit_iv 0 b 4 (String.length my_implicit_iv);
+      Octets.blit_string my_implicit_iv 0 b 4 (String.length my_implicit_iv);
       (* We reuse the replay id part of the nonce to avoid another allocation *)
       let b = Bytes.unsafe_to_string b in
-      (b, String.sub b 0 4)
+      (b, Octets.sub b ~off:0 ~len:4)
     in
     let data =
       if compress then (
         let b = Bytes.create (Bool.to_int compress + String.length data) in
         (* 0xFA is "no compression" *)
-        Bytes.set_uint8 b 0 0xfa;
-        Bytes.blit_string data 0 b 1 (String.length data);
+        Octets.set_uint8 b ~off:0 0xfa;
+        Octets.blit_string data 0 b 1 (String.length data);
         Bytes.unsafe_to_string b)
       else data
     in
@@ -1095,14 +1094,14 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
           in
           let b = Bytes.create (unpad_len + pad_len) in
           set_replay_id b 0;
-          Option.iter (fun ts -> Bytes.set_int32_be b 4 ts) add_timestamp;
+          Option.iter (fun ts -> Octets.set_int32_be b ~off:4 ts) add_timestamp;
           if compress then
             (* 0xFA is "no compression" *)
-            Bytes.set_uint8 b hdr_len 0xfa;
-          Bytes.blit_string data 0 b
+            Octets.set_uint8 b ~off:hdr_len 0xfa;
+          Octets.blit_string data 0 b
             (hdr_len + Bool.to_int compress)
             (String.length data);
-          Bytes.fill b unpad_len pad_len (Char.unsafe_chr pad_len);
+          Octets.fill b ~off:unpad_len ~len:pad_len pad_len;
           Bytes.unsafe_to_string b
         in
         let iv = rng Cipher_block.AES.CBC.block_size in
@@ -1288,17 +1287,17 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         *)
         let open Mirage_crypto in
         let module H = (val Digestif.module_of_hash' hmac_algorithm) in
-        let hmac, off = (String.sub data 0 H.digest_size, H.digest_size) in
+        let hmac, off = (Octets.sub data ~off:0 ~len:H.digest_size, H.digest_size) in
         let computed_hmac =
           H.(to_raw_string (hmac_string ~off ~key:their_hmac data))
         in
         let* () = guard (String.equal hmac computed_hmac) (err computed_hmac) in
         let iv, off =
-          ( String.sub data off Cipher_block.AES.CBC.block_size,
+          ( Octets.sub data ~off ~len:Cipher_block.AES.CBC.block_size,
             off + Cipher_block.AES.CBC.block_size )
         in
         (* TODO: decrypt could take an offset and length to avoid copying *)
-        let data = String.sub data off (String.length data - off) in
+        let data = Octets.sub data ~off ~len:(String.length data - off) in
         let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
@@ -1309,7 +1308,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
-            m "received replay packet id is %lu" (String.get_int32_le dec 0));
+            m "received replay packet id is %lu" (Octets.get_int32_be dec 0));
         (* TODO validate ts if provided (avoid replay) *)
         unpad Cipher_block.AES.CBC.block_size dec hdr_len
     | AES_GCM { their_key; their_implicit_iv; _ } ->
@@ -1320,12 +1319,12 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
         let replay_id, tag, payload =
-          ( String.sub data 0 Packet.id_len,
-            String.sub data Packet.id_len tag_len,
-            String.sub data (Packet.id_len + tag_len)
-              (String.length data - Packet.id_len - tag_len) )
+          ( Octets.sub data ~off:0 ~len:Packet.id_len,
+            Octets.sub data ~off:Packet.id_len ~len:tag_len,
+            Octets.sub data ~off:(Packet.id_len + tag_len)
+              ~len:(String.length data - Packet.id_len - tag_len) )
         in
-        let nonce = replay_id ^ their_implicit_iv in
+        let nonce = Octets.append replay_id their_implicit_iv in
         let plain =
           Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
             ~key:their_key ~nonce ~adata:replay_id ~tag payload
@@ -1333,7 +1332,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
             m "received replay packet id is %lu"
-              (String.get_int32_be replay_id 0));
+              (Octets.get_int32_be replay_id 0));
         Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
     | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.Chacha20.tag_size in
@@ -1343,12 +1342,12 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
         let replay_id, tag, payload =
-          ( String.sub data 0 Packet.id_len,
-            String.sub data Packet.id_len tag_len,
-            String.sub data (Packet.id_len + tag_len)
-              (String.length data - Packet.id_len - tag_len) )
+          ( Octets.sub data ~off:0 ~len:Packet.id_len,
+            Octets.sub data ~off:Packet.id_len ~len:tag_len,
+            Octets.sub data ~off:(Packet.id_len + tag_len)
+              ~len:(String.length data - Packet.id_len - tag_len) )
         in
-        let nonce = replay_id ^ their_implicit_iv in
+        let nonce = Octets.append replay_id their_implicit_iv in
         let plain =
           Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
             ~adata:replay_id ~tag payload
@@ -1356,7 +1355,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
             m "received replay packet id is %lu"
-              (String.get_int32_be replay_id 0));
+              (Octets.get_int32_be replay_id 0));
         Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
   in
   let+ data' =
@@ -1367,18 +1366,16 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
           (String.length data >= 1)
           (`Msg "payload too short, need compression byte")
       in
-      let compress_opt, data =
-        (String.get_uint8 data 0, String.sub data 1 (String.length data - 1))
-      in
+      let compress_opt = Octets.get_uint8 data 0 in
       match compress_opt with
-      | 0xFA -> Ok data
+      | 0xFA -> Ok (Octets.sub data ~off:1 ~len:(String.length data - 1))
       | 0x66 ->
           let bigstring =
             Bigarray.Array1.create Bigarray.char Bigarray.c_layout
-              (String.length data)
+              (String.length data - 1)
           in
-          for i = 0 to String.length data - 1 do
-            Bigarray.Array1.set bigstring i (String.get data i)
+          for i = 1 to String.length data - 1 do
+            Bigarray.Array1.set bigstring (pred i) (Octets.get data i)
           done;
           let+ lz = Lzo.uncompress_with_buffer bigstring in
           Log.debug (fun m -> m "decompressed:@.%a" (Ohex.pp_hexdump ()) lz);
@@ -1408,15 +1405,15 @@ let split_control ~acks mtu outs =
                       else
                         let l = min mtu (String.length data) in
                         let data, rest =
-                          ( String.sub data 0 l,
-                            String.sub data l (String.length data - l) )
+                          ( Octets.sub data ~off:0 ~len:l,
+                            Octets.sub data ~off:l ~len:(String.length data - l) )
                         in
                         datas (data :: acc) rest
                     in
                     let data1, rdata =
-                      ( String.sub data 0 first_mtu,
-                        String.sub data first_mtu
-                          (String.length data - first_mtu) )
+                      ( Octets.sub data ~off:0 ~len:first_mtu,
+                        Octets.sub data ~off:first_mtu
+                          ~len:(String.length data - first_mtu) )
                     in
                     datas [ data1 ] rdata
                   else [ data ]
@@ -1488,7 +1485,7 @@ let maybe_add_wkc now mtu session tls_crypt needs_wkc key transport outs =
       let acks = bytes_of_acks transport in
       let l = min (mtu - acks - String.length wkc) (String.length data) in
       let data, data' =
-        (String.sub data 0 l, String.sub data l (String.length data - l))
+        (Octets.sub data ~off:0 ~len:l, Octets.sub data ~off:l ~len:(String.length data - l))
       in
       let rest =
         if String.length data' = 0 then rest else (`Control, data') :: rest
@@ -1595,7 +1592,7 @@ let validate_control state control_crypto op key payload =
         Packet.Tls_crypt.decode_cleartext_header payload
       in
       let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
-      let iv = String.sub cleartext.hmac 0 16 in
+      let iv = Octets.sub cleartext.hmac ~off:0 ~len:16 in
       let ctr = Aes_ctr.ctr_of_octets iv in
       let decrypted =
         let key = Tls_crypt.Key.cipher_key their in
@@ -1731,10 +1728,7 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
         if String.length linger = 0 then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  (* ["" ^ buf] is not cheap :/ *)
-  let buf =
-    if String.length state.linger = 0 then buf else state.linger ^ buf
-  in
+  let buf = Octets.append state.linger buf in
   let r = multi buf (state, [], [], None) in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
@@ -1993,9 +1987,9 @@ let handle_static_client t s keys ev =
                   Ok ({ t with linger }, acc)
               | Ok (poff, plen) ->
                   let cs, linger =
-                    ( String.sub linger poff plen,
-                      String.sub linger (poff + plen)
-                        (String.length linger - poff - plen) )
+                    ( Octets.sub linger ~off:poff ~len:plen,
+                      Octets.sub linger ~off:(poff + plen)
+                        ~len:(String.length linger - poff - plen) )
                   in
                   let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
                   let* d =
@@ -2005,7 +1999,7 @@ let handle_static_client t s keys ev =
                   let acc = Option.fold d ~none:acc ~some:(fun p -> p :: acc) in
                   process_one acc linger
           in
-          let+ t, payloads = process_one [] (t.linger ^ cs) in
+          let+ t, payloads = process_one [] (Octets.append t.linger cs) in
           (t, [], List.rev payloads, None)
       | s, ev ->
           Result.error_msgf

@@ -434,7 +434,7 @@ module Conf_map = struct
     let pp_cipher ppf v = Fmt.string ppf (cipher_to_string (v :> cipher)) in
     let pp_fingerprint ppf fp =
       for i = 0 to String.length fp - 1 do
-        let a = String.make 1 (String.get fp i) in
+        let a = String.make 1 (Octets.get fp i) in
         Fmt.pf ppf "%a" Ohex.pp a;
         if i < String.length fp - 1 then Fmt.pf ppf ":"
       done
