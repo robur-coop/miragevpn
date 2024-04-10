@@ -4,7 +4,7 @@ module Config : sig
   type flag = unit
 
   type 'a k =
-    | Auth : Mirage_crypto.Hash.hash k
+    | Auth : [< Digestif.hash' > `MD5 `SHA1 `SHA224 `SHA256 `SHA384 `SHA512 ] k
     | Auth_nocache : flag k
       (* Erase user-provided credentials ([Askpass] and [Auth_user_pass]) from
          program memory after their user.
@@ -86,7 +86,7 @@ module Config : sig
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
-    | Peer_fingerprint : Cstruct.t list k
+    | Peer_fingerprint : string list k
     | Persist_key : flag k
     | Persist_tun : flag k
     | Ping_interval : [ `Not_configured | `Seconds of int ] k
@@ -149,19 +149,11 @@ module Config : sig
     | Route_nopull : flag k
     | Script_security : int k
     | Secret
-        : ([ `Incoming | `Outgoing ] option
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t)
+        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
           k
     | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth
-        : ([ `Incoming | `Outgoing ] option
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t)
+        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
           k
     | Tls_cert : X509.Certificate.t k
     | Tls_mode : [ `Client | `Server ] k
@@ -271,7 +263,7 @@ type event =
   | `Connected
   | `Connection_failed
   | `Tick
-  | `Data of Cstruct.t ]
+  | `Data of string ]
 
 val pp_event : event Fmt.t
 
@@ -288,7 +280,7 @@ val client :
   Config.t ->
   (unit -> int64) ->
   (unit -> Ptime.t) ->
-  (int -> Cstruct.t) ->
+  (int -> string) ->
   (t * initial_action, [> `Msg of string ]) result
 (** [client config ts now rng] constructs a [t], returns the remote to
     connect to, an initial buffer to send to the remote. It returns an error
@@ -298,7 +290,7 @@ val server :
   Config.t ->
   (unit -> int64) ->
   (unit -> Ptime.t) ->
-  (int -> Cstruct.t) ->
+  (int -> string) ->
   ( server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int,
     [> `Msg of string ] )
   result
@@ -316,14 +308,14 @@ val handle :
   t ->
   ?is_not_taken:(Ipaddr.V4.t -> bool) ->
   event ->
-  (t * Cstruct.t list * Cstruct.t list * action option, error) result
+  (t * string list * string list * action option, error) result
 (** [handle t ~is_not_taken event] handles the [event] with the state [t]. If
     [t] is a server session, [~is_not_taken] must be provided to avoid IP
     address collisions. The return value is the new state, a list of packets
     to transmit to the other peer, a list of payloads to foward to the
     application, and maybe an action to handle. *)
 
-val outgoing : t -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
+val outgoing : t -> string -> (t * string, [ `Not_ready ]) result
 (** [outgoing t data] prepares [data] to be sent over the OpenVPN connection.
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
 
