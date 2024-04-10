@@ -123,10 +123,10 @@ let encrypt_and_out protocol { my; _ } key
     Digestif.SHA256.(to_raw_string (hmaci_bytes ~key:my_hmac feeder))
   in
   let iv = Octets.sub hmac ~off:0 ~len:16 in
-  let ctr = Mirage_crypto.Cipher_block.AES.CTR.ctr_of_octets iv in
+  let ctr = Mirage_crypto.AES.CTR.ctr_of_octets iv in
   Packet.Tls_crypt.set_hmac buf protocol hmac;
   let encrypted =
-    Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
+    Mirage_crypto.AES.CTR.encrypt ~key:my_key ~ctr
       (Octets.sub_string buf ~off:enc_off ~len:enc_len)
   in
   Octets.blit_string encrypted 0 buf enc_off enc_len;
@@ -277,10 +277,10 @@ let client ?pkcs12_password config ts now rng =
           let keys =
             AES_CBC
               {
-                my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+                my_key = Mirage_crypto.AES.CBC.of_secret my_key;
                 my_hmac;
                 their_key =
-                  Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+                  Mirage_crypto.AES.CBC.of_secret their_key;
                 their_hmac;
               }
           in
@@ -500,9 +500,9 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
         in
         AES_CBC
           {
-            my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+            my_key = Mirage_crypto.AES.CBC.of_secret my_key;
             my_hmac;
-            their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+            their_key = Mirage_crypto.AES.CBC.of_secret their_key;
             their_hmac;
           }
     | `AES_128_GCM ->
@@ -511,9 +511,9 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
         in
         AES_GCM
           {
-            my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+            my_key = Mirage_crypto.AES.GCM.of_secret my_key;
             my_implicit_iv;
-            their_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+            their_key = Mirage_crypto.AES.GCM.of_secret their_key;
             their_implicit_iv;
           }
     | `AES_256_GCM ->
@@ -522,9 +522,9 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
         in
         AES_GCM
           {
-            my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+            my_key = Mirage_crypto.AES.GCM.of_secret my_key;
             my_implicit_iv;
-            their_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+            their_key = Mirage_crypto.AES.GCM.of_secret their_key;
             their_implicit_iv;
           }
     | `CHACHA20_POLY1305 ->
@@ -1084,13 +1084,12 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
            - hmac over the entire encrypted payload
              - timestamp only used in static key mode (32bit, seconds since unix epoch)
         *)
-        let open Mirage_crypto in
         let hdr_len = 4 + if Option.is_some add_timestamp then 4 else 0 in
         let data =
           let unpad_len = hdr_len + Bool.to_int compress + String.length data in
           let pad_len =
-            let l = unpad_len mod Cipher_block.AES.CBC.block_size in
-            Cipher_block.AES.CBC.block_size - l
+            let l = unpad_len mod Mirage_crypto.AES.CBC.block_size in
+            Mirage_crypto.AES.CBC.block_size - l
           in
           let b = Bytes.create (unpad_len + pad_len) in
           set_replay_id b 0;
@@ -1104,8 +1103,8 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
           Octets.fill b ~off:unpad_len ~len:pad_len pad_len;
           Bytes.unsafe_to_string b
         in
-        let iv = rng Cipher_block.AES.CBC.block_size in
-        let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
+        let iv = rng Mirage_crypto.AES.CBC.block_size in
+        let enc = Mirage_crypto.AES.CBC.encrypt ~key:my_key ~iv data in
         let hmac =
           let module H = (val Digestif.module_of_hash' hmac_algorithm) in
           H.(to_raw_string (hmacv_string ~key:my_hmac [ iv; enc ]))
@@ -1118,7 +1117,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
             Bytes.unsafe_of_string enc;
           ]
     | AES_GCM { my_key; my_implicit_iv; _ } ->
-        aead Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag my_key
+        aead Mirage_crypto.AES.GCM.authenticate_encrypt_tag my_key
           my_implicit_iv
     | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
         aead Mirage_crypto.Chacha20.authenticate_encrypt_tag my_key
@@ -1285,7 +1284,6 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
            note that the timestamp is only used in static key mode, when
            ~add_timestamp is provided and true.
         *)
-        let open Mirage_crypto in
         let module H = (val Digestif.module_of_hash' hmac_algorithm) in
         let hmac, off = (Octets.sub data ~off:0 ~len:H.digest_size, H.digest_size) in
         let computed_hmac =
@@ -1293,12 +1291,12 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         in
         let* () = guard (String.equal hmac computed_hmac) (err computed_hmac) in
         let iv, off =
-          ( Octets.sub data ~off ~len:Cipher_block.AES.CBC.block_size,
-            off + Cipher_block.AES.CBC.block_size )
+          ( Octets.sub data ~off ~len:Mirage_crypto.AES.CBC.block_size,
+            off + Mirage_crypto.AES.CBC.block_size )
         in
         (* TODO: decrypt could take an offset and length to avoid copying *)
         let data = Octets.sub data ~off ~len:(String.length data - off) in
-        let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
+        let dec = Mirage_crypto.AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
         let* () =
@@ -1310,9 +1308,9 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         Log.debug (fun m ->
             m "received replay packet id is %lu" (Octets.get_int32_be dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad Cipher_block.AES.CBC.block_size dec hdr_len
+        unpad Mirage_crypto.AES.CBC.block_size dec hdr_len
     | AES_GCM { their_key; their_implicit_iv; _ } ->
-        let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+        let tag_len = Mirage_crypto.AES.GCM.tag_size in
         let* () =
           guard
             (String.length data >= Packet.id_len + tag_len)
@@ -1326,7 +1324,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         in
         let nonce = Octets.append replay_id their_implicit_iv in
         let plain =
-          Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
+          Mirage_crypto.AES.GCM.authenticate_decrypt_tag
             ~key:their_key ~nonce ~adata:replay_id ~tag payload
         in
         (* TODO validate replay packet id and ordering *)
@@ -1591,12 +1589,11 @@ let validate_control state control_crypto op key payload =
       let* cleartext, encrypted =
         Packet.Tls_crypt.decode_cleartext_header payload
       in
-      let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
       let iv = Octets.sub cleartext.hmac ~off:0 ~len:16 in
-      let ctr = Aes_ctr.ctr_of_octets iv in
+      let ctr = Mirage_crypto.AES.CTR.ctr_of_octets iv in
       let decrypted =
         let key = Tls_crypt.Key.cipher_key their in
-        Aes_ctr.decrypt ~key ~ctr encrypted
+        Mirage_crypto.AES.CTR.decrypt ~key ~ctr encrypted
       in
       let* p =
         Packet.Tls_crypt.decode_decrypted_ack_or_control cleartext op decrypted

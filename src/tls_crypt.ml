@@ -78,7 +78,7 @@ module Key : sig
   val of_cstruct : string -> (t, [> `Msg of string ]) result
   val unsafe_to_cstruct : t -> string
   val to_string : t -> string
-  val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
+  val cipher_key : t -> Mirage_crypto.AES.CTR.key
   val hmac : t -> string
   val equal : t -> t -> bool
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
@@ -87,7 +87,7 @@ end = struct
   type t = string (* cipher (64 bytes) + hmac (64 bytes) *)
 
   let len_of_secret_aes_ctr_key =
-    Array.to_list Mirage_crypto.Cipher_block.AES.CTR.key_sizes
+    Array.to_list Mirage_crypto.AES.CTR.key_sizes
     |> List.filter (( > ) 128) (* ∀x. 128 > x <=> ∀x. x <= 128 *)
     |> List.fold_left max 0
 
@@ -103,7 +103,7 @@ end = struct
   let to_string t = t
 
   let cipher_key cs =
-    Mirage_crypto.Cipher_block.AES.CTR.of_secret
+    Mirage_crypto.AES.CTR.of_secret
       (Octets.sub cs ~off:0 ~len:len_of_secret_aes_ctr_key)
 
   let hmac cs = Octets.sub cs ~off:64 ~len:Digestif.SHA256.digest_size
@@ -300,25 +300,25 @@ end = struct
         to_raw_string
           (hmacv_string ~key:(Key.hmac server_key) [ net_len; a; b; metadata ]))
     in
-    let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
-    let ctr = AES_CTR.ctr_of_octets tag in
+    let open Mirage_crypto in
+    let ctr = AES.CTR.ctr_of_octets tag in
     let encrypted =
-      AES_CTR.encrypt ~key:(Key.cipher_key server_key) ~ctr a_b_meta
+      AES.CTR.encrypt ~key:(Key.cipher_key server_key) ~ctr a_b_meta
     in
     Octets.appends [ tag; encrypted; net_len ]
 
   let unwrap ~key:server_key wkc =
     let open Result.Syntax in
     let tag = Octets.sub wkc ~off:0 ~len:_TLS_CRYPT_V2_TAG_SIZE in
-    let module AES_CTR = Mirage_crypto.Cipher_block.AES.CTR in
-    let ctr = AES_CTR.ctr_of_octets tag in
+    let open Mirage_crypto in
+    let ctr = AES.CTR.ctr_of_octets tag in
     let* key_and_metadata =
       try
         let payload =
           Octets.sub wkc ~off:_TLS_CRYPT_V2_TAG_SIZE
             ~len:(String.length wkc - _TLS_CRYPT_V2_TAG_SIZE - 2)
         in
-        Ok (AES_CTR.decrypt ~key:(Key.cipher_key server_key) ~ctr payload)
+        Ok (AES.CTR.decrypt ~key:(Key.cipher_key server_key) ~ctr payload)
       with _ -> error_msgf "Could not decrypt client key"
     in
     let tag' =

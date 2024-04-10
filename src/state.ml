@@ -30,15 +30,15 @@ let init_transport =
 
 type key_variant =
   | AES_CBC of {
-      my_key : Mirage_crypto.Cipher_block.AES.CBC.key;
+      my_key : Mirage_crypto.AES.CBC.key;
       my_hmac : string;
-      their_key : Mirage_crypto.Cipher_block.AES.CBC.key;
+      their_key : Mirage_crypto.AES.CBC.key;
       their_hmac : string;
     }
   | AES_GCM of {
-      my_key : Mirage_crypto.Cipher_block.AES.GCM.key;
+      my_key : Mirage_crypto.AES.GCM.key;
       my_implicit_iv : string;
-      their_key : Mirage_crypto.Cipher_block.AES.GCM.key;
+      their_key : Mirage_crypto.AES.GCM.key;
       their_implicit_iv : string;
     }
   | CHACHA20_POLY1305 of {
@@ -313,7 +313,7 @@ let data_mtu config session =
   | `AES_256_CBC ->
       let static_key_mode = Config.mem Secret config in
       let ts = if static_key_mode then 4 (* timestamp *) else 0 in
-      let block_size = Mirage_crypto.Cipher_block.AES.CBC.block_size in
+      let block_size = Mirage_crypto.AES.CBC.block_size in
       let hmac =
         let module H = (val Digestif.module_of_hash' (Config.get Auth config))
         in
@@ -338,7 +338,7 @@ let data_mtu config session =
       assert (r > 0);
       r
   | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ->
-      let tag_size = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+      let tag_size = Mirage_crypto.AES.GCM.tag_size in
       assert (Mirage_crypto.Chacha20.tag_size = tag_size);
       let hdr =
         Packet.id_len + tag_size + 1

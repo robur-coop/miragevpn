@@ -4,7 +4,7 @@ module Key : sig
   val of_cstruct : string -> (t, [> `Msg of string ]) result
   val unsafe_to_cstruct : t -> string
   val to_string : t -> string
-  val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
+  val cipher_key : t -> Mirage_crypto.AES.CTR.key
   val hmac : t -> string
   val equal : t -> t -> bool
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
