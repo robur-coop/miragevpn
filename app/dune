@@ -74,3 +74,24 @@
   cmdliner
   hxd.core
   hxd.string))
+
+(executable
+ (name miragevpn_server_notun)
+ (public_name miragevpn-server-notun)
+ (package miragevpn)
+ (modules miragevpn_server_notun)
+ (libraries
+  common
+  miragevpn
+  lwt
+  lwt.unix
+  cmdliner
+  ipaddr
+  ipaddr.unix
+  dns-client-lwt
+  mirage-crypto-rng-lwt
+  mtime.clock.os
+  cstruct-lwt
+  tcpip
+  tcpip.icmpv4
+  tcpip.ipv4))
