@@ -61,24 +61,11 @@ let open_tun config { Miragevpn.cidr; gateway } :
          (match devname with None -> "dynamic" | Some dev -> dev)
          msg)
 
-let safe_close fd =
-  Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
-
-let rec write_to_fd fd data =
-  if Cstruct.length data = 0 then Lwt_result.return ()
-  else
-    Lwt.catch
-      (fun () ->
-        Lwt_cstruct.write fd data >|= Cstruct.shift data >>= write_to_fd fd)
-      (fun e ->
-        safe_close fd >>= fun () ->
-        Lwt_result.lift (error_msgf "TCP write error %s" (Printexc.to_string e)))
-
 let write_multiple_to_fd fd bufs =
   Lwt_list.fold_left_s
     (fun r buf ->
       if r then (
-        write_to_fd fd buf >|= function
+        Common.write_to_fd fd buf >|= function
         | Ok () -> true
         | Error (`Msg msg) ->
             Logs.err (fun m -> m "TCP error %s while writing" msg);
@@ -86,24 +73,11 @@ let write_multiple_to_fd fd bufs =
       else Lwt.return r)
     true bufs
 
-let write_udp fd data =
-  Lwt.catch
-    (fun () ->
-      let len = Cstruct.length data in
-      Lwt_unix.send fd (Cstruct.to_bytes data) 0 len [] >|= fun sent ->
-      if sent <> len then
-        Logs.warn (fun m ->
-            m "UDP short write (length %d, written %d)" len sent);
-      Ok ())
-    (fun e ->
-      safe_close fd >>= fun () ->
-      Lwt_result.lift (error_msgf "UDP write error %s" (Printexc.to_string e)))
-
 let write_multiple_udp fd bufs =
   Lwt_list.fold_left_s
     (fun r buf ->
       if r then (
-        write_udp fd buf >|= function
+        Common.write_udp fd buf >|= function
         | Ok () -> true
         | Error (`Msg msg) ->
             Logs.err (fun m -> m "error %s while writing" msg);
@@ -116,41 +90,18 @@ let transmit data = function
   | Some (`Udp fd) -> write_multiple_udp fd data
   | None -> Lwt.return false
 
-let read_from_fd fd =
-  Lwt_result.catch (fun () ->
-      let bufsize = 2048 in
-      let buf = Bytes.create bufsize in
-      Lwt_unix.read fd buf 0 bufsize >>= fun count ->
-      if count = 0 then failwith "end of file from server"
-      else
-        let cs = Cstruct.of_bytes ~len:count buf in
-        Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return cs)
-  |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
-
 let rec reader_tcp mvar fd =
-  read_from_fd fd >>= function
+  Common.read_from_fd fd >>= function
   | Error (`Msg msg) ->
-      safe_close fd >>= fun () ->
+      Common.safe_close fd >>= fun () ->
       Logs.err (fun m -> m "read error from remote %s" msg);
       Lwt_mvar.put mvar `Connection_failed
   | Ok data -> Lwt_mvar.put mvar (`Data data) >>= fun () -> reader_tcp mvar fd
 
-let read_udp =
-  let bufsize = 65535 in
-  let buf = Bytes.create bufsize in
-  fun fd ->
-    Lwt_result.catch (fun () ->
-        Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, _sa) ->
-        let cs = Cstruct.of_bytes ~len:count buf in
-        Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return (Some cs))
-    |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
-
 let rec reader_udp mvar r =
-  read_udp r >>= function
+  Common.read_udp r >>= function
   | Error (`Msg msg) ->
-      safe_close r >>= fun () ->
+      Common.safe_close r >>= fun () ->
       Logs.err (fun m -> m "read error from remote %s" msg);
       Lwt_mvar.put mvar `Connection_failed
   | Ok (Some data) ->
@@ -189,7 +140,7 @@ let connect_tcp ip port =
       Logs.app (fun m -> m "connected to %a:%d" Ipaddr.pp ip port);
       Some fd)
     (fun e ->
-      safe_close fd >|= fun () ->
+      Common.safe_close fd >|= fun () ->
       Logs.err (fun m ->
           m "error %s while connecting to %a:%d" (Printexc.to_string e)
             Ipaddr.pp ip port);
@@ -266,7 +217,7 @@ let handle_action conn = function
         Lwt_mvar.put conn.event_mvar ev
       else (
         Logs.warn (fun m -> m "connection cancelled by switch");
-        match r with None -> Lwt.return_unit | Some x -> safe_close x)
+        match r with None -> Lwt.return_unit | Some x -> Common.safe_close x)
   | `Exit -> failwith "exit called"
   | `Established (ip, mtu) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
@@ -364,23 +315,11 @@ let establish_tunnel config pkcs12_password =
                 mtu);
           send_recv conn config ip_config mtu)
 
-let string_of_file ~dir filename =
-  let file =
-    if Filename.is_relative filename then Filename.concat dir filename
-    else filename
-  in
-  try
-    let fh = open_in file in
-    let content = really_input_string fh (in_channel_length fh) in
-    close_in_noerr fh;
-    Ok content
-  with _ -> error_msgf "Error reading file %S" file
-
 let parse_config filename =
   Lwt.return
   @@
   let dir, filename = Filename.(dirname filename, basename filename) in
-  let string_of_file = string_of_file ~dir in
+  let string_of_file = Common.string_of_file ~dir in
   match string_of_file filename with
   | Ok str -> Miragevpn.Config.parse_client ~string_of_file str
   | Error _ as e -> e
@@ -393,42 +332,7 @@ let jump _ filename pkcs12 =
      | Error (`Msg s) -> failwith ("config parser: " ^ s)
      | Ok config -> establish_tunnel config pkcs12)
 
-let reporter_with_ts ~dst () =
-  let pp_tags f tags =
-    let pp tag () =
-      let (Logs.Tag.V (def, value)) = tag in
-      Format.fprintf f " %s=%a" (Logs.Tag.name def) (Logs.Tag.printer def) value;
-      ()
-    in
-    Logs.Tag.fold pp tags ()
-  in
-  let report src level ~over k msgf =
-    let tz_offset_s = Ptime_clock.current_tz_offset_s () in
-    let posix_time = Ptime_clock.now () in
-    let src = Logs.Src.name src in
-    let k _ =
-      over ();
-      k ()
-    in
-    msgf @@ fun ?header ?tags fmt ->
-    Format.kfprintf k dst
-      ("%a:%a %a [%s] @[" ^^ fmt ^^ "@]@.")
-      (Ptime.pp_rfc3339 ?tz_offset_s ())
-      posix_time
-      Fmt.(option ~none:(any "") pp_tags)
-      tags Logs_fmt.pp_header (level, header) src
-  in
-  { Logs.report }
-
-let setup_log style_renderer level =
-  Fmt_tty.setup_std_outputs ?style_renderer ();
-  Logs.set_level level;
-  Logs.set_reporter (reporter_with_ts ~dst:Format.std_formatter ())
-
 open Cmdliner
-
-let setup_log =
-  Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
 
 let config =
   let doc = "Configuration file to use" in
@@ -442,7 +346,8 @@ let pkcs12 =
     & info [ "pkcs12-password" ] ~doc ~docv:"PKCS12-PASSWORD")
 
 let cmd =
-  let term = Term.(term_result (const jump $ setup_log $ config $ pkcs12))
+  let term =
+    Term.(term_result (const jump $ Common.setup_log $ config $ pkcs12))
   and info = Cmd.info "miragevpn_client" ~version:"%%VERSION_NUM%%" in
   Cmd.v info term
 
