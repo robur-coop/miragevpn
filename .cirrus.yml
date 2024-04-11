@@ -4,7 +4,7 @@ freebsd_instance:
 freebsd_client_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
   ocaml_script: opam init -a --comp=4.14.1
-  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage.4.4.2"
   configure_script: eval `opam env` && cd mirage-client && mirage configure -t hvt
   depend_script: eval `opam env` && cd mirage-client && gmake depend
   copy_script: rm -rf mirage-client/duniverse/miragevpn/* && cp -R dune-project miragevpn.opam src mirage mirage-client/duniverse/miragevpn/
@@ -15,7 +15,7 @@ freebsd_client_task:
 freebsd_nat_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
   ocaml_script: opam init -a --comp=4.14.1
-  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage.4.4.2"
   configure_script: eval `opam env` && cd mirage-nat && mirage configure -t hvt
   depend_script: eval `opam env` && cd mirage-nat && gmake depend
   copy_script: rm -rf mirage-nat/duniverse/miragevpn/* && cp -R dune-project miragevpn.opam src mirage mirage-nat/duniverse/miragevpn/
@@ -26,7 +26,7 @@ freebsd_nat_task:
 freebsd_router_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
   ocaml_script: opam init -a --comp=4.14.1
-  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage.4.4.2"
   configure_script: eval `opam env` && cd mirage-router && mirage configure -t hvt
   depend_script: eval `opam env` && cd mirage-router && gmake depend
   copy_script: rm -rf mirage-router/duniverse/miragevpn/* && cp -R dune-project miragevpn.opam src mirage mirage-router/duniverse/miragevpn/
@@ -37,7 +37,7 @@ freebsd_router_task:
 freebsd_server_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
   ocaml_script: opam init -a --comp=4.14.1
-  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>4"
+  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage.4.4.2"
   configure_script: eval `opam env` && cd mirage-server && mirage configure -t hvt
   depend_script: eval `opam env` && cd mirage-server && gmake depend
   copy_script: rm -rf mirage-server/duniverse/miragevpn/* && cp -R dune-project miragevpn.opam src mirage mirage-server/duniverse/miragevpn/

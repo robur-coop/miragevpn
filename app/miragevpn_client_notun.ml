@@ -7,9 +7,6 @@ type established = {
   seq_no : int;
 }
 
-let safe_close fd =
-  Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
-
 let ticker () =
   let+ () = Lwt_unix.sleep 1. in
   `Tick
@@ -147,43 +144,6 @@ let pong { ip_config; _ } buf =
       m "Received ICMPv4 payload %d bytes" (Cstruct.length buf));
   (id, seq_no)
 
-let rec write_to_fd fd data =
-  if Cstruct.length data = 0 then Lwt_result.return ()
-  else
-    Lwt.catch
-      (fun () ->
-        let* len = Lwt_cstruct.write fd data in
-        write_to_fd fd (Cstruct.shift data len))
-      (fun e ->
-        let+ () = safe_close fd in
-        Error (`Msg (Fmt.str "TCP write error %a" Fmt.exn e)))
-
-let transmit proto fd data =
-  match proto with
-  | `Tcp -> write_to_fd fd data
-  | `Udp -> (
-      let* r = Lwt_result.catch (fun () -> Lwt_cstruct.write fd data) in
-      match r with
-      | Ok len when Cstruct.length data <> len ->
-          Lwt_result.fail (`Msg "wrote short UDP packet")
-      | Ok _ -> Lwt_result.return ()
-      | Error exn ->
-          let+ () = safe_close fd in
-          Error (`Msg (Fmt.str "UDP write error %a" Fmt.exn exn)))
-
-let receive _proto fd =
-  let buf = Cstruct.create_unsafe 65535 in
-  let* r = Lwt_result.catch (fun () -> Lwt_cstruct.recvfrom fd buf []) in
-  match r with
-  | Ok (len, _) ->
-      Logs.debug (fun m -> m "received %d bytes" len);
-      Lwt.return (`Data (Cstruct.sub buf 0 len))
-  | Error exn ->
-      let* () = safe_close fd in
-      (* XXX: emit `Connection_failed?! *)
-      Logs.err (fun m -> m "Receive error %a" Fmt.exn exn);
-      exit 3
-
 let rec established_action proto fd incoming ifconfig tick client actions =
   let action, actions =
     match actions with
@@ -203,7 +163,7 @@ let rec established_action proto fd incoming ifconfig tick client actions =
       in
       match ev with
       | `Data _ as ev ->
-          let incoming = receive proto fd in
+          let incoming = Common.receive proto fd in
           event
             (established_action proto fd incoming ifconfig)
             tick client actions ev
@@ -234,7 +194,7 @@ let rec established_action proto fd incoming ifconfig tick client actions =
       established_action proto fd incoming ifconfig tick client actions
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
   | `Transmit data ->
-      let* r = transmit proto fd data in
+      let* r = Common.transmit proto fd data in
       (match r with
       | Ok () -> ()
       | Error (`Msg e) ->
@@ -245,7 +205,7 @@ let rec established_action proto fd incoming ifconfig tick client actions =
       Logs.err (fun m -> m "Unexpected action %a" pp_action action);
       assert false
   | (`Connect _ | `Resolve _) as action ->
-      let* () = safe_close fd in
+      let* () = Common.safe_close fd in
       connecting_action tick client (action :: actions)
 
 and connected_action proto fd incoming tick client actions =
@@ -261,7 +221,7 @@ and connected_action proto fd incoming tick client actions =
         Lwt.choose [ (tick :> [ `Tick | `Data of Cstruct.t ] Lwt.t); incoming ]
       in
       let incoming =
-        match ev with `Data _ -> receive proto fd | _ -> incoming
+        match ev with `Data _ -> Common.receive proto fd | _ -> incoming
       in
       event
         (connected_action proto fd incoming)
@@ -274,7 +234,7 @@ and connected_action proto fd incoming tick client actions =
       established_action proto fd incoming ifconfig tick client actions
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
   | `Transmit data ->
-      let* r = transmit proto fd data in
+      let* r = Common.transmit proto fd data in
       (match r with
       | Ok () -> ()
       | Error (`Msg e) ->
@@ -285,7 +245,7 @@ and connected_action proto fd incoming tick client actions =
       Logs.err (fun m -> m "Unexpected action %a" pp_action action);
       assert false
   | (`Connect _ | `Resolve _) as action ->
-      let* () = safe_close fd in
+      let* () = Common.safe_close fd in
       connecting_action tick client (action :: actions)
 
 and connecting_action tick client actions =
@@ -315,13 +275,13 @@ and connecting_action tick client actions =
           (fun () ->
             let+ () = Lwt_unix.connect fd (ADDR_INET (unix_ip, port)) in
             Logs.app (fun m -> m "Connected to %a:%d" Ipaddr.pp addr port);
-            let incoming = receive proto fd in
+            let incoming = Common.receive proto fd in
             (`Connected, connected_action proto fd incoming))
           (fun e ->
             Logs.err (fun m ->
                 m "error %s while connecting to %a:%d" (Printexc.to_string e)
                   Ipaddr.pp addr port);
-            let+ () = safe_close fd in
+            let+ () = Common.safe_close fd in
             (`Connection_failed, connecting_action))
       in
       let* ev, k = connect in
@@ -346,24 +306,11 @@ let establish_tunnel config pkcs12_password =
       in
       connecting_action tick client [ (action :> action) ]
 
-let string_of_file ~dir filename =
-  let file =
-    if Filename.is_relative filename then Filename.concat dir filename
-    else filename
-  in
-  try
-    let fh = open_in file in
-    let content = really_input_string fh (in_channel_length fh) in
-    close_in_noerr fh;
-    Ok content
-  with _ ->
-    Fmt.kstr (fun msg -> Error (`Msg msg)) "Error reading file %S" file
-
 let parse_config filename =
   Lwt.return
   @@
   let dir, filename = Filename.(dirname filename, basename filename) in
-  let string_of_file = string_of_file ~dir in
+  let string_of_file = Common.string_of_file ~dir in
   match string_of_file filename with
   | Ok str -> Miragevpn.Config.parse_client ~string_of_file str
   | Error _ as e -> e
@@ -376,42 +323,7 @@ let jump _ filename pkcs12 =
      | Error (`Msg s) -> failwith ("config parser: " ^ s)
      | Ok config -> establish_tunnel config pkcs12)
 
-let reporter_with_ts ~dst () =
-  let pp_tags f tags =
-    let pp tag () =
-      let (Logs.Tag.V (def, value)) = tag in
-      Format.fprintf f " %s=%a" (Logs.Tag.name def) (Logs.Tag.printer def) value;
-      ()
-    in
-    Logs.Tag.fold pp tags ()
-  in
-  let report src level ~over k msgf =
-    let tz_offset_s = Ptime_clock.current_tz_offset_s () in
-    let posix_time = Ptime_clock.now () in
-    let src = Logs.Src.name src in
-    let k _ =
-      over ();
-      k ()
-    in
-    msgf @@ fun ?header ?tags fmt ->
-    Format.kfprintf k dst
-      ("%a:%a %a [%s] @[" ^^ fmt ^^ "@]@.")
-      (Ptime.pp_rfc3339 ?tz_offset_s ())
-      posix_time
-      Fmt.(option ~none:(any "") pp_tags)
-      tags Logs_fmt.pp_header (level, header) src
-  in
-  { Logs.report }
-
-let setup_log style_renderer level =
-  Fmt_tty.setup_std_outputs ?style_renderer ();
-  Logs.set_level level;
-  Logs.set_reporter (reporter_with_ts ~dst:Format.std_formatter ())
-
 open Cmdliner
-
-let setup_log =
-  Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
 
 let config =
   let doc = "Configuration file to use" in
@@ -425,7 +337,8 @@ let pkcs12 =
     & info [ "pkcs12-password" ] ~doc ~docv:"PKCS12-PASSWORD")
 
 let cmd =
-  let term = Term.(term_result (const jump $ setup_log $ config $ pkcs12))
+  let term =
+    Term.(term_result (const jump $ Common.setup_log $ config $ pkcs12))
   and info = Cmd.info "miragevpn_client" ~version:"%%VERSION_NUM%%" in
   Cmd.v info term
 

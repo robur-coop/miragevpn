@@ -1,3 +1,20 @@
+(library
+ (name common)
+ (wrapped false)
+ (modules common)
+ (libraries
+  lwt
+  cstruct-lwt
+  fmt
+  logs
+  logs.fmt
+  ptime
+  fmt.tty
+  ptime.clock.os
+  cmdliner
+  fmt.cli
+  logs.cli))
+
 (executable
  (name miragevpn_client_lwt)
  (public_name miragevpn-client-lwt)
@@ -5,17 +22,12 @@
  (modules miragevpn_client_lwt)
  (libraries
   miragevpn
+  common
   lwt
   lwt.unix
   cmdliner
-  fmt.tty
-  logs
-  logs.fmt
-  logs.cli
-  fmt.cli
   ipaddr
   ipaddr.unix
-  ptime.clock.os
   dns-client-lwt
   mirage-crypto-rng-lwt
   mtime.clock.os
@@ -29,17 +41,12 @@
  (modules miragevpn_client_notun)
  (libraries
   miragevpn
+  common
   lwt
   lwt.unix
   cmdliner
-  fmt.tty
-  logs
-  logs.fmt
-  logs.cli
-  fmt.cli
   ipaddr
   ipaddr.unix
-  ptime.clock.os
   dns-client-lwt
   mirage-crypto-rng-lwt
   mtime.clock.os
