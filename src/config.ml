@@ -277,7 +277,7 @@ module Conf_map = struct
     let open Result.Syntax in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
-    if not (mem Tls_mode t) then
+    if not (mem Tls_mode t || mem Server t) then
       let* () =
         Result.map_error
           (fun err -> `Msg ("not a valid config: " ^ err))
@@ -319,10 +319,12 @@ module Conf_map = struct
       (fun err -> `Msg ("not a valid server config: " ^ err))
       (let* () = ensure_mem Bind "does not have a bind" in
        let* () =
-         match find Tls_mode t with
-         | None | Some `Client -> Error "config must specify 'tls-server'"
-         | Some `Server -> Ok ()
+         match (find Tls_mode t, find Server t) with
+         | None, None | Some `Client, _ ->
+             Error "config must specify 'tls-server'"
+         | Some `Server, _ | None, Some _ -> Ok ()
        in
+
        let* _ = cert_key_or_pkcs12 t in
        Ok ())
 
