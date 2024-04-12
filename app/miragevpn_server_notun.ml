@@ -41,9 +41,9 @@ let handle_payload t dst data =
   | Ok (ip, payload)
     when ip.Ipv4_packet.proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
          && Ipaddr.V4.compare ip.Ipv4_packet.dst (fst t.ip) = 0 -> (
-      (* also check for icmp echo request! *)
       match Icmpv4_packet.Unmarshal.of_cstruct payload with
-      | Ok (icmp, payload) ->
+      | Ok (({ ty = Icmpv4_wire.Echo_request; _ } as icmp), payload) ->
+          (* XXX(reynir): also check code = 0?! *)
           let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
           and ip' = { ip with src = ip.dst; dst = ip.src } in
           let data =
@@ -56,8 +56,15 @@ let handle_payload t dst data =
               ip'
           in
           write t ip.src (Cstruct.append hdr data)
+      | Ok (icmp, _payload) ->
+          Logs.warn (fun m ->
+              m "ignoring icmp frame from %a: %a" Ipaddr.V4.pp ip.src
+                Icmpv4_packet.pp icmp);
+          Lwt.return_unit
       | Error e ->
-          Logs.warn (fun m -> m "ignoring icmp frame from, decoding error %s" e);
+          Logs.warn (fun m ->
+              m "ignoring icmp frame from %a, decoding error %s" Ipaddr.V4.pp
+                ip.src e);
           Lwt.return_unit)
   | Ok (ip, _) ->
       Logs.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip);
