@@ -7,7 +7,7 @@ type t = {
   mutable connections : (Lwt_unix.file_descr * Miragevpn.t ref) IPM.t;
 }
 
-let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.V4.pp dst port
+let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
 
 let write t dst cs =
   let open Lwt.Infix in
@@ -31,12 +31,12 @@ let write t dst cs =
               t.connections <- IPM.remove dst t.connections
           | Ok () -> ()))
 
-let handle_payload t dst data =
+let handle_payload t dst _peer data =
   match Ipv4_packet.Unmarshal.of_cstruct data with
   | Error e ->
       Logs.warn (fun m ->
-          m "%a received payload (error %s) %a" Ipaddr.V4.pp dst e
-            Cstruct.hexdump_pp data);
+          m "%a received payload (error %s) %a" pp_dst dst e Cstruct.hexdump_pp
+            data);
       Lwt.return_unit
   | Ok (ip, payload)
     when ip.Ipv4_packet.proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
@@ -92,7 +92,13 @@ let rec timer server () =
                   m "in timer, ignoring action %a" Miragevpn.pp_action a))
             act;
           t := t';
-          Lwt_list.iter_p (handle_payload server k) payloads >>= fun () ->
+          let dst =
+            match Lwt_unix.getsockname fd with
+            | Lwt_unix.ADDR_UNIX _ -> assert false
+            | Lwt_unix.ADDR_INET (ip, port) ->
+                (Ipaddr_unix.of_inet_addr ip, port)
+          in
+          Lwt_list.iter_p (handle_payload server dst k) payloads >>= fun () ->
           Lwt_list.fold_left_s
             (fun r o ->
               match r with
@@ -121,15 +127,15 @@ let handle_action dst add rm ip action =
             cidr);
       let ip = Ipaddr.V4.Prefix.address cidr in
       add ip;
-      `Continue (Some ip)
+      (Some ip, `Continue)
   | `Exit ->
       rm ();
       Logs.info (fun m -> m "%a exiting" pp_dst dst);
-      `Stop
+      (None, `Stop)
   | a ->
       Logs.warn (fun m ->
           m "%a ignoring action %a" pp_dst dst Miragevpn.pp_action a);
-      `Continue ip
+      (ip, `Continue)
 
 let callback t fd =
   let open Lwt.Infix in
@@ -138,10 +144,7 @@ let callback t fd =
   let dst =
     match Lwt_unix.getsockname fd with
     | Lwt_unix.ADDR_UNIX _ -> assert false
-    | Lwt_unix.ADDR_INET (ip, port) -> (
-        match Ipaddr_unix.V4.of_inet_addr ip with
-        | Some ip -> (ip, port)
-        | None -> assert false)
+    | Lwt_unix.ADDR_INET (ip, port) -> (Ipaddr_unix.of_inet_addr ip, port)
   in
   Logs.info (fun m -> m "%a new connection" pp_dst dst);
   let rec read ?ip fd =
@@ -168,12 +171,21 @@ let callback t fd =
             Lwt.return_unit
         | Ok (s', out, payloads, action) -> (
             client_state := s';
-            let ip =
-              Option.fold ~none:(`Continue ip)
-                ~some:(handle_action dst add rm ip)
-                action
+            let ip, continue_or_stop =
+              match action with
+              | None -> (ip, `Continue)
+              | Some action -> handle_action dst add rm ip action
             in
-            Lwt_list.iter_p (handle_payload t (fst dst)) payloads >>= fun () ->
+            (* Do not handle payloads from client that have not yet been
+               assigned an ip address *)
+            (match ip with
+            | None ->
+                if payloads <> [] then
+                  Logs.warn (fun m ->
+                      m "%a ignoring premature payloads" pp_dst dst);
+                Lwt.return_unit
+            | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
+            >>= fun () ->
             Lwt_list.fold_left_s
               (fun r o ->
                 match r with
@@ -182,8 +194,7 @@ let callback t fd =
                     Common.write_to_fd fd o >|= function
                     | Error (`Msg msg) ->
                         Logs.err (fun m ->
-                            m "%a TCP write failed %s" Ipaddr.V4.pp (fst dst)
-                              msg);
+                            m "%a TCP write failed %s" pp_dst dst msg);
                         Error ()
                     | Ok () -> Ok ()))
               (Ok ()) out
@@ -192,9 +203,9 @@ let callback t fd =
                 rm ();
                 Lwt.return_unit
             | Ok () -> (
-                match ip with
+                match continue_or_stop with
                 | `Stop -> Lwt.return_unit
-                | `Continue ip -> read ?ip fd)))
+                | `Continue -> read ?ip fd)))
   in
   read fd
 
