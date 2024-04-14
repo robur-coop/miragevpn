@@ -1,6 +1,8 @@
 open Lwt.Syntax
 module IPM = Map.Make (Ipaddr.V4)
 
+(* NOTE: copied from mirage/miragevpn_mirage.ml Server functor - please
+   carefully contribute back changes there *)
 type t = {
   server : Miragevpn.server;
   ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t;
@@ -22,7 +24,6 @@ let write t dst cs =
               m "error not_ready while writing to %a" Ipaddr.V4.pp dst);
           Lwt.return_unit
       | Ok (state', enc) -> (
-          (* TODO fragmentation!? *)
           state := state';
           Common.write_to_fd fd enc >|= function
           | Error (`Msg msg) ->
@@ -182,7 +183,8 @@ let callback t fd =
             | None ->
                 if payloads <> [] then
                   Logs.warn (fun m ->
-                      m "%a ignoring premature payloads" pp_dst dst);
+                      m "%a ignoring %u premature payloads" pp_dst dst
+                        (List.length payloads));
                 Lwt.return_unit
             | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
             >>= fun () ->

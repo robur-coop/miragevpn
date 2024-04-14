@@ -84,7 +84,7 @@ struct
                 t.connections <- IPM.remove dst t.connections
             | Ok () -> ()))
 
-  let handle_payload t dst data =
+  let handle_payload t dst _peer data =
     match Ipv4_packet.Unmarshal.of_cstruct data with
     | Error e ->
         Log.warn (fun m ->
@@ -94,9 +94,9 @@ struct
     | Ok (ip, payload)
       when ip.Ipv4_packet.proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
            && Ipaddr.V4.compare ip.Ipv4_packet.dst (fst t.ip) = 0 -> (
-        (* also check for icmp echo request! *)
         match Icmpv4_packet.Unmarshal.of_cstruct payload with
-        | Ok (icmp, payload) ->
+        | Ok (({ ty = Icmpv4_wire.Echo_request; _ } as icmp), payload) ->
+            (* XXX(reynir): also check code = 0?! *)
             let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
             and ip' = { ip with src = ip.dst; dst = ip.src } in
             let data =
@@ -109,9 +109,15 @@ struct
                 ~payload_len:(Cstruct.length data) ip'
             in
             write t ip.src (Cstruct.append hdr data)
+        | Ok (icmp, _payload) ->
+            Log.warn (fun m ->
+                m "ignoring icmp frame from %a: %a" Ipaddr.V4.pp ip.src
+                  Icmpv4_packet.pp icmp);
+            Lwt.return_unit
         | Error e ->
             Log.warn (fun m ->
-                m "ignoring icmp frame from, decoding error %s" e);
+                m "ignoring icmp frame from %a, decoding error %s" Ipaddr.V4.pp
+                  ip.src e);
             Lwt.return_unit)
     | Ok (ip, _) ->
         Log.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip);
@@ -125,15 +131,15 @@ struct
               cidr);
         let ip = Ipaddr.V4.Prefix.address cidr in
         add ip;
-        `Continue (Some ip)
+        (Some ip, `Continue)
     | `Exit ->
         rm ();
         Log.info (fun m -> m "%a exiting" pp_dst dst);
-        `Stop
+        (None, `Stop)
     | a ->
         Log.warn (fun m ->
             m "%a ignoring action %a" pp_dst dst Miragevpn.pp_action a);
-        `Continue ip
+        (ip, `Continue)
 
   let callback t flow =
     let is_not_taken ip = not (IPM.mem ip t.connections) in
@@ -172,12 +178,22 @@ struct
               Lwt.return_unit
           | Ok (s', out, payloads, action) -> (
               client_state := s';
-              let ip =
-                Option.fold ~none:(`Continue ip)
-                  ~some:(handle_action dst add rm ip)
-                  action
+              let ip, continue_or_stop =
+                match action with
+                | None -> (ip, `Continue)
+                | Some action -> handle_action dst add rm ip action
               in
-              Lwt_list.iter_p (handle_payload t dst) payloads >>= fun () ->
+              (* Do not handle payloads from client that have not yet been
+                 assigned an ip address *)
+              (match ip with
+              | None ->
+                  if payloads <> [] then
+                    Logs.warn (fun m ->
+                        m "%a ignoring %u premature payloads" pp_dst dst
+                          (List.length payloads));
+                  Lwt.return_unit
+              | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
+              >>= fun () ->
               TCP.writev f out >>= function
               | Error e ->
                   Log.err (fun m ->
@@ -185,9 +201,9 @@ struct
                   rm ();
                   Lwt.return_unit
               | Ok () -> (
-                  match ip with
+                  match continue_or_stop with
                   | `Stop -> Lwt.return_unit
-                  | `Continue ip -> read ?ip f)))
+                  | `Continue -> read ?ip f)))
     in
     read flow
 
@@ -212,7 +228,7 @@ struct
                     m "in timer, ignoring action %a" Miragevpn.pp_action a))
               act;
             t := t';
-            Lwt_list.iter_p (handle_payload server (TCP.dst flow)) payloads
+            Lwt_list.iter_p (handle_payload server (TCP.dst flow) k) payloads
             >>= fun () ->
             TCP.writev flow out >|= function
             | Error e ->
