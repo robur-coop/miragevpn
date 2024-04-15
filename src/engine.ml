@@ -537,7 +537,28 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
 
 let kex_server config session (my_key_material : my_key_material) tls data =
   let open Result.Syntax in
-  (* TODO verify username + password, respect incoming data, including NCP *)
+  (* TODO verify username + password, respect incoming data *)
+  let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
+  let* cipher =
+    let client_ciphers =
+      match their_tls_data.peer_info with
+      | Some pi -> (
+          match List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") pi with
+          | Some ciphers ->
+              List.filter_map Config.aead_cipher_of_string
+                (String.split_on_char ':'
+                   (String.sub ciphers 11 (String.length ciphers - 11)))
+          | None ->
+              if List.mem "IV_NCP=2" pi then [ `AES_128_GCM; `AES_256_GCM ]
+              else [])
+      | None -> []
+    in
+    List.find_opt
+      (fun candidate -> List.mem candidate client_ciphers)
+      (Config.get Config.Data_ciphers config)
+    |> Option.to_result ~none:(`Msg "No shared ciphers")
+  in
+  let config = Config.add Cipher (cipher :> Config.cipher) config in
   let options = Config.server_generate_connect_options config in
   let td =
     {
@@ -549,7 +570,6 @@ let kex_server config session (my_key_material : my_key_material) tls data =
       peer_info = None;
     }
   in
-  let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
   let* tls', payload =
     Option.to_result ~none:(`Msg "not yet established")
       (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
@@ -576,7 +596,7 @@ let kex_server config session (my_key_material : my_key_material) tls data =
     | _ ->
         Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
   in
-  (state, payload)
+  (state, config, payload)
 
 let push_request tls =
   Option.to_result
@@ -840,7 +860,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       let* tls', d = incoming_tls_without_reply tls data in
       match d with
       | Some d ->
-          let+ (channel_st, ip_config), out =
+          let+ (channel_st, ip_config), config, out =
             kex_server config session keys tls' d
           in
           (* keys established, move forward to "expect push request (reply with push reply)" *)
@@ -881,6 +901,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
             restart;
             "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
             ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
+            "cipher " ^ Config.cipher_to_string (Config.get Cipher config);
           ]
         in
         let reply = String.concat "," reply_things in

@@ -2322,8 +2322,8 @@ let client_generate_connect_options t =
   Ok serialized
 
 let server_generate_connect_options _config =
-  "V4,dev-type tun,link-mtu 1559,tun-mtu 1500,proto TCPv4_SERVER,keydir \
-   0,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,key-method 2,tls-server"
+  "V4,dev-type tun,link-mtu 1559,tun-mtu 1500,proto TCPv4_SERVER,keydir 0,auth \
+   SHA1,keysize 256,tls-auth,key-method 2,tls-server"
 
 let client_merge_server_config client server_str =
   (* TODO: Mutate client config,
