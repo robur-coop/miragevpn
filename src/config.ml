@@ -1413,12 +1413,17 @@ let a_server =
   | Ok cidr -> return (`Entry (B (Server, cidr)))
   | Error (`Msg m) -> fail m
 
-let aead_cipher ~ctx c =
+let aead_cipher_of_string c =
   match String.uppercase_ascii c with
-  | "AES-128-GCM" -> return `AES_128_GCM
-  | "AES-256-GCM" -> return `AES_256_GCM
-  | "CHACHA20-POLY1305" -> return `CHACHA20_POLY1305
-  | _ -> Fmt.kstr fail "Unknown or unsupported cipher for %S: %S" ctx c
+  | "AES-128-GCM" -> Some `AES_128_GCM
+  | "AES-256-GCM" -> Some `AES_256_GCM
+  | "CHACHA20-POLY1305" -> Some `CHACHA20_POLY1305
+  | _ -> None
+
+let aead_cipher ~ctx c =
+  match aead_cipher_of_string c with
+  | Some x -> return x
+  | None -> Fmt.kstr fail "Unknown or unsupported cipher for %S: %S" ctx c
 
 let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
