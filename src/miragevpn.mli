@@ -303,10 +303,10 @@ val server :
   ( server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int,
     [> `Msg of string ] )
   result
-(** [server config ~is_not_taken ts now rng] constructs a [server], its [ip, netmask] and
-    [port].  The callback [is_not_taken] is provided to avoid IP
-    address collisions. It returns an error if the configuration does not contain a tls-auth
-    element. *)
+(** [server config ~is_not_taken ts now rng] constructs a [server], its [ip,
+    netmask] and [port].  The callback [is_not_taken] is provided to avoid IP
+    address collisions. It returns an error if the configuration does not
+    contain a tls-auth element. *)
 
 type error
 (** The type of errors when processing incoming data. *)
@@ -318,9 +318,9 @@ val handle :
   t ->
   event ->
   (t * Cstruct.t list * Cstruct.t list * action option, error) result
-(** [handle t event] handles the [event] with the state [t]. The return value is the new state, a list of packets
-    to transmit to the other peer, a list of payloads to foward to the
-    application, and maybe an action to handle. *)
+(** [handle t event] handles the [event] with the state [t]. The return value is
+    the new state, a list of packets to transmit to the other peer, a list of
+    payloads to foward to the application, and maybe an action to handle. *)
 
 val outgoing : t -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
 (** [outgoing t data] prepares [data] to be sent over the OpenVPN connection.
