@@ -65,5 +65,4 @@ depends: [
   "notty" {with-test}
   "bechamel" {with-test}
   "bechamel-notty" {with-test}
-  "bechamel-perf" {with-test}
 ]

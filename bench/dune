@@ -2,7 +2,6 @@
  (name bench_engine)
  (libraries
   bechamel
-  bechamel-perf
   bechamel-notty
   notty.unix
   ptime.clock.os
