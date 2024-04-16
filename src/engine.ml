@@ -846,17 +846,23 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
     | `Restart n -> "ping-restart " ^ string_of_int (n / 2)
     | `Exit n -> "ping-exit " ^ string_of_int (n / 2)
   in
+  let topology =
+    (* Since OpenVPN 2.7 the default topology is subnet *)
+    Config.find Topology config |> Option.value ~default:`Subnet
+  in
   (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
   let reply_things =
     [
       "";
       (* need an initial , after PUSH_REPLY *)
+      (* XXX(reynir): route-gateway assumes --topology subnet *)
       "route-gateway " ^ Ipaddr.V4.to_string server_ip;
-      "topology subnet";
+      "topology " ^ Config.topology_to_string topology;
       "ping " ^ string_of_int ping;
       restart;
       "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
       ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
+      (* Important to send cipher as that is how cipher negotiation is communicated *)
       "cipher " ^ Config.cipher_to_string (Config.get Cipher config);
     ]
   in
