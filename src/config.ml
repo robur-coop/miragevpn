@@ -341,8 +341,8 @@ module Conf_map = struct
              Log.warn (fun m ->
                  m
                    "server configuration without --topology; it is now \
-                    --topology subnet. This is a breaking change from \
-                    OpenVPN<2.7");
+                    --topology subnet. This is also the default in \
+                    OpenVPN>=2.7, while previous versions used net30");
              Ok ()
        in
        Ok ())
