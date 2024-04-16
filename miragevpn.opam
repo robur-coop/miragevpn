@@ -62,4 +62,7 @@ depends: [
   "crowbar" {with-test}
   "alcotest" {with-test}
   "bigstringaf" {with-test}
+  "notty" {with-test}
+  "bechamel" {with-test}
+  "bechamel-notty" {with-test}
 ]
