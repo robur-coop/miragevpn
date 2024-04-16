@@ -296,14 +296,16 @@ val client :
 
 val server :
   Config.t ->
+  is_not_taken:(Ipaddr.V4.t -> bool) ->
   (unit -> int64) ->
   (unit -> Ptime.t) ->
   (int -> Cstruct.t) ->
   ( server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int,
     [> `Msg of string ] )
   result
-(** [server config ts now rng] constructs a [server], its [ip, netmask] and
-    [port]. It returns an error if the configuration does not contain a tls-auth
+(** [server config ~is_not_taken ts now rng] constructs a [server], its [ip, netmask] and
+    [port].  The callback [is_not_taken] is provided to avoid IP
+    address collisions. It returns an error if the configuration does not contain a tls-auth
     element. *)
 
 type error
@@ -314,12 +316,9 @@ val pp_error : error Fmt.t
 
 val handle :
   t ->
-  ?is_not_taken:(Ipaddr.V4.t -> bool) ->
   event ->
   (t * Cstruct.t list * Cstruct.t list * action option, error) result
-(** [handle t ~is_not_taken event] handles the [event] with the state [t]. If
-    [t] is a server session, [~is_not_taken] must be provided to avoid IP
-    address collisions. The return value is the new state, a list of packets
+(** [handle t event] handles the [event] with the state [t]. The return value is the new state, a list of packets
     to transmit to the other peer, a list of payloads to foward to the
     application, and maybe an action to handle. *)
 

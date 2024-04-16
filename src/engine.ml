@@ -292,9 +292,11 @@ let client ?pkcs12_password config ts now rng =
       match Config.find Comp_lzo config with None -> false | Some () -> true
     in
     let session = init_session ~my_session_id:0L ~compress ()
-    and channel = new_channel 0 current_ts in
+    and channel = new_channel 0 current_ts
+    and is_not_taken _ = false in
     {
       config;
+      is_not_taken;
       state = Client state;
       control_crypto;
       linger = Cstruct.empty;
@@ -310,11 +312,11 @@ let client ?pkcs12_password config ts now rng =
   in
   Ok (state, action)
 
-let server server_config server_ts server_now server_rng =
+let server server_config ~is_not_taken server_ts server_now server_rng =
   let open Result.Syntax in
   let port = Option.value ~default:1194 (Config.find Port server_config) in
   let+ tls_auth = tls_auth server_config in
-  ( { server_config; server_rng; server_ts; server_now; tls_auth },
+  ( { server_config; is_not_taken; server_rng; server_ts; server_now; tls_auth },
     server_ip server_config,
     port )
 
@@ -326,6 +328,7 @@ let new_connection server =
   let channel = new_channel 0 current_ts in
   {
     config = server.server_config;
+    is_not_taken = server.is_not_taken;
     control_crypto = `Tls_auth server.tls_auth;
     state = Server Server_handshaking;
     linger = Cstruct.empty;
@@ -1650,7 +1653,7 @@ let validate_control state control_crypto op key payload =
       in
       (p, needs_wkc)
 
-let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
+let incoming state control_crypto buf =
   let open Result.Syntax in
   let state = { state with last_received = state.ts () } in
   let udp_ignore = function
@@ -1710,8 +1713,8 @@ let incoming ?(is_not_taken = fun _ip -> false) state control_crypto buf =
                   | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
                   | `Control (_, (_, _, data)) -> (
                       let* est, config, session, ch, out' =
-                        incoming_control is_not_taken state.config state.rng
-                          state.state state.session ch (state.now ())
+                        incoming_control state.is_not_taken state.config
+                          state.rng state.state state.session ch (state.now ())
                           (state.ts ()) key op data
                       in
                       Log.debug (fun m ->
@@ -1951,9 +1954,9 @@ let handle_client t control_crypto s ev =
    hs; - handshake-window -- until handshaking -> ready (discard connection attempt)
    hs; - tls-timeout -- same, discard connection attempt [in tcp not yet relevant]
 *)
-let handle_server ?is_not_taken t cc s ev =
+let handle_server t cc s ev =
   match (s, ev) with
-  | _, `Data cs -> incoming ?is_not_taken t cc cs
+  | _, `Data cs -> incoming t cc cs
   | (Server_ready | Server_rekeying _), `Tick -> (
       match maybe_ping_timeout t with
       | Some _ -> Ok (t, [], [], Some `Exit)
@@ -2035,10 +2038,9 @@ let handle_static_client t s keys ev =
             "handle_static_client: unexpected event %a in state %a" pp_event ev
             pp_client_state s)
 
-let handle t ?is_not_taken ev =
+let handle t ev =
   match (t.state, t.control_crypto) with
   | Client state, (#control_tls as cc) -> handle_client t cc state ev
   | Client state, `Static keys -> handle_static_client t state keys ev
-  | Server state, (`Tls_auth _ as cc) ->
-      handle_server ?is_not_taken t cc state ev
+  | Server state, (`Tls_auth _ as cc) -> handle_server t cc state ev
   | Server _, _ -> Error (`Msg "server only supports tls_auth so far")

@@ -1,19 +1,18 @@
 open Lwt.Syntax
-module IPM = Map.Make (Ipaddr.V4)
 
 (* NOTE: copied from mirage/miragevpn_mirage.ml Server functor - please
    carefully contribute back changes there *)
 type t = {
   server : Miragevpn.server;
   ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t;
-  mutable connections : (Lwt_unix.file_descr * Miragevpn.t ref) IPM.t;
+  connections : (Ipaddr.V4.t, Lwt_unix.file_descr * Miragevpn.t ref) Hashtbl.t;
 }
 
 let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
 
 let write t dst cs =
   let open Lwt.Infix in
-  match IPM.find_opt dst t.connections with
+  match Hashtbl.find_opt t.connections dst with
   | None ->
       Logs.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst);
       Lwt.return_unit
@@ -29,7 +28,7 @@ let write t dst cs =
           | Error (`Msg msg) ->
               Logs.err (fun m ->
                   m "%a tcp write failed %s" Ipaddr.V4.pp dst msg);
-              t.connections <- IPM.remove dst t.connections
+              Hashtbl.remove t.connections dst
           | Ok () -> ()))
 
 let handle_payload t dst _peer data =
@@ -74,17 +73,17 @@ let handle_payload t dst _peer data =
 let rec timer server () =
   let open Lwt.Infix in
   (* foreach connection, call handle `Tick and follow instructions! *)
-  IPM.fold
+  Hashtbl.fold
     (fun k (fd, t) acc ->
       acc >>= fun acc ->
       match Miragevpn.handle !t `Tick with
       | Error e ->
           Logs.err (fun m -> m "error in timer %a" Miragevpn.pp_error e);
-          Lwt.return acc
+          Lwt.return (k :: acc)
       | Ok (_t', _out, _payloads, Some `Exit) ->
           (* TODO anything to do with "_out" or "_payloads"? *)
           Logs.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
-          Lwt.return acc
+          Lwt.return (k :: acc)
       | Ok (t', out, payloads, act) -> (
           (* TODO anything to do with "_act"? (apart from exit) *)
           Option.iter
@@ -113,11 +112,11 @@ let rec timer server () =
                   | Ok () -> Ok ()))
             (Ok ()) out
           >|= function
-          | Error () -> acc
-          | Ok () -> IPM.add k (fd, t) acc))
-    server.connections (Lwt.return IPM.empty)
-  >>= fun connections ->
-  server.connections <- connections;
+          | Error () -> k :: acc
+          | Ok () -> acc))
+    server.connections (Lwt.return [])
+  >>= fun to_remove ->
+  List.iter (Hashtbl.remove server.connections) to_remove;
   Lwt_unix.sleep 1. >>= fun () -> timer server ()
 
 let handle_action dst add rm ip action =
@@ -140,7 +139,6 @@ let handle_action dst add rm ip action =
 
 let callback t fd =
   let open Lwt.Infix in
-  let is_not_taken ip = not (IPM.mem ip t.connections) in
   let client_state = ref (Miragevpn.new_connection t.server) in
   let dst =
     match Lwt_unix.getsockname fd with
@@ -155,15 +153,15 @@ let callback t fd =
       | Some ip ->
           Logs.info (fun m ->
               m "%a removing ip %a from connections" pp_dst dst Ipaddr.V4.pp ip);
-          t.connections <- IPM.remove ip t.connections
-    and add ip = t.connections <- IPM.add ip (fd, client_state) t.connections in
+          Hashtbl.remove t.connections ip
+    and add ip = Hashtbl.replace t.connections ip (fd, client_state) in
     Common.read_from_fd fd >>= function
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "%a error %s while reading" pp_dst dst msg);
         rm ();
         Lwt.return_unit
     | Ok cs -> (
-        match Miragevpn.handle !client_state ~is_not_taken (`Data cs) with
+        match Miragevpn.handle !client_state (`Data cs) with
         | Error msg ->
             Logs.err (fun m ->
                 m "%a internal miragevpn error %a" pp_dst dst Miragevpn.pp_error
@@ -213,10 +211,12 @@ let callback t fd =
 
 let connect config =
   let open Lwt.Infix in
+  let connections = Hashtbl.create 7 in
+  let is_not_taken ip = not (Hashtbl.mem connections ip) in
   let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
   and now = Ptime_clock.now
   and rng = Mirage_crypto_rng.generate in
-  match Miragevpn.server config ts now rng with
+  match Miragevpn.server config ~is_not_taken ts now rng with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "server construction failed %s" msg);
       assert false
@@ -225,7 +225,7 @@ let connect config =
           m "miragevpn server listening on port %d, using %a/%d" port
             Ipaddr.V4.pp (fst ip)
             (Ipaddr.V4.Prefix.bits (snd ip)));
-      let server = { server; ip; connections = IPM.empty } in
+      let server = { server; ip; connections } in
       let fd = Lwt_unix.(socket PF_INET6 SOCK_STREAM 0) in
       Lwt_unix.(setsockopt fd SO_REUSEADDR true);
       Lwt_unix.(setsockopt fd IPV6_ONLY false);
