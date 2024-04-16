@@ -171,18 +171,18 @@ dev-type tun
   Alcotest.(check (result conf_map pmsg))
     "explicit dev and dev-type" (Ok tun0) explicit_tun;
 
-  let custom_name_tap =
+  let custom_name_tun =
     (* here we specify a custom name, which necessitates a [dev-type] *)
     Fmt.str {|%a
-dev-type tap
+dev-type tun
 dev myvlan
 |} Miragevpn.Config.pp minimal_config
     |> parse_noextern_client
   in
   Alcotest.(check (result conf_map pmsg))
     "explicit dev, implicit dev-type"
-    (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tap, Some "myvlan")))
-    custom_name_tap;
+    (Ok (minimal_config |> Miragevpn.Config.add Dev (`Tun, Some "myvlan")))
+    custom_name_tun;
 
   let two_remotes_str =
     Fmt.str "%a" Miragevpn.Config.pp minimal_config

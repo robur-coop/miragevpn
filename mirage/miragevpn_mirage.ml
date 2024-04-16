@@ -51,19 +51,18 @@ module Server
     (S : Tcpip.Stack.V4V6) =
 struct
   module TCP = S.TCP
-  module IPM = Map.Make (Ipaddr.V4)
 
   type t = {
     server : Miragevpn.server;
     ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t;
-    mutable connections : (TCP.flow * Miragevpn.t ref) IPM.t;
+    connections : (Ipaddr.V4.t, TCP.flow * Miragevpn.t ref) Hashtbl.t;
   }
 
   let now () = Ptime.v (P.now_d_ps ())
   let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
 
   let write t dst cs =
-    match IPM.find_opt dst t.connections with
+    match Hashtbl.find_opt t.connections dst with
     | None ->
         Log.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst);
         Lwt.return_unit
@@ -81,7 +80,7 @@ struct
                 Log.err (fun m ->
                     m "%a tcp write failed %a" Ipaddr.V4.pp dst
                       TCP.pp_write_error e);
-                t.connections <- IPM.remove dst t.connections
+                Hashtbl.remove t.connections dst
             | Ok () -> ()))
 
   let handle_payload t dst _peer data =
@@ -142,7 +141,6 @@ struct
         (ip, `Continue)
 
   let callback t flow =
-    let is_not_taken ip = not (IPM.mem ip t.connections) in
     let client_state = ref (Miragevpn.new_connection t.server) in
     let dst = TCP.dst flow in
     Log.info (fun m -> m "%a new connection" pp_dst dst);
@@ -154,10 +152,8 @@ struct
             Log.info (fun m ->
                 m "%a removing ip %a from connections" pp_dst dst Ipaddr.V4.pp
                   ip);
-            t.connections <- IPM.remove ip t.connections
-      and add ip =
-        t.connections <- IPM.add ip (f, client_state) t.connections
-      in
+            Hashtbl.remove t.connections ip
+      and add ip = Hashtbl.replace t.connections ip (f, client_state) in
       TCP.read f >>= function
       | Error e ->
           Log.err (fun m ->
@@ -169,7 +165,7 @@ struct
           rm ();
           Lwt.return_unit
       | Ok (`Data cs) -> (
-          match Miragevpn.handle !client_state ~is_not_taken (`Data cs) with
+          match Miragevpn.handle !client_state (`Data cs) with
           | Error msg ->
               Log.err (fun m ->
                   m "%a internal miragevpn error %a" pp_dst dst
@@ -209,17 +205,17 @@ struct
 
   let rec timer server () =
     (* foreach connection, call handle `Tick and follow instructions! *)
-    IPM.fold
+    Hashtbl.fold
       (fun k (flow, t) acc ->
         acc >>= fun acc ->
         match Miragevpn.handle !t `Tick with
         | Error e ->
             Log.err (fun m -> m "error in timer %a" Miragevpn.pp_error e);
-            Lwt.return acc
+            Lwt.return (k :: acc)
         | Ok (_t', _out, _payloads, Some `Exit) ->
             (* TODO anything to do with "_out" or "_payloads"? *)
             Log.warn (fun m -> m "exiting %a" Ipaddr.V4.pp k);
-            Lwt.return acc
+            Lwt.return (k :: acc)
         | Ok (t', out, payloads, act) -> (
             (* TODO anything to do with "_act"? (apart from exit) *)
             Option.iter
@@ -235,15 +231,17 @@ struct
                 Log.err (fun m ->
                     m "%a TCP write failed %a" Ipaddr.V4.pp k TCP.pp_write_error
                       e);
-                acc
-            | Ok () -> IPM.add k (flow, t) acc))
-      server.connections (Lwt.return IPM.empty)
-    >>= fun connections ->
-    server.connections <- connections;
+                k :: acc
+            | Ok () -> acc))
+      server.connections (Lwt.return [])
+    >>= fun to_remove ->
+    List.iter (Hashtbl.remove server.connections) to_remove;
     T.sleep_ns (Duration.of_sec 1) >>= fun () -> timer server ()
 
   let connect config stack =
-    match Miragevpn.server config M.elapsed_ns now R.generate with
+    let connections = Hashtbl.create 7 in
+    let is_not_taken ip = not (Hashtbl.mem connections ip) in
+    match Miragevpn.server config ~is_not_taken M.elapsed_ns now R.generate with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "server construction failed %s" msg);
         assert false
@@ -252,7 +250,7 @@ struct
             m "miragevpn server listening on port %d, using %a/%d" port
               Ipaddr.V4.pp (fst ip)
               (Ipaddr.V4.Prefix.bits (snd ip)));
-        let server = { server; ip; connections = IPM.empty } in
+        let server = { server; ip; connections } in
         S.TCP.listen (S.tcp stack) ~port (callback server);
         Lwt.async (timer server);
         server

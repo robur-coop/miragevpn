@@ -123,9 +123,11 @@ let established cipher =
   in
 
   let initial_server =
+    let is_not_taken _ = true in
     let server =
       match
-        Miragevpn.server minimal_server_config ts now Mirage_crypto_rng.generate
+        Miragevpn.server minimal_server_config ~is_not_taken ts now
+          Mirage_crypto_rng.generate
       with
       | Ok (s, _, _) -> s
       | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
@@ -133,12 +135,11 @@ let established cipher =
     Miragevpn.new_connection server
   in
 
-  let is_not_taken _ = true in
   let drain role state inputs =
     let state, outs =
       List.fold_left
         (fun (state, outs) input ->
-          match Miragevpn.handle ~is_not_taken state (`Data input) with
+          match Miragevpn.handle state (`Data input) with
           | Ok (state, outs', _application_data, None) -> (state, outs' :: outs)
           | Ok (state, outs', _application_data, Some _act) ->
               (* TODO: add argument whether an action is expected, and fail on
