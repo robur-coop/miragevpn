@@ -282,6 +282,11 @@ module Conf_map = struct
     let open Result.Syntax in
     let ensure_mem k err = if mem k t then Ok () else Error err in
     (* let ensure_not k err = if not (mem k t) then Ok () else Error err in *)
+    let* () =
+      match find Dev t with
+      | Some (`Tun, _) | None -> Ok ()
+      | Some (`Tap, _) -> Error (`Msg "'dev-type tap' is not supported")
+    in
     if not (mem Tls_mode t || mem Server t) then
       let* () =
         Result.map_error
@@ -355,7 +360,6 @@ module Conf_map = struct
     Result.map_error
       (fun err -> `Msg ("not a valid client config: " ^ err))
       (let* () = ensure_mem Remote "does not have a remote" in
-       let _todo = ensure_not in
        let* () =
          match (find Tls_mode t, find Secret t) with
          | None, None | Some `Server, _ ->
@@ -2293,6 +2297,12 @@ let merge_push_reply client (push_config : string) =
   try Ok (merge { f } client push_config)
   with Invalid_argument msg -> Error (`Msg msg)
 
+let dev_type_to_string t =
+  match Conf_map.find Dev t with
+  | Some (`Tun, _) -> "dev-type tun,"
+  | Some (`Tap, _) -> "dev-type tap,"
+  | None -> ""
+
 let client_generate_connect_options t =
   (* This uses a different format, notably config directives are separated by
      commas instead of newlines.
@@ -2323,21 +2333,17 @@ let client_generate_connect_options t =
       t
   in
   let serialized =
-    Fmt.str "V4,tls-client,%s%a"
-      (match Conf_map.find Dev t with
-      | Some (`Tun, _) -> "dev-type tun,"
-      | Some (`Tap, _) -> "dev-type tap,"
-      | _ -> "")
+    Fmt.str "V4,tls-client,%s%a" (dev_type_to_string t)
       (Conf_map.pp_with_sep ~sep:(Fmt.any ","))
       excerpt
   in
-  Log.warn (fun m ->
-      m "serialized connect options, probably incorrect: %S" serialized);
   Ok serialized
 
-let server_generate_connect_options _config =
-  "V4,dev-type tun,link-mtu 1559,tun-mtu 1500,proto TCPv4_SERVER,keydir 0,auth \
-   SHA1,keysize 256,tls-auth,key-method 2,tls-server"
+let server_generate_connect_options config =
+  Fmt.str
+    "V4,%s,link-mtu 1559,tun-mtu 1500,proto TCPv4_SERVER,keydir 0,auth \
+     SHA1,keysize 256,tls-auth,key-method 2,tls-server"
+    (dev_type_to_string config)
 
 let client_merge_server_config client server_str =
   (* TODO: Mutate client config,
