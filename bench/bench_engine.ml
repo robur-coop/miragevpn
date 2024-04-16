@@ -113,7 +113,9 @@ let established cipher =
                              _application,
                              None ) =
     let pre_connect =
-      match Miragevpn.client minimal_config ts now Mirage_crypto_rng.generate with
+      match
+        Miragevpn.client minimal_config ts now Mirage_crypto_rng.generate
+      with
       | Ok (s, _) -> s
       | Error (`Msg e) -> Format.ksprintf failwith "Client config error: %s" e
     in
@@ -196,8 +198,7 @@ let test_client =
   Test.make_grouped ~name:"Client"
     (List.map
        (fun cipher ->
-         Test.make_grouped
-           ~name:(cipher_to_string cipher)
+         Test.make_grouped ~name:(cipher_to_string cipher)
            [ test_send_data cipher; test_receive_data cipher ])
        ciphers)
 
