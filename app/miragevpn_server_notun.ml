@@ -233,12 +233,15 @@ let connect config =
         Lwt_unix.ADDR_INET
           (Ipaddr_unix.V6.to_inet_addr Ipaddr.V6.unspecified, port)
       in
-      Lwt_unix.bind fd addr >|= fun () ->
+      Lwt_unix.bind fd addr >>= fun () ->
       Lwt_unix.listen fd 10;
-      Lwt.async (fun () ->
-          Lwt_unix.accept fd >>= fun (cfd, _) -> callback server cfd);
       Lwt.async (timer server);
-      server
+      let rec accept () =
+        Lwt_unix.accept fd >>= fun (cfd, _) ->
+        Lwt.async (fun () -> callback server cfd);
+        accept ()
+      in
+      accept ()
 
 let parse_config filename =
   Lwt.return
@@ -250,16 +253,12 @@ let parse_config filename =
   | Error _ as e -> e
 
 let jump _ filename =
-  let open Lwt.Infix in
   Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
   Lwt_main.run
     (let* config = parse_config filename in
      match config with
      | Error (`Msg s) -> Lwt.return (Error (`Msg ("config parser: " ^ s)))
-     | Ok config ->
-         connect config >>= fun _server ->
-         let task, _u = Lwt.task () in
-         task)
+     | Ok config -> connect config)
 
 open Cmdliner
 

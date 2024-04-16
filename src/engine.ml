@@ -537,7 +537,28 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
 
 let kex_server config session (my_key_material : my_key_material) tls data =
   let open Result.Syntax in
-  (* TODO verify username + password, respect incoming data, including NCP *)
+  (* TODO verify username + password, respect incoming data *)
+  let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
+  let* cipher =
+    let client_ciphers =
+      match their_tls_data.peer_info with
+      | Some pi -> (
+          match List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") pi with
+          | Some ciphers ->
+              List.filter_map Config.aead_cipher_of_string
+                (String.split_on_char ':'
+                   (String.sub ciphers 11 (String.length ciphers - 11)))
+          | None ->
+              if List.mem "IV_NCP=2" pi then [ `AES_128_GCM; `AES_256_GCM ]
+              else [])
+      | None -> []
+    in
+    List.find_opt
+      (fun candidate -> List.mem candidate client_ciphers)
+      (Config.get Config.Data_ciphers config)
+    |> Option.to_result ~none:(`Msg "No shared ciphers")
+  in
+  let config = Config.add Cipher (cipher :> Config.cipher) config in
   let options = Config.server_generate_connect_options config in
   let td =
     {
@@ -549,7 +570,6 @@ let kex_server config session (my_key_material : my_key_material) tls data =
       peer_info = None;
     }
   in
-  let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
   let* tls', payload =
     Option.to_result ~none:(`Msg "not yet established")
       (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
@@ -557,7 +577,29 @@ let kex_server config session (my_key_material : my_key_material) tls data =
   let+ state =
     match Config.find Ifconfig config with
     | None ->
-        Ok (Push_request_sent (tls', my_key_material, their_tls_data), None)
+        let requested_push =
+          Option.value ~default:false
+            (Option.map
+               (fun data ->
+                 match
+                   List.find_opt (String.starts_with ~prefix:"IV_PROTO=") data
+                 with
+                 | Some iv_proto ->
+                     int_of_string_opt
+                       (String.sub iv_proto 9 (String.length iv_proto - 9))
+                     |> Option.fold ~none:false
+                          ~some:
+                            (Packet.Iv_proto.contains
+                               Packet.Iv_proto.Request_push)
+                 | None -> false)
+               their_tls_data.peer_info)
+        in
+        if requested_push then
+          Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
+        else
+          Ok
+            (`State
+              (Push_request_sent (tls', my_key_material, their_tls_data), None))
     | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
         let ip_config =
           let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
@@ -572,11 +614,11 @@ let kex_server config session (my_key_material : my_key_material) tls data =
           kdf ~tls_ekm session cipher hmac_algorithm my_key_material
             their_tls_data
         in
-        Ok (Established keys_ctx, Some ip_config)
+        Ok (`State (Established keys_ctx, Some ip_config))
     | _ ->
         Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
   in
-  (state, payload)
+  (state, config, payload)
 
 let push_request tls =
   Option.to_result
@@ -790,6 +832,70 @@ let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
   let transport = { transport with out_packets } in
   (session, { channel with transport }, out)
 
+let server_send_push_reply config is_not_taken tls session key tls_data =
+  let open Result.Syntax in
+  (* send push reply, register IP etc. *)
+  let server_ip = fst (server_ip config) in
+  let* ip, cidr = next_free_ip config is_not_taken in
+  let ping =
+    match Config.get Ping_interval config with
+    | `Not_configured -> 10
+    | `Seconds n -> n
+  and restart =
+    match Config.get Ping_timeout config with
+    | `Restart n -> "ping-restart " ^ string_of_int (n / 2)
+    | `Exit n -> "ping-exit " ^ string_of_int (n / 2)
+  in
+  let topology =
+    (* Since OpenVPN 2.7 the default topology is subnet *)
+    Config.find Topology config |> Option.value ~default:`Subnet
+  in
+  (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
+  let reply_things =
+    [
+      "";
+      (* need an initial , after PUSH_REPLY *)
+      (* XXX(reynir): route-gateway assumes --topology subnet *)
+      "route-gateway " ^ Ipaddr.V4.to_string server_ip;
+      "topology " ^ Config.topology_to_string topology;
+      "ping " ^ string_of_int ping;
+      restart;
+      "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
+      ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
+      (* Important to send cipher as that is how cipher negotiation is communicated *)
+      "cipher " ^ Config.cipher_to_string (Config.get Cipher config);
+    ]
+  in
+  let reply = String.concat "," reply_things in
+  let* tls', out = push_reply tls reply in
+  let cipher = Config.get Cipher config
+  and hmac_algorithm = Config.get Auth config
+  and tls_ekm =
+    Option.map (fun `Tls_ekm -> tls') (Config.find Key_derivation config)
+  in
+  let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
+  let channel_st = Established keys in
+  let ip_config = { cidr; gateway = server_ip } in
+  let config' =
+    Config.add Ifconfig
+      (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
+      config
+  in
+  Ok (Some ip_config, config', channel_st, [ (`Control, out) ])
+
+let server_handle_tls_data config is_not_taken session keys tls d =
+  let open Result.Syntax in
+  let* next, config, out = kex_server config session keys tls d in
+  match next with
+  | `Send_push_reply (tls', key, tls_data) ->
+      let* ip_config, config, channel_st, out' =
+        server_send_push_reply config is_not_taken tls' session key tls_data
+      in
+      Ok (ip_config, config, channel_st, (`Control, out) :: out')
+  | `State (channel_st, ip_config) ->
+      (* keys established, move forward to "expect push request (reply with push reply)" *)
+      Ok (ip_config, config, channel_st, [ (`Control, out) ])
+
 let incoming_control_server is_not_taken config rng session channel _now _ts
     _key op data =
   match (channel.channel_st, op) with
@@ -814,10 +920,9 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         | Some _ -> `Reset
       in
       Ok (None, config, session, channel, [ (control_typ, Cstruct.empty) ])
-  | TLS_handshake tls, Packet.Control ->
-      (* we reply with ACK + maybe TLS response *)
+  | TLS_handshake tls, Packet.Control -> (
       let open Result.Syntax in
-      let+ tls', tls_response, d = incoming_tls tls data in
+      let* tls', tls_response, d = incoming_tls tls data in
       Log.debug (fun m ->
           m "TLS handshake payload is %a"
             Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
@@ -826,7 +931,6 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       let channel_st =
         if Tls.Engine.handshake_in_progress tls' then TLS_handshake tls'
         else
-          (* this could be generated later, but is done here to accomodate the client state machine *)
           let random1, random2 = (rng 32, rng 32)
           and pre_master = Cstruct.empty in
           TLS_established (tls', { State.pre_master; random1; random2 })
@@ -834,21 +938,23 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       let out =
         Option.to_list (Option.map (fun c -> (`Control, c)) tls_response)
       in
-      (None, config, session, { channel with channel_st }, out)
+      match (channel_st, d) with
+      | TLS_established (tls', keys), Some d ->
+          let* ip_config, config, channel_st, out' =
+            server_handle_tls_data config is_not_taken session keys tls' d
+          in
+          Ok
+            (ip_config, config, session, { channel with channel_st }, out @ out')
+      | _ -> Ok (None, config, session, { channel with channel_st }, out))
   | TLS_established (tls, keys), Packet.Control -> (
       let open Result.Syntax in
       let* tls', d = incoming_tls_without_reply tls data in
       match d with
       | Some d ->
-          let+ (channel_st, ip_config), out =
-            kex_server config session keys tls' d
+          let* ip_config, config, channel_st, out =
+            server_handle_tls_data config is_not_taken session keys tls' d
           in
-          (* keys established, move forward to "expect push request (reply with push reply)" *)
-          ( ip_config,
-            config,
-            session,
-            { channel with channel_st },
-            [ (`Control, out) ] )
+          Ok (ip_config, config, session, { channel with channel_st }, out)
       | None ->
           let channel_st = TLS_established (tls', keys) in
           Ok (None, config, session, { channel with channel_st }, []))
@@ -858,52 +964,10 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       let* tls', d = incoming_tls_without_reply tls data in
       let* data = Option.to_result ~none:(`Msg "expected push request") d in
       if Cstruct.(equal Packet.push_request data) then
-        (* send push reply, register IP etc. *)
-        let server_ip = fst (server_ip config) in
-        let* ip, cidr = next_free_ip config is_not_taken in
-        let ping =
-          match Config.get Ping_interval config with
-          | `Not_configured -> 10
-          | `Seconds n -> n
-        and restart =
-          match Config.get Ping_timeout config with
-          | `Restart n -> "ping-restart " ^ string_of_int (n / 2)
-          | `Exit n -> "ping-exit " ^ string_of_int (n / 2)
+        let* ip_config, config, channel_st, out =
+          server_send_push_reply config is_not_taken tls' session key tls_data
         in
-        (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
-        let reply_things =
-          [
-            "";
-            (* need an initial , after PUSH_REPLY *)
-            "route-gateway " ^ Ipaddr.V4.to_string server_ip;
-            "topology subnet";
-            "ping " ^ string_of_int ping;
-            restart;
-            "ifconfig " ^ Ipaddr.V4.to_string ip ^ " "
-            ^ Ipaddr.V4.to_string (Ipaddr.V4.Prefix.netmask cidr);
-          ]
-        in
-        let reply = String.concat "," reply_things in
-        let* tls'', out = push_reply tls' reply in
-        let cipher = Config.get Cipher config
-        and hmac_algorithm = Config.get Auth config
-        and tls_ekm =
-          Option.map (fun `Tls_ekm -> tls'') (Config.find Key_derivation config)
-        in
-        let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
-        let channel_st = Established keys in
-        let ip_config = { cidr; gateway = server_ip } in
-        let config' =
-          Config.add Ifconfig
-            (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
-            config
-        in
-        Ok
-          ( Some ip_config,
-            config',
-            session,
-            { channel with channel_st },
-            [ (`Control, out) ] )
+        Ok (ip_config, config, session, { channel with channel_st }, out)
       else Error (`Msg "expected push request")
   | _, _ -> Error (`No_transition (channel, op, data))
 
