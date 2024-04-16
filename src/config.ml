@@ -327,7 +327,20 @@ module Conf_map = struct
     let* () = is_valid_config t in
     Result.map_error
       (fun err -> `Msg ("not a valid server config: " ^ err))
-      (let* () = ensure_mem Bind "does not have a bind" in
+      (let* () = ensure_mem Bind "does not contain 'bind'" in
+       let* () =
+         ensure_mem Ping_interval
+           "does not contain 'ping-interval' (or 'keepalive')"
+       in
+       let* () =
+         ensure_mem Ping_timeout
+           "does not contain 'ping-exit' or 'ping-restart' (or 'keepalive')"
+       in
+       let* () =
+         match find Comp_lzo t with
+         | None -> Ok ()
+         | Some () -> Error "config must not contain 'comp-lzo'"
+       in
        let* () =
          match (find Tls_mode t, find Server t) with
          | None, None | Some `Client, _ ->
@@ -340,8 +353,9 @@ module Conf_map = struct
          | Some `Subnet -> Ok ()
          | Some topology ->
              Error
-               ("only topology subnet is supported: topology "
-               ^ topology_to_string topology)
+               ("only 'topology subnet' is supported, but 'topology "
+               ^ topology_to_string topology
+               ^ "' was provided'")
          | None ->
              Log.warn (fun m ->
                  m

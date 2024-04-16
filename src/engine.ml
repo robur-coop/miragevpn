@@ -314,9 +314,6 @@ let server server_config server_ts server_now server_rng =
   let open Result.Syntax in
   let port = Option.value ~default:1194 (Config.find Port server_config) in
   let+ tls_auth = tls_auth server_config in
-  (* TODO validate server configuration to contain stuff we need later *)
-  (* what must be present: server, topology subnet, ping_interval, ping_timeout,
-      ca, tls_cert, tls_key, _no_ comp_lzo *)
   ( { server_config; server_rng; server_ts; server_now; tls_auth },
     server_ip server_config,
     port )
@@ -850,12 +847,11 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
     (* Since OpenVPN 2.7 the default topology is subnet *)
     Config.find Topology config |> Option.value ~default:`Subnet
   in
-  (* PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10,ping-restart 30,ifconfig 10.8.0.3 255.255.255.0 *)
   let reply_things =
     [
       "";
       (* need an initial , after PUSH_REPLY *)
-      (* XXX(reynir): route-gateway assumes --topology subnet *)
+      (* reynir: route-gateway assumes --topology subnet (which we ensure in config.ml) *)
       "route-gateway " ^ Ipaddr.V4.to_string server_ip;
       "topology " ^ Config.topology_to_string topology;
       "ping " ^ string_of_int ping;
