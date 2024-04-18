@@ -820,6 +820,18 @@ let incoming_control_client config rng session channel now op data =
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
       (Some ip_config, config', { channel with channel_st }, [])
+  | Established (tls, keys), Packet.Control ->
+      let open Result.Syntax in
+      let+ tls', d = incoming_tls_without_reply tls data in
+      let () =
+        match d with
+        | Some d ->
+            Log.warn (fun m ->
+                m "Received unknown control message: %S" (Cstruct.to_string d))
+        | None -> ()
+      in
+      (* a bit odd to return [None] ip_config *)
+      (None, config, { channel with channel_st = Established (tls', keys) }, [])
   | _ -> Error (`No_transition (channel, op, data))
 
 let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
