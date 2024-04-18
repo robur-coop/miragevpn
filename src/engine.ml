@@ -608,7 +608,7 @@ let kex_server config session (my_key_material : my_key_material) tls data =
         let cipher = Config.get Cipher config
         and hmac_algorithm = Config.get Auth config
         and tls_ekm =
-          Option.map (fun `Tls_ekm -> tls) (Config.find Key_derivation config)
+          Option.map (fun `Tls_ekm -> tls') (Config.find Key_derivation config)
         in
         let keys_ctx =
           kdf ~tls_ekm session cipher hmac_algorithm my_key_material
@@ -773,7 +773,7 @@ let incoming_control_client config rng session channel now op data =
               and hmac_algorithm = Config.get Auth config
               and tls_ekm =
                 Option.map
-                  (fun `Tls_ekm -> tls)
+                  (fun `Tls_ekm -> tls')
                   (Config.find Key_derivation config)
               in
               let keys =
