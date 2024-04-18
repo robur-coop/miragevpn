@@ -614,7 +614,7 @@ let kex_server config session (my_key_material : my_key_material) tls data =
           kdf ~tls_ekm session cipher hmac_algorithm my_key_material
             their_tls_data
         in
-        Ok (`State (Established keys_ctx, Some ip_config))
+        Ok (`State (Established (tls', keys_ctx), Some ip_config))
     | _ ->
         Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
   in
@@ -780,7 +780,7 @@ let incoming_control_client config rng session channel now op data =
                 kdf ~tls_ekm session cipher hmac_algorithm my_key_material
                   tls_data
               in
-              let channel_st = Established keys in
+              let channel_st = Established (tls', keys) in
               Ok (Some ip_config, config, { channel with channel_st }, tls_out)
           | None ->
               let pull = Config.mem Pull config in
@@ -808,7 +808,7 @@ let incoming_control_client config rng session channel now op data =
   | Push_request_sent (tls, key, tls_data), Packet.Control ->
       let open Result.Syntax in
       Log.debug (fun m -> m "in push request sent");
-      let* _tls', d = incoming_tls_without_reply tls data in
+      let* tls', d = incoming_tls_without_reply tls data in
       let+ config' = maybe_push_reply config d in
       let cipher = Config.get Cipher config'
       and hmac_algorithm = Config.get Auth config'
@@ -816,7 +816,7 @@ let incoming_control_client config rng session channel now op data =
         Option.map (fun `Tls_ekm -> tls) (Config.find Key_derivation config')
       in
       let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
-      let channel_st = Established keys in
+      let channel_st = Established (tls', keys) in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
       (Some ip_config, config', { channel with channel_st }, [])
@@ -873,7 +873,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
     Option.map (fun `Tls_ekm -> tls') (Config.find Key_derivation config)
   in
   let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
-  let channel_st = Established keys in
+  let channel_st = Established (tls', keys) in
   let ip_config = { cidr; gateway = server_ip } in
   let config' =
     Config.add Ifconfig

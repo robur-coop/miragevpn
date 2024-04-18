@@ -67,7 +67,7 @@ type channel_state =
   | TLS_handshake of Tls.Engine.state
   | TLS_established of Tls.Engine.state * my_key_material
   | Push_request_sent of Tls.Engine.state * my_key_material * Packet.tls_data
-  | Established of keys
+  | Established of Tls.Engine.state * keys
 
 let pp_channel_state ppf = function
   | Expect_reset -> Fmt.string ppf "expecting reset"
@@ -104,11 +104,13 @@ let new_channel ?(state = Expect_reset) keyid started =
   }
 
 let keys_opt ch =
-  match ch.channel_st with Established keys -> Some keys | _ -> None
+  match ch.channel_st with Established (_tls, keys) -> Some keys | _ -> None
 
 let set_keys ch keys =
   let channel_st =
-    match ch.channel_st with Established _ -> Established keys | x -> x
+    match ch.channel_st with
+    | Established (tls, _) -> Established (tls, keys)
+    | x -> x
   in
   { ch with channel_st }
 
