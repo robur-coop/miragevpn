@@ -980,6 +980,22 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         in
         Ok (ip_config, config, session, { channel with channel_st }, out)
       else Error (`Msg "expected push request")
+  | Established (tls, keys), Packet.Control ->
+      let open Result.Syntax in
+      let+ tls', d = incoming_tls_without_reply tls data in
+      let () =
+        match d with
+        | Some d ->
+            Log.warn (fun m ->
+                m "Received unknown control message: %S" (Cstruct.to_string d))
+        | None -> ()
+      in
+      (* a bit odd to return [None] ip_config *)
+      ( None,
+        config,
+        session,
+        { channel with channel_st = Established (tls', keys) },
+        [] )
   | _, _ -> Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op
