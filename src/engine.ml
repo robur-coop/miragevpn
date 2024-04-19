@@ -1847,7 +1847,7 @@ let resolve_connect_client t ts s ev =
     (r, next)
   and retry_exceeded r =
     match Config.get Connect_retry_max t.config with
-    | `Times m -> m > r
+    | `Times m -> r >= m
     | `Unlimited -> false
   in
   let next_or_fail t idx retry =
