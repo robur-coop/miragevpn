@@ -167,6 +167,8 @@ let rec established_action proto fd incoming ifconfig tick client actions =
           event
             (established_action proto fd incoming ifconfig)
             tick client actions ev
+      | `Connection_failed as ev ->
+          event connecting_action tick client actions ev
       | #Miragevpn.event as ev ->
           event
             (established_action proto fd incoming ifconfig)
@@ -218,15 +220,19 @@ and connected_action proto fd incoming tick client actions =
   match action with
   | `Suspend ->
       let* ev =
-        Lwt.choose [ (tick :> [ `Tick | `Data of Cstruct.t ] Lwt.t); incoming ]
+        Lwt.choose
+          [
+            (tick :> [ `Tick | `Data of Cstruct.t | `Connection_failed ] Lwt.t);
+            incoming;
+          ]
       in
-      let incoming =
-        match ev with `Data _ -> Common.receive proto fd | _ -> incoming
+      let k =
+        match ev with
+        | `Data _ -> connected_action proto fd (Common.receive proto fd)
+        | `Connection_failed -> connecting_action
+        | _ -> connected_action proto fd incoming
       in
-      event
-        (connected_action proto fd incoming)
-        tick client actions
-        (ev :> Miragevpn.event)
+      event k tick client actions (ev :> Miragevpn.event)
   | `Established ifconfig ->
       Logs.info (fun m ->
           m "Connection established! %a" Miragevpn.pp_ip_config (fst ifconfig));
