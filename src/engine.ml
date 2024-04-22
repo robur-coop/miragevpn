@@ -614,7 +614,8 @@ let kex_server config session (my_key_material : my_key_material) tls data =
           kdf ~tls_ekm session cipher hmac_algorithm my_key_material
             their_tls_data
         in
-        Ok (`State (Established (tls', keys_ctx), Some ip_config))
+        Ok
+          (`State (Established (tls', keys_ctx), Some (`Established ip_config)))
     | _ ->
         Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
   in
@@ -781,7 +782,11 @@ let incoming_control_client config rng session channel now op data =
                   tls_data
               in
               let channel_st = Established (tls', keys) in
-              Ok (Some ip_config, config, { channel with channel_st }, tls_out)
+              Ok
+                ( Some (`Established ip_config),
+                  config,
+                  { channel with channel_st },
+                  tls_out )
           | None ->
               let pull = Config.mem Pull config in
               if pull then
@@ -819,19 +824,36 @@ let incoming_control_client config rng session channel now op data =
       let channel_st = Established (tls', keys) in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
-      (Some ip_config, config', { channel with channel_st }, [])
-  | Established (tls, keys), Packet.Control ->
+      (Some (`Established ip_config), config', { channel with channel_st }, [])
+  | Established (tls, keys), Packet.Control -> (
       let open Result.Syntax in
       let+ tls', d = incoming_tls_without_reply tls data in
-      let () =
-        match d with
-        | Some d ->
-            Log.warn (fun m ->
-                m "Received unknown control message: %S" (Cstruct.to_string d))
-        | None -> ()
-      in
-      (* a bit odd to return [None] ip_config *)
-      (None, config, { channel with channel_st = Established (tls', keys) }, [])
+      match d with
+      | Some d ->
+          let d = Cstruct.to_string d in
+          if
+            String.equal d "RESTART\000"
+            || String.equal d "EXIT\000" || String.equal d "HALT\000"
+          then
+            let () = Log.warn (fun m -> m "Received control message: %S" d) in
+            ( Some `Exit,
+              config,
+              { channel with channel_st = Established (tls', keys) },
+              [] )
+          else
+            let () =
+              Log.warn (fun m -> m "Received unknown control message: %S" d)
+            in
+            ( None,
+              config,
+              { channel with channel_st = Established (tls', keys) },
+              [] )
+      | None ->
+          (* a bit odd to return [None] ip_config *)
+          ( None,
+            config,
+            { channel with channel_st = Established (tls', keys) },
+            [] ))
   | _ -> Error (`No_transition (channel, op, data))
 
 let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
@@ -892,7 +914,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
       (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
       config
   in
-  Ok (Some ip_config, config', channel_st, [ (`Control, out) ])
+  Ok (Some (`Established ip_config), config', channel_st, [ (`Control, out) ])
 
 let server_handle_tls_data config is_not_taken session keys tls d =
   let open Result.Syntax in
@@ -979,18 +1001,35 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         in
         Ok (ip_config, config, { channel with channel_st }, out)
       else Error (`Msg "expected push request")
-  | Established (tls, keys), Packet.Control ->
+  | Established (tls, keys), Packet.Control -> (
       let open Result.Syntax in
       let+ tls', d = incoming_tls_without_reply tls data in
-      let () =
-        match d with
-        | Some d ->
-            Log.warn (fun m ->
-                m "Received unknown control message: %S" (Cstruct.to_string d))
-        | None -> ()
-      in
-      (* a bit odd to return [None] ip_config *)
-      (None, config, { channel with channel_st = Established (tls', keys) }, [])
+      match d with
+      | Some d ->
+          let d = Cstruct.to_string d in
+          if
+            String.equal d "RESTART\000"
+            || String.equal d "EXIT\000" || String.equal d "HALT\000"
+          then
+            let () = Log.warn (fun m -> m "Received control message: %S" d) in
+            ( Some `Exit,
+              config,
+              { channel with channel_st = Established (tls', keys) },
+              [] )
+          else
+            let () =
+              Log.warn (fun m -> m "Received unknown control message: %S" d)
+            in
+            ( None,
+              config,
+              { channel with channel_st = Established (tls', keys) },
+              [] )
+      | None ->
+          (* a bit odd to return [None] ip_config *)
+          ( None,
+            config,
+            { channel with channel_st = Established (tls', keys) },
+            [] ))
   | _, _ -> Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op
@@ -1791,7 +1830,20 @@ let incoming state control_crypto buf =
                       and state = { state with config; session } in
                       match est with
                       | None -> Ok (set_ch state ch, out, payloads, act_opt)
-                      | Some ip_config ->
+                      | Some `Exit ->
+                          let act =
+                            match act_opt with
+                            | None -> Some `Exit
+                            | Some a_old ->
+                                Log.warn (fun m ->
+                                    m
+                                      "Producing another action; ignoring \
+                                       older %a and using newer %a"
+                                      pp_action a_old pp_action `Exit);
+                                Some `Exit
+                          in
+                          Ok (set_ch state ch, out, payloads, act)
+                      | Some (`Established ip_config) ->
                           let state = { state with channel = ch } in
                           let+ state, mtu = transition_to_established state in
                           let est =
