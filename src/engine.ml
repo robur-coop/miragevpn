@@ -1604,11 +1604,9 @@ let send_control_message s data =
             Cstruct.blit_from_string data 0 data' 0 (String.length data);
             Cstruct.set_uint8 data' (String.length data) 0;
             let* tls, out =
-              Option.to_result
-                ~none:
-                  (`Msg
-                    "Tls.send application data failed for control channel \
-                     message")
+              (* reynir: I *think* it only returns [None] when not established
+                 or after write is shutdown. *)
+              Option.to_result ~none:`Not_ready
                 (Tls.Engine.send_application_data tls [ data' ])
             in
             Ok (Established (tls, keys), (`Control, out))

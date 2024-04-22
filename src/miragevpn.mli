@@ -327,7 +327,7 @@ val outgoing : t -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
 
 val send_control_message :
-  t -> string -> (t * Cstruct.t list, [ `Not_ready | `Msg of string ]) result
+  t -> string -> (t * Cstruct.t list, [ `Not_ready ]) result
 (** [send_control_message t message] sends [message] over the control channel. *)
 
 val new_connection : server -> t
