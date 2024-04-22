@@ -1590,6 +1590,44 @@ let wrap_control state control_crypto needs_wkc key transport outs =
   in
   (session, transport, outs)
 
+let send_control_message s data =
+  let open Result.Syntax in
+  match s.control_crypto with
+  | `Static _ ->
+      (* XXX(reynir) :/ *)
+      Error `Not_ready
+  | #control_tls as control_crypto ->
+      let* channel_st, out =
+        match (s.state, s.channel.channel_st) with
+        | (Client Ready | Server Server_ready), Established (tls, keys) ->
+            let data' = Cstruct.create_unsafe (String.length data + 1) in
+            Cstruct.blit_from_string data 0 data' 0 (String.length data);
+            Cstruct.set_uint8 data' (String.length data) 0;
+            let* tls, out =
+              Option.to_result
+                ~none:
+                  (`Msg
+                    "Tls.send application data failed for control channel \
+                     message")
+                (Tls.Engine.send_application_data tls [ data' ])
+            in
+            Ok (Established (tls, keys), (`Control, out))
+        | _, _ ->
+            Log.warn (fun m ->
+                m
+                  "Failed to send control channel message %S on an \
+                   unestablished or unready connection"
+                  data);
+            Error `Not_ready
+      in
+      let key = s.channel.keyid in
+      let session, transport, encs =
+        wrap_control s control_crypto None key s.channel.transport [ out ]
+      in
+      let channel = { s.channel with transport; channel_st } in
+      let s = { s with channel; session } in
+      Ok (s, encs)
+
 let find_channel state key op =
   match channel_of_keyid key state with
   | Some _ as c -> c

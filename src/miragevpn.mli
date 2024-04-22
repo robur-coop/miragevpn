@@ -326,6 +326,10 @@ val outgoing : t -> Cstruct.t -> (t * Cstruct.t, [ `Not_ready ]) result
 (** [outgoing t data] prepares [data] to be sent over the OpenVPN connection.
     If the connection is not ready yet, [`Not_ready] is returned instead. *)
 
+val send_control_message :
+  t -> string -> (t * Cstruct.t list, [ `Not_ready | `Msg of string ]) result
+(** [send_control_message t message] sends [message] over the control channel. *)
+
 val new_connection : server -> t
 (** [new_connection server] is to be called when the server accepted a new
     TCP connection, a state [t] is constructed - which can be used with
