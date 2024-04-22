@@ -930,7 +930,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         | None -> `Reset_server
         | Some _ -> `Reset
       in
-      Ok (None, config, session, channel, [ (control_typ, Cstruct.empty) ])
+      Ok (None, config, channel, [ (control_typ, Cstruct.empty) ])
   | TLS_handshake tls, Packet.Control -> (
       let open Result.Syntax in
       let* tls', tls_response, d = incoming_tls tls data in
@@ -954,9 +954,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
           let* ip_config, config, channel_st, out' =
             server_handle_tls_data config is_not_taken session keys tls' d
           in
-          Ok
-            (ip_config, config, session, { channel with channel_st }, out @ out')
-      | _ -> Ok (None, config, session, { channel with channel_st }, out))
+          Ok (ip_config, config, { channel with channel_st }, out @ out')
+      | _ -> Ok (None, config, { channel with channel_st }, out))
   | TLS_established (tls, keys), Packet.Control -> (
       let open Result.Syntax in
       let* tls', d = incoming_tls_without_reply tls data in
@@ -965,10 +964,10 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
           let* ip_config, config, channel_st, out =
             server_handle_tls_data config is_not_taken session keys tls' d
           in
-          Ok (ip_config, config, session, { channel with channel_st }, out)
+          Ok (ip_config, config, { channel with channel_st }, out)
       | None ->
           let channel_st = TLS_established (tls', keys) in
-          Ok (None, config, session, { channel with channel_st }, []))
+          Ok (None, config, { channel with channel_st }, []))
   | Push_request_sent (tls, key, tls_data), Packet.Control ->
       (* TODO naming: this is actually server_stuff sent, awaiting push request *)
       let open Result.Syntax in
@@ -978,7 +977,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         let* ip_config, config, channel_st, out =
           server_send_push_reply config is_not_taken tls' session key tls_data
         in
-        Ok (ip_config, config, session, { channel with channel_st }, out)
+        Ok (ip_config, config, { channel with channel_st }, out)
       else Error (`Msg "expected push request")
   | Established (tls, keys), Packet.Control ->
       let open Result.Syntax in
@@ -991,11 +990,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         | None -> ()
       in
       (* a bit odd to return [None] ip_config *)
-      ( None,
-        config,
-        session,
-        { channel with channel_st = Established (tls', keys) },
-        [] )
+      (None, config, { channel with channel_st = Established (tls', keys) }, [])
   | _, _ -> Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op
@@ -1004,12 +999,7 @@ let incoming_control is_not_taken config rng state session channel now ts key op
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
   match state with
-  | Client _ ->
-      let open Result.Syntax in
-      let+ est, config', ch'', outs =
-        incoming_control_client config rng session channel now op data
-      in
-      (est, config', session, ch'', outs)
+  | Client _ -> incoming_control_client config rng session channel now op data
   | Server _ ->
       incoming_control_server is_not_taken config rng session channel now ts key
         op data
@@ -1776,7 +1766,7 @@ let incoming state control_crypto buf =
                   match p with
                   | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
                   | `Control (_, (_, _, data)) -> (
-                      let* est, config, session, ch, out' =
+                      let* est, config, ch, out' =
                         incoming_control state.is_not_taken state.config
                           state.rng state.state state.session ch (state.now ())
                           (state.ts ()) key op data
