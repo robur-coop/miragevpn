@@ -558,7 +558,25 @@ let kex_server config session (my_key_material : my_key_material) tls data =
       (Config.get Config.Data_ciphers config)
     |> Option.to_result ~none:(`Msg "No shared ciphers")
   in
+  let iv_proto =
+    let ( let* ) = Option.bind in
+    let prefix = "IV_PROTO=" in
+    let* peer_info = their_tls_data.peer_info in
+    let* iv_proto_s = List.find_opt (String.starts_with ~prefix) peer_info in
+    let v =
+      String.sub iv_proto_s (String.length prefix)
+        (String.length iv_proto_s - String.length prefix)
+    in
+    int_of_string_opt v
+  in
   let config = Config.add Cipher (cipher :> Config.cipher) config in
+  let config =
+    if
+      Option.fold iv_proto ~none:false
+        ~some:Packet.Iv_proto.(contains Tls_key_export)
+    then Config.add Key_derivation `Tls_ekm config
+    else config
+  in
   let options = Config.server_generate_connect_options config in
   let td =
     {
@@ -578,21 +596,8 @@ let kex_server config session (my_key_material : my_key_material) tls data =
     match Config.find Ifconfig config with
     | None ->
         let requested_push =
-          Option.value ~default:false
-            (Option.map
-               (fun data ->
-                 match
-                   List.find_opt (String.starts_with ~prefix:"IV_PROTO=") data
-                 with
-                 | Some iv_proto ->
-                     int_of_string_opt
-                       (String.sub iv_proto 9 (String.length iv_proto - 9))
-                     |> Option.fold ~none:false
-                          ~some:
-                            (Packet.Iv_proto.contains
-                               Packet.Iv_proto.Request_push)
-                 | None -> false)
-               their_tls_data.peer_info)
+          Option.fold iv_proto ~none:false
+            ~some:Packet.Iv_proto.(contains Request_push)
         in
         if requested_push then
           Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
@@ -898,6 +903,9 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
       (* Important to send cipher as that is how cipher negotiation is communicated *)
       "cipher " ^ Config.cipher_to_string (Config.get Cipher config);
     ]
+    @
+    if Config.mem Key_derivation config then [ "key-derivation tls-ekm" ]
+    else []
   in
   let reply = String.concat "," reply_things in
   let* tls', out = push_reply tls reply in
