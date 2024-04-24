@@ -44,14 +44,18 @@ let transmit proto fd data =
           let+ () = safe_close fd in
           Error (`Msg (Fmt.str "UDP write error %a" Fmt.exn exn)))
 
-let receive _proto fd =
+let receive proto fd =
   let buf = Cstruct.create_unsafe 2048 in
   let* r = Lwt_result.catch (fun () -> Lwt_cstruct.recvfrom fd buf []) in
-  match r with
-  | Ok (len, _) ->
+  match (r, proto) with
+  | Ok (0, _), `Tcp ->
+      Logs.debug (fun m -> m "received end of file");
+      let* () = safe_close fd in
+      Lwt.return `Connection_failed
+  | Ok (len, _), _ ->
       Logs.debug (fun m -> m "received %d bytes" len);
       Lwt.return (`Data (Cstruct.sub buf 0 len))
-  | Error exn ->
+  | Error exn, _ ->
       let* () = safe_close fd in
       (* XXX: emit `Connection_failed?! *)
       Logs.err (fun m -> m "Receive error %a" Fmt.exn exn);

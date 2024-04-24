@@ -666,9 +666,13 @@ let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
 let push_reply = Cstruct.of_string "PUSH_REPLY"
 
 module Iv_proto = struct
-  type t = Request_push | Tls_key_export
+  type t = Request_push | Tls_key_export | Use_cc_exit_notify
 
-  let bit = function Request_push -> 2 | Tls_key_export -> 3
+  let bit = function
+    | Request_push -> 2
+    | Tls_key_export -> 3
+    | Use_cc_exit_notify -> 6
+
   let byte xs = List.fold_left (fun b x -> b lor (1 lsl bit x)) 0 xs
   let contains flag v = v land (1 lsl bit flag) <> 0
 end
