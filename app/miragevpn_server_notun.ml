@@ -159,7 +159,7 @@ let callback t fd =
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "%a error %s while reading" pp_dst dst msg);
         rm ();
-        Lwt.return_unit
+        Common.safe_close fd
     | Ok cs -> (
         match Miragevpn.handle !client_state (`Data cs) with
         | Error msg ->
@@ -167,7 +167,7 @@ let callback t fd =
                 m "%a internal miragevpn error %a" pp_dst dst Miragevpn.pp_error
                   msg);
             rm ();
-            Lwt.return_unit
+            Common.safe_close fd
         | Ok (s', out, payloads, action) -> (
             client_state := s';
             let ip, continue_or_stop =
@@ -201,10 +201,10 @@ let callback t fd =
             >>= function
             | Error () ->
                 rm ();
-                Lwt.return_unit
+                Common.safe_close fd
             | Ok () -> (
                 match continue_or_stop with
-                | `Stop -> Lwt.return_unit
+                | `Stop -> Common.safe_close fd
                 | `Continue -> read ?ip fd)))
   in
   read fd

@@ -159,11 +159,11 @@ struct
           Log.err (fun m ->
               m "%a error %a while reading" pp_dst dst TCP.pp_error e);
           rm ();
-          Lwt.return_unit
+          TCP.close flow
       | Ok `Eof ->
           Log.warn (fun m -> m "%a eof" pp_dst dst);
           rm ();
-          Lwt.return_unit
+          TCP.close flow
       | Ok (`Data cs) -> (
           match Miragevpn.handle !client_state (`Data cs) with
           | Error msg ->
@@ -171,7 +171,7 @@ struct
                   m "%a internal miragevpn error %a" pp_dst dst
                     Miragevpn.pp_error msg);
               rm ();
-              Lwt.return_unit
+              TCP.close flow
           | Ok (s', out, payloads, action) -> (
               client_state := s';
               let ip, continue_or_stop =
@@ -195,10 +195,10 @@ struct
                   Log.err (fun m ->
                       m "%a tcp write failed %a" pp_dst dst TCP.pp_write_error e);
                   rm ();
-                  Lwt.return_unit
+                  TCP.close flow
               | Ok () -> (
                   match continue_or_stop with
-                  | `Stop -> Lwt.return_unit
+                  | `Stop -> TCP.close flow
                   | `Continue -> read ?ip f)))
     in
     read flow
