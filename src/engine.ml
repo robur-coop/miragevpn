@@ -374,6 +374,7 @@ let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
   let keys =
     match tls_ekm with
     | None ->
+        Log.debug (fun m -> m "Using old PRF style key derivation");
         let ( pre_master,
               client_random,
               server_random,
@@ -403,6 +404,7 @@ let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
           ~client_random:client_random' ~server_random:server_random' ~sids
           length
     | Some tls ->
+        Log.debug (fun m -> m "Using new TLS-EKM style key derivation");
         let epoch = Result.get_ok (Tls.Engine.epoch tls) in
         Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-datakeys" length
   in
@@ -455,7 +457,7 @@ let maybe_kex_client rng config tls =
       let iv_proto =
         Packet.Iv_proto.(
           (* See issue 181, doesn't reliably work on debian [Tls_key_export ::]*)
-          if pull then [ Request_push ] else [])
+          Use_cc_exit_notify :: (if pull then [ Request_push ] else []))
       in
       Option.map
         (fun pi ->
@@ -535,6 +537,14 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
   in
   { my_replay_id = 1l; their_replay_id = 1l; keys }
 
+let tls_ekm tls config =
+  match
+    (Config.find Key_derivation config, Config.find Protocol_flags config)
+  with
+  | Some `Tls_ekm, _ -> Some tls
+  | None, Some flags -> if List.mem `Tls_ekm flags then Some tls else None
+  | None, None -> None
+
 let kex_server config session (my_key_material : my_key_material) tls data =
   let open Result.Syntax in
   (* TODO verify username + password, respect incoming data *)
@@ -571,10 +581,19 @@ let kex_server config session (my_key_material : my_key_material) tls data =
   in
   let config = Config.add Cipher (cipher :> Config.cipher) config in
   let config =
-    if
+    let supports_tls_ekm =
       Option.fold iv_proto ~none:false
         ~some:Packet.Iv_proto.(contains Tls_key_export)
-    then Config.add Key_derivation `Tls_ekm config
+    in
+    let config =
+      if
+        supports_tls_ekm
+        && Option.fold iv_proto ~none:false
+             ~some:Packet.Iv_proto.(contains Use_cc_exit_notify)
+      then Config.add_protocol_flag `Tls_ekm config
+      else config
+    in
+    if supports_tls_ekm then Config.add Key_derivation `Tls_ekm config
     else config
   in
   let options = Config.server_generate_connect_options config in
@@ -612,9 +631,7 @@ let kex_server config session (my_key_material : my_key_material) tls data =
         in
         let cipher = Config.get Cipher config
         and hmac_algorithm = Config.get Auth config
-        and tls_ekm =
-          Option.map (fun `Tls_ekm -> tls') (Config.find Key_derivation config)
-        in
+        and tls_ekm = tls_ekm tls' config in
         let keys_ctx =
           kdf ~tls_ekm session cipher hmac_algorithm my_key_material
             their_tls_data
@@ -777,11 +794,7 @@ let incoming_control_client config rng session channel now op data =
               let ip_config = ip_from_config config in
               let cipher = Config.get Cipher config
               and hmac_algorithm = Config.get Auth config
-              and tls_ekm =
-                Option.map
-                  (fun `Tls_ekm -> tls')
-                  (Config.find Key_derivation config)
-              in
+              and tls_ekm = tls_ekm tls' config in
               let keys =
                 kdf ~tls_ekm session cipher hmac_algorithm my_key_material
                   tls_data
@@ -822,9 +835,7 @@ let incoming_control_client config rng session channel now op data =
       let+ config' = maybe_push_reply config d in
       let cipher = Config.get Cipher config'
       and hmac_algorithm = Config.get Auth config'
-      and tls_ekm =
-        Option.map (fun `Tls_ekm -> tls) (Config.find Key_derivation config')
-      in
+      and tls_ekm = tls_ekm tls config' in
       let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
       let channel_st = Established (tls', keys) in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
@@ -903,17 +914,19 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
       (* Important to send cipher as that is how cipher negotiation is communicated *)
       "cipher " ^ Config.cipher_to_string (Config.get Cipher config);
     ]
-    @
-    if Config.mem Key_derivation config then [ "key-derivation tls-ekm" ]
-    else []
+    (* XXX(reynir): here we assume the binding for [Key_derivation] is only ever [`Tls_ekm] *)
+    @ (if Config.mem Key_derivation config then [ "key-derivation tls-ekm" ]
+       else [])
+    @ (Option.to_list (Config.find Protocol_flags config)
+      |> List.map (fun flags ->
+             Fmt.str "%a" (Config.pp_b ?sep:None)
+               (Config.Conf_map.B (Protocol_flags, flags))))
   in
   let reply = String.concat "," reply_things in
   let* tls', out = push_reply tls reply in
   let cipher = Config.get Cipher config
   and hmac_algorithm = Config.get Auth config
-  and tls_ekm =
-    Option.map (fun `Tls_ekm -> tls') (Config.find Key_derivation config)
-  in
+  and tls_ekm = tls_ekm tls' config in
   let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
   let channel_st = Established (tls', keys) in
   let ip_config = { cidr; gateway = server_ip } in
