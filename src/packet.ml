@@ -671,7 +671,7 @@ module Iv_proto = struct
   let bit = function
     | Request_push -> 2
     | Tls_key_export -> 3
-    | Use_cc_exit_notify -> 6
+    | Use_cc_exit_notify -> 7
 
   let byte xs = List.fold_left (fun b x -> b lor (1 lsl bit x)) 0 xs
   let contains flag v = v land (1 lsl bit flag) <> 0
