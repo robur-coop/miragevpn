@@ -547,6 +547,9 @@ let pp_tls_data ppf t =
 
 let key_method = 0x02
 
+(* For some reason OpenVPN only looks at the lower half of the byte *)
+let key_method_mask = 0x0f
+
 (* strings are
    (a) length-prefixed (2 bytes, big endian);
    (b) terminated with 0 byte;
@@ -615,7 +618,7 @@ let decode_tls_data ?(with_premaster = false) buf =
   in
   let* () =
     guard
-      (Cstruct.get_uint8 buf 4 = key_method)
+      (Cstruct.get_uint8 buf 4 land key_method_mask = key_method)
       (`Malformed "tls data key_method wrong")
   in
   let pre_master = Cstruct.sub buf pre_master_start pre_master_len in
