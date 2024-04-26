@@ -2372,8 +2372,6 @@ let client_generate_connect_options t =
   (* Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,\
      keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,\
      key-method 2" *)
-  let open Result.Syntax in
-  let* () = Conf_map.is_valid_client_config t in
   let excerpt =
     Conf_map.filter
       (function
@@ -2398,7 +2396,7 @@ let client_generate_connect_options t =
       (Conf_map.pp_with_sep ~sep:(Fmt.any ","))
       excerpt
   in
-  Ok serialized
+  serialized
 
 let server_generate_connect_options config =
   Fmt.str

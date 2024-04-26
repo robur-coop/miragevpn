@@ -178,6 +178,7 @@ let tls_crypt_v2 config =
 let client ?pkcs12_password config ts now rng =
   let open Result.Syntax in
   let current_ts = ts () in
+  let* () = Config.is_valid_client_config config in
   let config =
     match Config.get Remote_random config with
     | exception Not_found -> config
@@ -314,6 +315,7 @@ let client ?pkcs12_password config ts now rng =
 
 let server server_config ~is_not_taken server_ts server_now server_rng =
   let open Result.Syntax in
+  let* () = Config.is_valid_server_config server_config in
   let port = Option.value ~default:1194 (Config.find Port server_config) in
   let+ tls_auth = tls_auth server_config in
   ( { server_config; is_not_taken; server_rng; server_ts; server_now; tls_auth },
@@ -438,7 +440,7 @@ let maybe_kex_client rng config tls =
   if Tls.Engine.handshake_in_progress tls then Ok (TLS_handshake tls, None)
   else
     let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
-    let* options = Config.client_generate_connect_options config in
+    let options = Config.client_generate_connect_options config in
     let pull = Config.mem Pull config in
     let user_pass = Config.find Auth_user_pass config in
     let peer_info =

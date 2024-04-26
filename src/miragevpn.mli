@@ -217,11 +217,6 @@ module Config : sig
   val eq : eq
   (** [eq] is an implementation of [cmp] for use with [{!equal} cmp t t2] *)
 
-  val client_generate_connect_options :
-    t -> (string, [> `Msg of string ]) result
-  (** Exports the excerpts from the client configuration sent to the server
-      when the client initially connects. *)
-
   val client_merge_server_config :
     t -> string -> (t, [> `Msg of string ]) result
   (** Apply config excerpt from server received upon initial connection.
