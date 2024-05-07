@@ -584,8 +584,10 @@ let kex_server config session (my_key_material : my_key_material) tls data =
   let config = Config.add Cipher (cipher :> Config.cipher) config in
   let config =
     let supports_tls_ekm =
-      Option.fold iv_proto ~none:false
-        ~some:Packet.Iv_proto.(contains Tls_key_export)
+      (* See issue 181, doesn't work with TLS 1.3 *)
+      false
+      && Option.fold iv_proto ~none:false
+           ~some:Packet.Iv_proto.(contains Tls_key_export)
     in
     let config =
       if
