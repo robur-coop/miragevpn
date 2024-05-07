@@ -139,6 +139,20 @@ let topology_to_string = function
   | `P2p -> "p2p"
   | `Subnet -> "subnet"
 
+module Protocol_flag = struct
+  (* Known protocol flags *)
+  type t = [ `Cc_exit | `Tls_ekm ]
+
+  let to_string = function `Cc_exit -> "cc-exit" | `Tls_ekm -> "tls-ekm"
+
+  let of_string = function
+    | "cc-exit" -> Some `Cc_exit
+    | "tls-ekm" -> Some `Tls_ekm
+    | _ -> None
+
+  let compare : t -> t -> _ = compare
+end
+
 module Conf_map = struct
   type flag = unit
 
@@ -202,6 +216,7 @@ module Conf_map = struct
           * [ `Udp | `Tcp of [ `Server | `Client ] option ])
           k
       (* see socket.c:static const struct proto_names proto_names[] *)
+    | Protocol_flags : Protocol_flag.t list k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]
@@ -301,6 +316,10 @@ module Conf_map = struct
         (`Msg
           "While --ca and --peer-fingerprint are not mutually exclusive the \
            semantics are unclear to us and thus not implemented")
+    else if mem Key_derivation t then
+      Error (`Msg "The --key-derivation option is reserved for push replies")
+    else if mem Protocol_flags t then
+      Error (`Msg "The --protocol-flags option is reserved for push replies")
     else Ok ()
 
   let cert_key_or_pkcs12 t =
@@ -567,6 +586,12 @@ module Conf_map = struct
           | `Tcp (Some `Client) -> "-client"
           | `Tcp (Some `Server) -> "-server"
           | `Tcp None | `Udp -> "")
+    | Protocol_flags, flags ->
+        p () "protocol-flags%a"
+          Fmt.(
+            list ~sep:nop
+              (append (any " ") (of_to_string Protocol_flag.to_string)))
+          flags
     | Pull, () -> p () "pull"
     | Remote, lst ->
         p () "%a"
@@ -683,6 +708,10 @@ module Conf_map = struct
     Fmt.(pf ppf "%a" (list ~sep pp_b) (bindings minimized_t))
 
   let pp ppf t = pp_with_sep ppf t
+
+  let add_protocol_flag flag t =
+    let flags = Option.value ~default:[] (find Protocol_flags t) in
+    add Protocol_flags (flag :: flags) t
 end
 
 module Defaults = struct
@@ -889,6 +918,22 @@ let a_proto_force =
   string "proto-force" *> a_whitespace
   *> choice [ string "tcp" *> return `Tcp; string "udp" *> return `Udp ]
   >>| fun prot -> `Proto_force prot
+
+let a_protocol_flags =
+  string "protocol-flags"
+  *> option [] (a_whitespace *> commit *> sep_by a_whitespace a_single_param)
+  >>| fun flags ->
+  let flags =
+    List.filter_map
+      (fun flag ->
+        match Protocol_flag.of_string flag with
+        | Some _ as r -> r
+        | None ->
+            Log.warn (fun m -> m "Ignoring unknown protocol flag %S" flag);
+            None)
+      flags
+  in
+  `Entry (B (Protocol_flags, flags))
 
 let a_resolv_retry =
   string "resolv-retry" *> a_whitespace
@@ -1664,6 +1709,7 @@ let a_config_entry : line A.t =
          a_dhcp_option;
          a_proto;
          a_proto_force;
+         a_protocol_flags <?> "protocol-flags";
          a_resolv_retry;
          a_tls_auth;
          a_tls_timeout;
@@ -2263,6 +2309,7 @@ let merge_push_reply client (push_config : string) =
     | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
     | Key_derivation, _ -> true
+    | Protocol_flags, _ -> true
     | Route, _ -> not (Conf_map.mem Route_nopull client)
     | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | _ -> false
@@ -2325,8 +2372,6 @@ let client_generate_connect_options t =
   (* Ok "V4,dev-type tun,link-mtu 1560,tun-mtu 1500,proto TCPv4_CLIENT,\
      keydir 1,cipher AES-256-CBC,auth SHA1,keysize 256,tls-auth,\
      key-method 2" *)
-  let open Result.Syntax in
-  let* () = Conf_map.is_valid_client_config t in
   let excerpt =
     Conf_map.filter
       (function
@@ -2351,7 +2396,7 @@ let client_generate_connect_options t =
       (Conf_map.pp_with_sep ~sep:(Fmt.any ","))
       excerpt
   in
-  Ok serialized
+  serialized
 
 let server_generate_connect_options config =
   Fmt.str

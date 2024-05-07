@@ -3,6 +3,12 @@ module Config : sig
 
   type flag = unit
 
+  module Protocol_flag : sig
+    type t
+
+    val to_string : t -> string
+  end
+
   type 'a k =
     | Auth : Mirage_crypto.Hash.hash k
     | Auth_nocache : flag k
@@ -108,6 +114,7 @@ module Config : sig
         : ([ `Ipv6 | `Ipv4 ] option
           * [ `Udp | `Tcp of [ `Server | `Client ] option ])
           k  (** TODO should Proto be bound to a remote? *)
+    | Protocol_flags : Protocol_flag.t list k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]
@@ -209,11 +216,6 @@ module Config : sig
 
   val eq : eq
   (** [eq] is an implementation of [cmp] for use with [{!equal} cmp t t2] *)
-
-  val client_generate_connect_options :
-    t -> (string, [> `Msg of string ]) result
-  (** Exports the excerpts from the client configuration sent to the server
-      when the client initially connects. *)
 
   val client_merge_server_config :
     t -> string -> (t, [> `Msg of string ]) result
