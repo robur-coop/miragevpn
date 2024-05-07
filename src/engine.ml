@@ -597,6 +597,10 @@ let kex_server config session (my_key_material : my_key_material) tls data =
       then Config.add_protocol_flag `Tls_ekm config
       else config
     in
+    (* XXX(reynir): if a client supports tls-ekm and set [Use_cc_exit_notify]
+       it is unnecessary to use 'key-derivation tls-ekm' in addition to
+       'protocol-flags tls-ekm'. In that case 'protocol-flags tls-ekm' is
+       sufficient. *)
     if supports_tls_ekm then Config.add Key_derivation `Tls_ekm config
     else config
   in
