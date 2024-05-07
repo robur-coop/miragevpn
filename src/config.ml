@@ -920,8 +920,8 @@ let a_proto_force =
   >>| fun prot -> `Proto_force prot
 
 let a_protocol_flags =
-  string "protocol-flags" *> a_whitespace *> commit
-  *> sep_by a_whitespace a_single_param
+  string "protocol-flags"
+  *> option [] (a_whitespace *> commit *> sep_by a_whitespace a_single_param)
   >>| fun flags ->
   let flags =
     List.filter_map
