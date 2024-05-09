@@ -74,15 +74,14 @@ struct
     Lwt.return
       (Miragevpn.Config.parse_client ~string_of_file (Cstruct.to_string config))
 
-  let local_network ip =
-    let cidr = Key_gen.private_ipv4 () in
-    if Ipaddr.V4.compare (Ipaddr.V4.Prefix.address cidr) ip = 0 then
+  let local_network my_cidr ip =
+    if Ipaddr.V4.compare (Ipaddr.V4.Prefix.address my_cidr) ip = 0 then
       (* Logs.warn (fun m -> m "a packet directed to us (ignoring)"); *)
       false
-    else if Ipaddr.V4.compare (Ipaddr.V4.Prefix.broadcast cidr) ip = 0 then (
+    else if Ipaddr.V4.compare (Ipaddr.V4.Prefix.broadcast my_cidr) ip = 0 then (
       Logs.debug (fun m -> m "dropping broadcast (RFC 2644)");
       false)
-    else Ipaddr.V4.Prefix.mem ip cidr
+    else Ipaddr.V4.Prefix.mem ip my_cidr
 
   let forward_or_reject hdr payload mtu =
     (* there are actually four potential outcomes here:
@@ -153,7 +152,7 @@ struct
     mutable private_fragments : Fragments.Cache.t;
   }
 
-  let private_recv net eth arp t =
+  let private_recv net eth arp t private_ip =
     let our_listen =
       E.input ~arpv4:(A.input arp)
         ~ipv4:(fun _ ->
@@ -212,8 +211,8 @@ struct
       (* and ip layer dst <> local_network *)
       let should_be_routed eth_hdr ip_hdr =
         Macaddr.compare eth_hdr.Ethernet.Packet.destination (N.mac net) = 0
-        && local_network ip_hdr.Ipv4_packet.src
-        && not (local_network ip_hdr.Ipv4_packet.dst)
+        && local_network private_ip ip_hdr.Ipv4_packet.src
+        && not (local_network private_ip ip_hdr.Ipv4_packet.dst)
       in
       match Ethernet.Packet.of_cstruct buf with
       | Ok (eth_hdr, payload) when eth_hdr.Ethernet.Packet.ethertype = `IPv4
@@ -243,7 +242,7 @@ struct
     | Ok () -> Logs.info (fun m -> m "listening on private network finished")
 
   (* packets received over the tunnel *)
-  let rec ovpn_recv t =
+  let rec ovpn_recv t private_ip =
     O.read t.ovpn >>= fun datas ->
     let ts = M.elapsed_ns () in
     Lwt_list.fold_left_s
@@ -254,7 +253,7 @@ struct
             (match pkt with
             | None -> ()
             | Some (hdr, payload) ->
-                if local_network hdr.Ipv4_packet.dst then
+                if local_network private_ip hdr.Ipv4_packet.dst then
                   match Ipv4_packet.(Unmarshal.int_to_protocol hdr.proto) with
                   | None ->
                       Logs.warn (fun m ->
@@ -302,7 +301,7 @@ struct
                       | Error `Drop -> ())
                 else
                   (* Logs.warn (fun m -> m "ignoring %a (IPv4 packet received via the tunnel, which destination is not our network %a)"
-                                Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp (Key_gen.private_ipv4 ())) *)
+                                Ipv4_packet.pp hdr Ipaddr.V4.Prefix.pp private_ip)) *)
                   ());
             Lwt.return c
         | Error msg ->
@@ -313,9 +312,9 @@ struct
       t.ovpn_fragments datas
     >>= fun frags ->
     t.ovpn_fragments <- frags;
-    ovpn_recv t
+    ovpn_recv t private_ip
 
-  let start _ _ _ _ s net eth arp ip block =
+  let start _ _ _ _ s net eth arp ip block private_ip =
     (let open Lwt_result.Infix in
      read_config block >>= fun config ->
      O.connect config s >>= fun ovpn ->
@@ -328,7 +327,9 @@ struct
          private_fragments = Fragments.Cache.empty (256 * 1024);
        }
      in
-     Lwt_result.ok (Lwt.join [ ovpn_recv t; private_recv net eth arp t ]))
+     Lwt_result.ok (Lwt.join
+                      [ ovpn_recv t private_ip;
+                        private_recv net eth arp t private_ip ]))
     >|= function
     | Ok () -> Logs.warn (fun m -> m "unikernel finished without error...")
     | Error (`Msg e) -> Logs.err (fun m -> m "error %s" e)

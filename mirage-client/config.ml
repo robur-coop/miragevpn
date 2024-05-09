@@ -1,3 +1,5 @@
+(* mirage >= 4.4.0 & < 4.6.0 *)
+
 open Mirage
 
 let data_key = Key.(value @@ kv_ro ~group:"data" ())
@@ -12,7 +14,7 @@ let miragevpn_handler =
       package "mirage-kv";
     ]
   in
-  foreign ~packages "Unikernel.Main"
+  main ~packages "Unikernel.Main"
     (random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> kv_ro @-> job)
 
 let () =
