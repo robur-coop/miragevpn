@@ -34,8 +34,7 @@ struct
   module Log = (val Logs.src_log log : Logs.LOG)
   module Private_routing = Routing.Make (Log) (A)
 
-  let start _ _ _ _ s net eth arp _ip data =
-    let private_ip_cidr = Key_gen.private_ipv4 () in
+  let start _ _ _ _ s net eth arp _ip data private_ip_cidr =
     read_config data >>= function
     | Error (`Msg m) -> failwith m
     | Ok config -> (

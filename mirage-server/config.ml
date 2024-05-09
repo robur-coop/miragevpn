@@ -14,7 +14,7 @@ let miragevpn_handler =
       package "mirage-kv";
     ]
   in
-  foreign ~packages "Unikernel.Main"
+  main ~packages "Unikernel.Main"
     (random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> kv_ro @-> job)
 
 let () =
