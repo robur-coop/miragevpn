@@ -132,7 +132,10 @@ let established cipher =
       | Ok (s, _, _) -> s
       | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
     in
-    Miragevpn.new_connection server
+    match Miragevpn.new_connection server with
+    | Ok s -> s
+    | Error (`Msg e) ->
+        Format.ksprintf failwith "Server new connection error: %s" e
   in
 
   let drain role state inputs =
