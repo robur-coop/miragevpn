@@ -161,10 +161,13 @@ let secret config =
       | Some `Outgoing -> Ok (cipher key1, hm hmac1, cipher key2, hm hmac2))
 
 let tls_crypt config =
-  match Config.find Tls_crypt config with
-  | None -> Error (`Msg "no tls-crypt payload in config")
-  | Some kc ->
+  match (Config.find Tls_mode config, Config.find Tls_crypt config) with
+  | None, Some _ -> assert false
+  | _, None -> Error (`Msg "no tls-crypt payload in config")
+  | Some `Client, Some kc ->
       Ok { my = Tls_crypt.client_key kc; their = Tls_crypt.server_key kc }
+  | Some `Server, Some kc ->
+      Ok { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc }
 
 let tls_crypt_v2 config =
   match Config.find Tls_crypt_v2_client config with
@@ -315,23 +318,29 @@ let client ?pkcs12_password config ts now rng =
 
 let server server_config ~is_not_taken server_ts server_now server_rng =
   let open Result.Syntax in
-  let* () = Config.is_valid_server_config server_config in
+  let+ () = Config.is_valid_server_config server_config in
   let port = Option.value ~default:1194 (Config.find Port server_config) in
-  let+ tls_auth = tls_auth server_config in
-  ( { server_config; is_not_taken; server_rng; server_ts; server_now; tls_auth },
+  ( { server_config; is_not_taken; server_rng; server_ts; server_now },
     server_ip server_config,
     port )
 
 let new_connection server =
+  let open Result.Syntax in
   let session =
     init_session ~my_session_id:(Randomconv.int64 server.server_rng) ()
   in
   let current_ts = server.server_ts () in
   let channel = new_channel 0 current_ts in
+  let+ control_crypto =
+    match (tls_auth server.server_config, tls_crypt server.server_config) with
+    | Ok auth, Error _ -> Ok (`Tls_auth auth)
+    | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
+    | _ -> Error (`Msg "server only supports tls-auth or tls-crypt")
+  in
   {
     config = server.server_config;
     is_not_taken = server.is_not_taken;
-    control_crypto = `Tls_auth server.tls_auth;
+    control_crypto;
     state = Server Server_handshaking;
     linger = Cstruct.empty;
     rng = server.server_rng;
@@ -2177,5 +2186,5 @@ let handle t ev =
   match (t.state, t.control_crypto) with
   | Client state, (#control_tls as cc) -> handle_client t cc state ev
   | Client state, `Static keys -> handle_static_client t state keys ev
-  | Server state, (`Tls_auth _ as cc) -> handle_server t cc state ev
-  | Server _, _ -> Error (`Msg "server only supports tls_auth so far")
+  | Server state, (#control_tls as cc) -> handle_server t cc state ev
+  | Server _, `Static _ -> Error (`Msg "server does not support static keys")

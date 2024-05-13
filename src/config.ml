@@ -302,7 +302,7 @@ module Conf_map = struct
       | Some (`Tun, _) | None -> Ok ()
       | Some (`Tap, _) -> Error (`Msg "'dev-type tap' is not supported")
     in
-    if not (mem Tls_mode t || mem Server t) then
+    if not (mem Tls_mode t) then
       let* () =
         Result.map_error
           (fun err -> `Msg ("not a valid config: " ^ err))
@@ -311,6 +311,17 @@ module Conf_map = struct
       if get Cipher t <> `AES_256_CBC then
         Error (`Msg "only AES-256-CBC supported in static key mode")
       else Ok ()
+    else if
+      mem Tls_mode t
+      && not
+           (mem Tls_auth t || mem Tls_crypt t || mem Tls_crypt_v2_server t
+          || mem Tls_crypt_v2_client t)
+    then
+      Error
+        (`Msg
+          "tls-mode present, but none of tls-auth, tls-crypt, or tls-crypt-v2")
+    else if mem Tls_auth t && mem Tls_crypt t then
+      Error (`Msg "tls-auth and tls-crypt are mutually exclusive")
     else if mem Ca t && mem Peer_fingerprint t then
       Error
         (`Msg
@@ -361,10 +372,15 @@ module Conf_map = struct
          | Some () -> Error "config must not contain 'comp-lzo'"
        in
        let* () =
-         match (find Tls_mode t, find Server t) with
-         | None, None | Some `Client, _ ->
-             Error "config must specify 'tls-server'"
-         | Some `Server, _ | None, Some _ -> Ok ()
+         match find Tls_mode t with
+         | None | Some `Client -> Error "config must specify 'tls-server'"
+         | Some `Server ->
+             if
+               not
+                 (mem Tls_auth t || mem Tls_crypt t || mem Tls_crypt_v2_server t)
+             then
+               Error "config must specify tls-auth or tls-crypt or tls-crypt-v2"
+             else Ok ()
        in
        let* _ = cert_key_or_pkcs12 t in
        let* () =
@@ -402,13 +418,18 @@ module Conf_map = struct
              Ok ()
          | Some _, Some _ -> Error "both static secret and TLS mode specified"
          | Some `Client, None -> (
-             match (find Auth_user_pass t, cert_key_or_pkcs12 t) with
-             | Some _, Ok _ | None, Ok `Some -> Ok ()
-             | None, Ok `None ->
-                 Error
-                   "config has neither user/password, nor TLS client \
-                    certificate"
-             | _, (Error _ as e) -> e)
+             if mem Tls_crypt_v2_client t && (mem Tls_auth t || mem Tls_crypt t)
+             then
+               Error
+                 "tls-crypt, tls-auth, and tls-crypt-v2 are mutually exclusive"
+             else
+               match (find Auth_user_pass t, cert_key_or_pkcs12 t) with
+               | Some _, Ok _ | None, Ok `Some -> Ok ()
+               | None, Ok `None ->
+                   Error
+                     "config has neither user/password, nor TLS client \
+                      certificate"
+               | _, (Error _ as e) -> e)
        in
        let* () =
          if mem Remote_cert_tls t && get Remote_cert_tls t <> `Server then
@@ -703,6 +724,8 @@ module Conf_map = struct
       if find Tls_mode t = Some `Client && mem Pull t then (
         Fmt.pf ppf "client%a" sep ();
         remove Tls_mode t |> remove Pull)
+      else if find Tls_mode t = Some `Server && mem Server t then
+        remove Tls_mode t
       else t
     in
     Fmt.(pf ppf "%a" (list ~sep pp_b) (bindings minimized_t))
@@ -1487,7 +1510,7 @@ let a_server =
   string "server" *> a_whitespace *> a_ipv4_dotted_quad >>= fun address ->
   a_whitespace *> a_ipv4_dotted_quad >>= fun netmask ->
   match Ipaddr.V4.Prefix.of_netmask ~netmask ~address with
-  | Ok cidr -> return (`Entry (B (Server, cidr)))
+  | Ok cidr -> return (`Entries [ B (Server, cidr); B (Tls_mode, `Server) ])
   | Error (`Msg m) -> fail m
 
 let aead_cipher_of_string c =
@@ -1683,6 +1706,8 @@ let a_not_implemented =
       string "status";
       string "log-append";
       string "log";
+      string "user";
+      string "group";
       (* TODO: *)
       string "redirect-gateway";
       string "block-outside-dns";
@@ -1692,6 +1717,9 @@ let a_not_implemented =
       string "explicit-exit-notify";
       string "tun-ipv6";
       string "ifconfig-ipv6";
+      string "max-clients";
+      string "setenv";
+      string "push";
     ]
   >>= fun key ->
   a_line not_control_char >>| fun rest ->
