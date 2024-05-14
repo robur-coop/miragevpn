@@ -169,7 +169,7 @@ let tls_crypt config =
   | Some `Server, Some kc ->
       Ok { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc }
 
-let tls_crypt_v2 config =
+let tls_crypt_v2_client config =
   match Config.find Tls_crypt_v2_client config with
   | None -> Error (`Msg "no tls-crypt-v2 payload in config")
   | Some (kc, wkc, force_cookie) ->
@@ -266,7 +266,10 @@ let client ?pkcs12_password config ts now rng =
   in
   let* control_crypto =
     match
-      (tls_auth config, tls_crypt config, tls_crypt_v2 config, secret config)
+      ( tls_auth config,
+        tls_crypt config,
+        tls_crypt_v2_client config,
+        secret config )
     with
     | Error e, Error _, Error _, Error _ -> Error e
     | Error _, Error _, Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
@@ -323,35 +326,6 @@ let server server_config ~is_not_taken server_ts server_now server_rng =
   ( { server_config; is_not_taken; server_rng; server_ts; server_now },
     server_ip server_config,
     port )
-
-let new_connection server =
-  let open Result.Syntax in
-  let session =
-    init_session ~my_session_id:(Randomconv.int64 server.server_rng) ()
-  in
-  let current_ts = server.server_ts () in
-  let channel = new_channel 0 current_ts in
-  let+ control_crypto =
-    match (tls_auth server.server_config, tls_crypt server.server_config) with
-    | Ok auth, Error _ -> Ok (`Tls_auth auth)
-    | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
-    | _ -> Error (`Msg "server only supports tls-auth or tls-crypt")
-  in
-  {
-    config = server.server_config;
-    is_not_taken = server.is_not_taken;
-    control_crypto;
-    state = Server Server_handshaking;
-    linger = Cstruct.empty;
-    rng = server.server_rng;
-    ts = server.server_ts;
-    now = server.server_now;
-    session;
-    channel;
-    lame_duck = None;
-    last_received = current_ts;
-    last_sent = current_ts;
-  }
 
 let pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"
@@ -970,7 +944,9 @@ let server_handle_tls_data config is_not_taken session keys tls d =
 let incoming_control_server is_not_taken config rng session channel _now _ts
     _key op data =
   match (channel.channel_st, op) with
-  | Expect_reset, (Packet.Hard_reset_client_v2 | Packet.Soft_reset_v2) ->
+  | ( Expect_reset,
+      ( Packet.Hard_reset_client_v2 | Packet.Hard_reset_client_v3
+      | Packet.Soft_reset_v2 ) ) ->
       (* TODO may need to do client certificate authentication here! *)
       let _ca, server, key =
         ( Config.get Ca config,
@@ -1827,8 +1803,6 @@ let incoming state control_crypto buf =
                         p :: payloads)
                   in
                   (state, out, payloads, act_opt)
-              | Packet.Hard_reset_client_v3 ->
-                  ignore_udp_error (Error (`No_transition (ch, op, received)))
               | op -> (
                   let* p, needs_wkc =
                     ignore_udp_error
@@ -1917,6 +1891,111 @@ let incoming state control_crypto buf =
   Log.debug (fun m ->
       m "action %a" Fmt.(option ~none:(any "none") pp_action) act_opt);
   (s', out, List.rev payloads, act_opt)
+
+let new_connection server data =
+  let open Result.Syntax in
+  let protocol = `Tcp in
+  let session =
+    init_session
+      ~my_session_id:(Randomconv.int64 server.server_rng)
+      ~protocol ()
+  in
+  let current_ts = server.server_ts () in
+  let channel = new_channel 0 current_ts in
+  let* t, (control_crypto : control_tls), packet =
+    let tls_auth_or_tls_crypt error =
+      let+ (control_crypto : control_tls) =
+        match
+          (tls_auth server.server_config, tls_crypt server.server_config)
+        with
+        | Ok auth, Error _ -> Ok (`Tls_auth auth)
+        | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
+        | _ -> Error error
+      in
+      ( {
+          config = server.server_config;
+          is_not_taken = server.is_not_taken;
+          control_crypto :> control_crypto;
+          state = Server Server_handshaking;
+          linger = Cstruct.empty;
+          rng = server.server_rng;
+          ts = server.server_ts;
+          now = server.server_now;
+          session;
+          channel;
+          lame_duck = None;
+          last_received = current_ts;
+          last_sent = current_ts;
+        },
+        control_crypto,
+        data )
+    in
+    match Config.find Tls_crypt_v2_server server.server_config with
+    | None ->
+        tls_auth_or_tls_crypt
+          (`Msg "server only supports tls-auth or tls-crypt")
+    | Some (_wrapping_key, true) ->
+        (* TODO: HMAC cookie support *)
+        Error (`Msg "Server does not support hmac cookies (yet)")
+    | Some (wrapping_key, false) -> (
+        match Packet.decode_key_op protocol data with
+        | Error `Tcp_partial ->
+            (* It is unlikely that we don't read a full packet in first try and it is annoying to handle. *)
+            assert false
+        | Error _ as e -> e
+        | Ok (Packet.Hard_reset_client_v2, _key, _received, linger) ->
+            assert (Cstruct.is_empty linger);
+            tls_auth_or_tls_crypt (`Msg "server only supports tls-crypt-v2")
+        | Ok (Packet.Hard_reset_client_v3, key, received, linger) ->
+            assert (Cstruct.is_empty linger);
+            (* decode and unwrap wKc *)
+            let* actual_packet, wkc =
+              Tls_crypt.Wrapped_key.of_cstruct received
+            in
+            let actual_packet =
+              let buf = Cstruct.create (Cstruct.length actual_packet + 3) in
+              Packet.set_protocol buf `Tcp;
+              Cstruct.set_uint8 buf 2
+                (Packet.op_key Packet.Hard_reset_client_v3 key);
+              Cstruct.blit actual_packet 0 buf 3 (Cstruct.length actual_packet);
+              buf
+            in
+            let* tls_crypt, metadata =
+              Tls_crypt.Wrapped_key.unwrap ~key:wrapping_key wkc
+            in
+            Log.debug (fun m ->
+                m "metadata is %a" Tls_crypt.Metadata.pp_hum metadata);
+            let control_crypto =
+              `Tls_crypt
+                ( {
+                    my = Tls_crypt.server_key tls_crypt;
+                    their = Tls_crypt.client_key tls_crypt;
+                  },
+                  None )
+            in
+            Ok
+              ( {
+                  config = server.server_config;
+                  is_not_taken = server.is_not_taken;
+                  control_crypto;
+                  state = Server Server_handshaking;
+                  linger = Cstruct.empty;
+                  rng = server.server_rng;
+                  ts = server.server_ts;
+                  now = server.server_now;
+                  session;
+                  channel;
+                  lame_duck = None;
+                  last_received = current_ts;
+                  last_sent = current_ts;
+                },
+                control_crypto,
+                actual_packet )
+        | Ok (_not_hard_reset_client, _key, _received, _linger) ->
+            Error (`Msg "invalid initial packet"))
+    (* `No_transition *)
+  in
+  incoming t control_crypto packet
 
 let maybe_ping_timeout state =
   (* timeout fires if no data was received within the configured interval *)
