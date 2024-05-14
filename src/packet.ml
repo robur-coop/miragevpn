@@ -216,17 +216,13 @@ let split_hmac hmac_len op key buf =
   (* local_session_id ++ hmac, replay_id ++ ts ++ payload
      -> (hmac, replay_id ++ ts ++ opcode ++ local_session_id ++ payload
   *)
-  let local_session = Cstruct.BE.get_uint64 buf 0
   (* below we modify the contents of buf, so we need to copy here *)
-  and hmac = Cstruct.sub_copy buf 8 hmac_len
-  and replay_id = Cstruct.BE.get_uint32 buf (hmac_len + 8)
-  and timestamp = Cstruct.BE.get_uint32 buf (hmac_len + 12) in
+  let hmac = Cstruct.sub_copy buf 8 hmac_len in
   let to_cut = hmac_len - 1 (* - 1 (for key/op) *) in
   let b = Cstruct.sub buf to_cut (Cstruct.length buf - to_cut) in
-  Cstruct.BE.set_uint32 b 0 replay_id;
-  Cstruct.BE.set_uint32 b 4 timestamp;
+  Cstruct.blit buf (hmac_len + 8) b 0 (id_len + 4);
   Cstruct.set_uint8 b 8 (op_key op key);
-  Cstruct.BE.set_uint64 b 9 local_session;
+  Cstruct.blit buf 0 b 9 session_id_len;
   (hmac, b)
 
 let encode proto hmac_len
