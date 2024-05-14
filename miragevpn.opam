@@ -24,7 +24,7 @@ depends: [
   "logs"     { >= "0.6.2" }
 
   "angstrom" { >= "0.14.0" }
-  "cstruct"  { >= "6.0.0" }
+  "cstruct"  { >= "6.2.0" }
   "domain-name" { >= "0.2.0" }
   "fmt"
   "gmap"     { >= "0.3.0" }
