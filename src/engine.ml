@@ -458,8 +458,8 @@ let maybe_kex_client rng config tls =
     let peer_info =
       let iv_proto =
         Packet.Iv_proto.(
-          (* See issue 181, doesn't reliably work on debian [Tls_key_export ::]*)
-          Use_cc_exit_notify :: (if pull then [ Request_push ] else []))
+          Tls_key_export :: Use_cc_exit_notify
+          :: (if pull then [ Request_push ] else []))
       in
       Option.map
         (fun pi ->
@@ -584,10 +584,8 @@ let kex_server config session (my_key_material : my_key_material) tls data =
   let config = Config.add Cipher (cipher :> Config.cipher) config in
   let config =
     let supports_tls_ekm =
-      (* See issue 181, doesn't work with TLS 1.3 *)
-      false
-      && Option.fold iv_proto ~none:false
-           ~some:Packet.Iv_proto.(contains Tls_key_export)
+      Option.fold iv_proto ~none:false
+        ~some:Packet.Iv_proto.(contains Tls_key_export)
     in
     let config =
       if
