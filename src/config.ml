@@ -1719,7 +1719,6 @@ let a_not_implemented =
       string "ifconfig-ipv6";
       string "max-clients";
       string "setenv";
-      string "push";
     ]
   >>= fun key ->
   a_line not_control_char >>| fun rest ->
