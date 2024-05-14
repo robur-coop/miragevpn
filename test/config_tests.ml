@@ -777,7 +777,7 @@ gpmt0TrnpFtBkWzq8jd/fEaYq5rFVuqY6P8t7UtZJ/c=
   in
   let data = string_of_file "tls-crypt-v2-server.conf" in
   let string_of_file n = Ok (string_of_file n) in
-  match Miragevpn.Config.parse ~string_of_file data with
+  match Miragevpn.Config.parse_server ~string_of_file data with
   | Error (`Msg e) ->
       Alcotest.failf "Error parsing tls-crypt-v2-server.conf: %s" e
   | Ok conf ->
@@ -799,7 +799,7 @@ let inlineables_no_inline () =
   in
   (* This test is only to ensure we handle all "<inlineable>" blocks without a
      "inlineable [inline]". *)
-  match Miragevpn.Config.parse ~string_of_file data with
+  match Miragevpn.Config.parse_client ~string_of_file data with
   | Ok _ -> ()
   | Error (`Msg e) ->
       Alcotest.failf "Expected parser to succeed, but got error: %s" e

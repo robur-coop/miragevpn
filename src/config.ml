@@ -399,6 +399,11 @@ module Conf_map = struct
                     OpenVPN>=2.7, while previous versions used net30");
              Ok ()
        in
+       let* () =
+         match find Proto t with
+         | None | Some (_, `Tcp _) -> Ok ()
+         | Some (_, `Udp) -> Error "only TCP supported in the server"
+       in
        Ok ())
 
   let is_valid_client_config t =

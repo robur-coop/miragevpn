@@ -233,13 +233,6 @@ module Config : sig
       TODO return conflicting subset as error
   *)
 
-  val parse :
-    string_of_file:(string -> (string, [ `Msg of string ]) result) ->
-    string ->
-    (t, [> `Msg of string ]) result
-  (** Parses a configuration string, looking up references to external files
-      as needed. *)
-
   val parse_server :
     string_of_file:(string -> (string, [ `Msg of string ]) result) ->
     string ->
