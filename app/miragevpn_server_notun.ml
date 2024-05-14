@@ -137,83 +137,92 @@ let handle_action dst add rm ip action =
           m "%a ignoring action %a" pp_dst dst Miragevpn.pp_action a);
       (ip, `Continue)
 
-let callback t fd =
+let read_loop t client_state fd dst buf =
   let open Lwt.Infix in
-  match Miragevpn.new_connection t.server with
-  | Error (`Msg msg) ->
-      Logs.warn (fun m -> m "couldn't initiate the connection %s" msg);
-      Common.safe_close fd
-  | Ok cs ->
-      let client_state = ref cs in
-      let dst =
-        match Lwt_unix.getsockname fd with
-        | Lwt_unix.ADDR_UNIX _ -> assert false
-        | Lwt_unix.ADDR_INET (ip, port) -> (Ipaddr_unix.of_inet_addr ip, port)
-      in
-      Logs.info (fun m -> m "%a new connection" pp_dst dst);
-      let rec read ?ip fd =
-        let rm () =
-          match ip with
-          | None -> ()
-          | Some ip ->
-              Logs.info (fun m ->
-                  m "%a removing ip %a from connections" pp_dst dst Ipaddr.V4.pp
-                    ip);
-              Hashtbl.remove t.connections ip
-        and add ip = Hashtbl.replace t.connections ip (fd, client_state) in
-        Common.read_from_fd fd >>= function
-        | Error (`Msg msg) ->
-            Logs.err (fun m -> m "%a error %s while reading" pp_dst dst msg);
-            rm ();
+  let client_state = ref client_state in
+  let rm ip () =
+    match ip with
+    | None -> ()
+    | Some ip ->
+        Logs.info (fun m ->
+            m "%a removing ip %a from connections" pp_dst dst Ipaddr.V4.pp ip);
+        Hashtbl.remove t.connections ip
+  and add ip = Hashtbl.replace t.connections ip (fd, client_state) in
+  let rec read ?ip fd =
+    Common.read_from_fd fd >>= function
+    | Error (`Msg msg) ->
+        Logs.err (fun m -> m "%a error %s while reading" pp_dst dst msg);
+        rm ip ();
+        Common.safe_close fd
+    | Ok cs -> handle ?ip fd cs
+  and handle ?ip fd cs =
+    match Miragevpn.handle !client_state (`Data cs) with
+    | Error msg ->
+        Logs.err (fun m ->
+            m "%a internal miragevpn error %a" pp_dst dst Miragevpn.pp_error msg);
+        rm ip ();
+        Common.safe_close fd
+    | Ok (s', out, payloads, action) -> (
+        client_state := s';
+        let ip, continue_or_stop =
+          match action with
+          | None -> (ip, `Continue)
+          | Some action -> handle_action dst add (rm ip) ip action
+        in
+        (* Do not handle payloads from client that have not yet been
+           assigned an ip address *)
+        (match ip with
+        | None ->
+            if payloads <> [] then
+              Logs.warn (fun m ->
+                  m "%a ignoring %u premature payloads" pp_dst dst
+                    (List.length payloads));
+            Lwt.return_unit
+        | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
+        >>= fun () ->
+        Lwt_list.fold_left_s
+          (fun r o ->
+            match r with
+            | Error _ as e -> Lwt.return e
+            | Ok () -> (
+                Common.write_to_fd fd o >|= function
+                | Error (`Msg msg) ->
+                    Logs.err (fun m ->
+                        m "%a TCP write failed %s" pp_dst dst msg);
+                    Error ()
+                | Ok () -> Ok ()))
+          (Ok ()) out
+        >>= function
+        | Error () ->
+            rm ip ();
             Common.safe_close fd
-        | Ok cs -> (
-            match Miragevpn.handle !client_state (`Data cs) with
-            | Error msg ->
-                Logs.err (fun m ->
-                    m "%a internal miragevpn error %a" pp_dst dst
-                      Miragevpn.pp_error msg);
-                rm ();
-                Common.safe_close fd
-            | Ok (s', out, payloads, action) -> (
-                client_state := s';
-                let ip, continue_or_stop =
-                  match action with
-                  | None -> (ip, `Continue)
-                  | Some action -> handle_action dst add rm ip action
-                in
-                (* Do not handle payloads from client that have not yet been
-                   assigned an ip address *)
-                (match ip with
-                | None ->
-                    if payloads <> [] then
-                      Logs.warn (fun m ->
-                          m "%a ignoring %u premature payloads" pp_dst dst
-                            (List.length payloads));
-                    Lwt.return_unit
-                | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
-                >>= fun () ->
-                Lwt_list.fold_left_s
-                  (fun r o ->
-                    match r with
-                    | Error _ as e -> Lwt.return e
-                    | Ok () -> (
-                        Common.write_to_fd fd o >|= function
-                        | Error (`Msg msg) ->
-                            Logs.err (fun m ->
-                                m "%a TCP write failed %s" pp_dst dst msg);
-                            Error ()
-                        | Ok () -> Ok ()))
-                  (Ok ()) out
-                >>= function
-                | Error () ->
-                    rm ();
-                    Common.safe_close fd
-                | Ok () -> (
-                    match continue_or_stop with
-                    | `Stop -> Common.safe_close fd
-                    | `Continue -> read ?ip fd)))
-      in
-      read fd
+        | Ok () -> (
+            match continue_or_stop with
+            | `Stop -> Common.safe_close fd
+            | `Continue -> read ?ip fd))
+  in
+  handle fd buf
+
+let callback t fd =
+  let open Lwt.Syntax in
+  let dst =
+    match Lwt_unix.getsockname fd with
+    | Lwt_unix.ADDR_UNIX _ -> assert false
+    | Lwt_unix.ADDR_INET (ip, port) -> (Ipaddr_unix.of_inet_addr ip, port)
+  in
+  Logs.info (fun m -> m "%a new connection" pp_dst dst);
+  let* r = Common.read_from_fd fd in
+  match r with
+  | Error (`Msg e) ->
+      Logs.warn (fun m -> m "Error reading first packet: %s" e);
+      Common.safe_close fd
+  | Ok buf -> (
+      match Miragevpn.new_connection t.server buf with
+      | Error e ->
+          Logs.warn (fun m ->
+              m "Error reading first packet: %a" Miragevpn.pp_error e);
+          Common.safe_close fd
+      | Ok cs -> read_loop t cs fd dst buf)
 
 let connect config =
   let open Lwt.Infix in

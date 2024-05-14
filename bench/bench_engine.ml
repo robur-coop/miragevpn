@@ -109,7 +109,7 @@ let established cipher =
   in
 
   let[@ocaml.warning "-8"] ( initial_client,
-                             inital_client_outs,
+                             [ inital_client_out ],
                              _application,
                              None ) =
     let pre_connect =
@@ -124,18 +124,12 @@ let established cipher =
 
   let initial_server =
     let is_not_taken _ = true in
-    let server =
-      match
-        Miragevpn.server minimal_server_config ~is_not_taken ts now
-          Mirage_crypto_rng.generate
-      with
-      | Ok (s, _, _) -> s
-      | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
-    in
-    match Miragevpn.new_connection server with
-    | Ok s -> s
-    | Error (`Msg e) ->
-        Format.ksprintf failwith "Server new connection error: %s" e
+    match
+      Miragevpn.server minimal_server_config ~is_not_taken ts now
+        Mirage_crypto_rng.generate
+    with
+    | Ok (s, _, _) -> s
+    | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e
   in
 
   let drain role state inputs =
@@ -155,7 +149,13 @@ let established cipher =
     let outs = List.concat (List.rev outs) in
     (state, outs)
   in
-  let server, server_outs = drain "Server" initial_server inital_client_outs in
+  let server =
+    match Miragevpn.new_connection initial_server inital_client_out with
+    | Ok t -> t
+    | Error e ->
+        Format.kasprintf failwith "server error: %a" Miragevpn.pp_error e
+  in
+  let server, server_outs = drain "Server" server [ inital_client_out ] in
   let client, client_outs = drain "Client" initial_client server_outs in
   let server, server_outs = drain "Server" server client_outs in
   let client, client_outs = drain "Client" client server_outs in
