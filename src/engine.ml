@@ -86,7 +86,6 @@ let header session transport timestamp =
     { transport with last_acked_sequence_number },
     {
       Packet.local_session = session.my_session_id;
-      hmac = Cstruct.empty;
       replay_id;
       timestamp;
       ack_sequence_numbers;
@@ -97,10 +96,6 @@ let ptime_to_ts_exn now =
   match Ptime.(Span.to_int_s (to_span now)) with
   | None -> assert false (* this will break in 2038-01-19 *)
   | Some x -> Int32.of_int x
-
-let compute_hmac key p hmac_algorithm hmac_key =
-  let tbs = Packet.to_be_signed key p in
-  Mirage_crypto.Hash.mac hmac_algorithm ~key:hmac_key tbs
 
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } key
     (p : [< Packet.ack | Packet.control ]) =
@@ -1124,7 +1119,7 @@ type error =
   | `Non_monotonic_sequence_number of int32 * int32
   | `Mismatch_their_session_id of int64 * int64
   | `Mismatch_my_session_id of int64 * int64
-  | `Bad_mac of t * Cstruct.t * Packet.t
+  | `Bad_mac of t * Cstruct.t * Cstruct.t * Cstruct.t
   | `No_transition of channel * Packet.operation * Cstruct.t
   | `No_channel of int
   | `Tls of
@@ -1147,9 +1142,10 @@ let pp_error ppf = function
   | `Mismatch_my_session_id (expected, received) ->
       Fmt.pf ppf "mismatched my session id: expected %016LX, received %016LX"
         expected received
-  | `Bad_mac (state, computed, data) ->
-      Fmt.pf ppf "bad mac: computed %a data %a@ (state %a)" Cstruct.hexdump_pp
-        computed Packet.pp data pp state
+  | `Bad_mac (state, computed, received, data) ->
+      Fmt.pf ppf "bad mac: computed %a received %a data %a@ (state %a)"
+        Cstruct.hexdump_pp computed Cstruct.hexdump_pp received
+        Cstruct.hexdump_pp data pp state
   | `No_transition (channel, op, data) ->
       Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
         Packet.pp_operation op pp_channel channel Cstruct.hexdump_pp data
@@ -1420,7 +1416,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         let hmac, data = Cstruct.split data H.digest_size in
         let computed_hmac = H.hmac ~key:their_hmac data in
         let* () =
-          guard (Cstruct.equal hmac computed_hmac) (err computed_hmac)
+          guard (Cstruct.equal hmac computed_hmac) (err hmac computed_hmac)
         in
         let iv, data = Cstruct.split data Cipher_block.AES.CBC.block_size in
         let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
@@ -1699,7 +1695,7 @@ let find_channel state key op =
                 state);
           None)
 
-let received_data state key ch set_ch payload =
+let received_data state ch set_ch payload =
   let open Result.Syntax in
   match keys_opt ch with
   | None ->
@@ -1708,7 +1704,7 @@ let received_data state key ch set_ch payload =
   | Some keys ->
       let ch = received_packet ch payload in
       let hmac_algorithm = Config.get Auth state.config in
-      let bad_mac hmac = `Bad_mac (state, hmac, (key, `Data payload)) in
+      let bad_mac computed rcv = `Bad_mac (state, computed, rcv, payload) in
       let+ payload =
         incoming_data bad_mac keys hmac_algorithm state.session.compress payload
       in
@@ -1718,14 +1714,19 @@ let validate_control state control_crypto op key payload =
   let open Result.Syntax in
   match control_crypto with
   | `Tls_auth { hmac_algorithm; their_hmac; _ } ->
-      let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
-      let* p = Packet.decode_ack_or_control op ~hmac_len payload in
-      let computed_mac = compute_hmac key p hmac_algorithm their_hmac in
-      let+ () =
-        guard
-          (Cstruct.equal computed_mac Packet.((header p).hmac))
-          (`Bad_mac (state, computed_mac, ((key, p) :> Packet.t)))
+      let hmac, tbs =
+        let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+        Packet.split_hmac hmac_len op key payload
       in
+      let computed_mac =
+        Mirage_crypto.Hash.mac hmac_algorithm ~key:their_hmac tbs
+      in
+      let* () =
+        guard
+          (Eqaf_cstruct.equal computed_mac hmac)
+          (`Bad_mac (state, computed_mac, hmac, tbs))
+      in
+      let+ p = Packet.decode_ack_or_control op tbs in
       (p, None)
   | `Tls_crypt ({ their; _ }, wkc_opt) ->
       let* cleartext, encrypted =
@@ -1738,25 +1739,27 @@ let validate_control state control_crypto op key payload =
         let key = Tls_crypt.Key.cipher_key their in
         Aes_ctr.decrypt ~key ~ctr encrypted
       in
+      let to_be_signed =
+        Packet.Tls_crypt.to_be_signed op key cleartext decrypted
+      in
+      let computed_hmac =
+        let key = Tls_crypt.Key.hmac their in
+        Mirage_crypto.Hash.SHA256.hmac ~key to_be_signed
+      in
+      let* () =
+        guard
+          (Eqaf_cstruct.equal computed_hmac cleartext.hmac)
+          (`Bad_mac (state, computed_hmac, cleartext.hmac, to_be_signed))
+      in
       let* p =
         Packet.Tls_crypt.decode_decrypted_ack_or_control cleartext op decrypted
       in
-      let* needs_wkc =
+      let+ needs_wkc =
         match (p, wkc_opt) with
         | `Control (Packet.Hard_reset_server_v2, (_, _, data)), Some wkc ->
             let+ needs_wkc = Packet.decode_early_negotiation_tlvs data in
             if needs_wkc then Some wkc else None
         | _ -> Ok None
-      in
-      let to_be_signed = Packet.Tls_crypt.to_be_signed key p in
-      let computed_hmac =
-        let key = Tls_crypt.Key.hmac their in
-        Mirage_crypto.Hash.SHA256.hmac ~key to_be_signed
-      in
-      let+ () =
-        guard
-          (Eqaf_cstruct.equal computed_hmac cleartext.hmac)
-          (`Bad_mac (state, computed_hmac, ((key, p) :> Packet.t)))
       in
       (p, needs_wkc)
 
@@ -1795,8 +1798,7 @@ let incoming state control_crypto buf =
               match op with
               | Packet.Data_v1 ->
                   let+ state, payload =
-                    ignore_udp_error
-                      (received_data state key ch set_ch received)
+                    ignore_udp_error (received_data state ch set_ch received)
                   in
                   let payloads =
                     Option.fold payload ~none:payloads ~some:(fun p ->
@@ -2246,7 +2248,7 @@ let handle_static_client t s keys ev =
                   (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
                   Ok ({ t with linger }, acc)
               | Ok (cs, linger) ->
-                  let bad_mac hmac = `Bad_mac (t, hmac, (0, `Data cs)) in
+                  let bad_mac computed rcv = `Bad_mac (t, computed, rcv, cs) in
                   let* d =
                     incoming_data ~add_timestamp bad_mac keys hmac_algorithm
                       compress cs

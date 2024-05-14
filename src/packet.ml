@@ -71,7 +71,6 @@ let guard f e = if f then Ok () else Error e
 
 type header = {
   local_session : int64;
-  hmac : Cstruct.t; (* usually 16 or 20 bytes *)
   replay_id : int32;
   timestamp : int32;
   (* uint8 array length *)
@@ -80,8 +79,8 @@ type header = {
 }
 
 let pp_header ppf hdr =
-  Fmt.pf ppf "local %Lu replay_id %ld timestamp %ld hmac %a ack %a remote %a"
-    hdr.local_session hdr.replay_id hdr.timestamp Cstruct.hexdump_pp hdr.hmac
+  Fmt.pf ppf "local %Lu replay_id %ld timestamp %ld ack %a remote %a"
+    hdr.local_session hdr.replay_id hdr.timestamp
     Fmt.(list ~sep:(any ", ") uint32)
     hdr.ack_sequence_numbers
     Fmt.(option ~none:(any " ") uint64)
@@ -89,38 +88,30 @@ let pp_header ppf hdr =
 
 let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 
-let decode_header ~hmac_len buf =
+let decode_header buf =
   let open Result.Syntax in
-  let* () = guard (Cstruct.length buf >= hdr_len hmac_len) `Partial in
-  let local_session = Cstruct.BE.get_uint64 buf 0
-  and hmac = Cstruct.sub buf 8 hmac_len
-  and replay_id = Cstruct.BE.get_uint32 buf (hmac_len + 8)
-  and timestamp = Cstruct.BE.get_uint32 buf (hmac_len + 12)
-  and arr_len = Cstruct.get_uint8 buf (hmac_len + 16) in
+  (* our input is a buffer where the hmac has already been swapped away *)
+  let* () = guard (Cstruct.length buf >= hdr_len 1) `Partial in
+  let replay_id = Cstruct.BE.get_uint32 buf 0
+  and timestamp = Cstruct.BE.get_uint32 buf 4
+  and local_session = Cstruct.BE.get_uint64 buf 9
+  and arr_len = Cstruct.get_uint8 buf 17 in
   let rs = if arr_len = 0 then 0 else 8 in
+  let hdr_off = hdr_len 1 in
   let+ () =
-    guard
-      (Cstruct.length buf >= hdr_len hmac_len + (id_len * arr_len) + rs)
-      `Partial
+    guard (Cstruct.length buf >= hdr_off + (id_len * arr_len) + rs) `Partial
   in
   let ack_sequence_number idx =
-    Cstruct.BE.get_uint32 buf (hdr_len hmac_len + (id_len * idx))
+    Cstruct.BE.get_uint32 buf (hdr_off + (id_len * idx))
   in
   let ack_sequence_numbers = List.init arr_len ack_sequence_number in
   let remote_session =
     if arr_len > 0 then
-      Some (Cstruct.BE.get_uint64 buf (hdr_len hmac_len + (id_len * arr_len)))
+      Some (Cstruct.BE.get_uint64 buf (hdr_off + (id_len * arr_len)))
     else None
   in
-  ( {
-      local_session;
-      hmac;
-      replay_id;
-      timestamp;
-      ack_sequence_numbers;
-      remote_session;
-    },
-    hdr_len hmac_len + (id_len * arr_len) + rs )
+  ( { local_session; replay_id; timestamp; ack_sequence_numbers; remote_session },
+    hdr_off + (id_len * arr_len) + rs )
 
 let encode_header hmac_len buf hdr =
   let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
@@ -141,74 +132,37 @@ let encode_header hmac_len buf hdr =
       Cstruct.BE.set_uint64 buf (hdr_len hmac_len + id_arr_len) v);
   hdr_len hmac_len + rsid + id_arr_len
 
-let to_be_signed_header ?(more = 0) op header =
-  (* replay_id ++ timestamp ++ operation ++ session_id ++ ack_len ++ acks ++ remote_session ++ sequence_number *)
-  let acks =
-    match header.ack_sequence_numbers with
-    | [] -> 0
-    | x -> List.length x * id_len
-  and rses = match header.remote_session with None -> 0 | Some _ -> 8 in
-  let buflen =
-    id_len + 4 (* timestamp *) + 1
-    (* operation *) + session_id_len
-    + 1 (* ack list length *) + acks
-    + rses + more
-  in
-  let buf = Cstruct.create buflen in
-  Cstruct.BE.set_uint32 buf 0 header.replay_id;
-  Cstruct.BE.set_uint32 buf 4 header.timestamp;
-  Cstruct.set_uint8 buf 8 op;
-  Cstruct.BE.set_uint64 buf 9 header.local_session;
-  Cstruct.set_uint8 buf 17 (List.length header.ack_sequence_numbers);
-  let rec enc_ack off = function
-    | [] -> ()
-    | hd :: tl ->
-        Cstruct.BE.set_uint32 buf off hd;
-        enc_ack (off + 4) tl
-  in
-  enc_ack 18 header.ack_sequence_numbers;
-  (match header.remote_session with
-  | None -> ()
-  | Some x -> Cstruct.BE.set_uint64 buf (18 + acks) x);
-  (buf, 18 + acks + rses)
-
-let decode_ack ~hmac_len buf =
+let decode_ack buf =
   let open Result.Syntax in
-  let+ hdr, off = decode_header ~hmac_len buf in
+  let+ hdr, off = decode_header buf in
   if off <> Cstruct.length buf then
     Log.debug (fun m ->
         m "decode_ack: %d extra bytes at end of message"
           (Cstruct.length buf - off));
   hdr
 
-let decode_control ~hmac_len buf =
+let decode_control buf =
   let open Result.Syntax in
-  let* header, off = decode_header ~hmac_len buf in
+  let* header, off = decode_header buf in
   let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
   let sequence_number = Cstruct.BE.get_uint32 buf off
   and payload = Cstruct_ext.shift buf (off + 4) in
   (header, sequence_number, payload)
 
-let decode_ack_or_control op ~hmac_len buf =
+let decode_ack_or_control op buf =
   let open Result.Syntax in
   match op with
   | Ack ->
-      let+ ack = decode_ack ~hmac_len buf in
+      let+ ack = decode_ack buf in
       `Ack ack
   | _ ->
-      let+ control = decode_control ~hmac_len buf in
+      let+ control = decode_control buf in
       `Control (op, control)
 
 let encode_control hmac_len buf (header, sequence_number, payload) =
   let len = encode_header hmac_len buf header in
   Cstruct.BE.set_uint32 buf len sequence_number;
   Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload)
-
-let to_be_signed_control op (header, sequence_number, payload) =
-  (* rly? not length!? *)
-  let buf, off = to_be_signed_header ~more:id_len op header in
-  Cstruct.BE.set_uint32 buf off sequence_number;
-  Cstruct.append buf payload
 
 let decode_protocol proto buf =
   let open Result.Syntax in
@@ -258,6 +212,19 @@ let encode_protocol proto len =
       buf
   | `Udp -> Cstruct.empty
 
+let split_hmac hmac_len op key buf =
+  (* local_session_id ++ hmac, replay_id ++ ts ++ payload
+     -> (hmac, replay_id ++ ts ++ opcode ++ local_session_id ++ payload
+  *)
+  (* below we modify the contents of buf, so we need to copy here *)
+  let hmac = Cstruct.sub_copy buf 8 hmac_len in
+  let to_cut = hmac_len - 1 (* - 1 (for key/op) *) in
+  let b = Cstruct.sub buf to_cut (Cstruct.length buf - to_cut) in
+  Cstruct.blit buf (hmac_len + 8) b 0 (id_len + 4);
+  Cstruct.set_uint8 b 8 (op_key op key);
+  Cstruct.blit buf 0 b 9 session_id_len;
+  (hmac, b)
+
 let encode proto hmac_len
     (key, (p : [< `Ack of header | `Control of operation * _ ])) =
   let hdr = header p in
@@ -298,12 +265,6 @@ let encode_data buf proto key =
   let op = op_key Data_v1 key in
   Cstruct.set_uint8 buf (protocol_len proto) op
 
-let to_be_signed key p =
-  let op = op_key (operation p) key in
-  match p with
-  | `Ack hdr -> fst (to_be_signed_header op hdr)
-  | `Control (_, c) -> to_be_signed_control op c
-
 module Tls_crypt = struct
   type cleartext_header = {
     local_session : int64;
@@ -326,45 +287,16 @@ module Tls_crypt = struct
   let clear_hdr_len =
     hdr_len hmac_len - 1 (* not including acked sequence numbers *)
 
-  let to_be_signed_header ?(more = 0) op header =
-    (* op_key ++ session_id ++ replay_id ++ timestamp ++ ack_len ++ acks ++ remote_session ++ sequence_number *)
-    let acks_len = List.length header.ack_sequence_numbers * id_len
-    and rses_len = if Option.is_some header.remote_session then 8 else 0 in
-    let buflen =
-      1 (* operation *) + session_id_len
-      + id_len + 4 (* timestamp *) + 1
-      (* length of ack list *) + acks_len
-      + rses_len + more
-    in
-    let buf = Cstruct.create buflen in
-    Cstruct.set_uint8 buf 0 op;
+  let to_be_signed op key header decrypted =
+    let hdr_len = hdr_len 0 in
+    let len = hdr_len + Cstruct.length decrypted in
+    let buf = Cstruct.create len in
+    Cstruct.set_uint8 buf 0 (op_key op key);
     Cstruct.BE.set_uint64 buf 1 header.local_session;
     Cstruct.BE.set_uint32 buf 9 header.replay_id;
     Cstruct.BE.set_uint32 buf 13 header.timestamp;
-    Cstruct.set_uint8 buf 17 (List.length header.ack_sequence_numbers);
-    let enc_ack idx ack = Cstruct.BE.set_uint32 buf (18 + (4 * idx)) ack in
-    List.iteri enc_ack header.ack_sequence_numbers;
-    Option.iter
-      (Cstruct.BE.set_uint64 buf (18 + acks_len))
-      header.remote_session;
-    (buf, 18 + acks_len + rses_len)
-
-  let to_be_signed_control op (header, sequence_number, payload) =
-    let buf, off =
-      to_be_signed_header op header ~more:(id_len + Cstruct.length payload)
-    in
-    Cstruct.BE.set_uint32 buf off sequence_number;
-    Cstruct.blit payload 0 buf (off + id_len) (Cstruct.length payload);
+    Cstruct.blit decrypted 0 buf hdr_len (Cstruct.length decrypted);
     buf
-
-  let to_be_signed key p =
-    let op = op_key (operation p) key in
-    match p with
-    | `Ack hdr -> fst (to_be_signed_header op hdr)
-    | `Control (Hard_reset_client_v3, (hdr, sn, _wkc)) ->
-        (* HARD_RESET_CLIENT_V3 is special: the wkc is not considered part of the packet *)
-        to_be_signed_control op (hdr, sn, Cstruct.empty)
-    | `Control (_, c) -> to_be_signed_control op c
 
   let encode_header buf hdr =
     let acks_len = id_len * List.length hdr.ack_sequence_numbers in
@@ -444,13 +376,12 @@ module Tls_crypt = struct
         Some (Cstruct.BE.get_uint64 buf (1 + (id_len * arr_len)))
       else None
     in
-    let { local_session; replay_id; timestamp; hmac } = clear_hdr in
+    let { local_session; replay_id; timestamp; _ } = clear_hdr in
     let res =
       {
         local_session;
         replay_id;
         timestamp;
-        hmac;
         ack_sequence_numbers;
         remote_session;
       }
