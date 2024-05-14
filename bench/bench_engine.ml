@@ -149,13 +149,12 @@ let established cipher =
     let outs = List.concat (List.rev outs) in
     (state, outs)
   in
-  let server =
+  let server, server_outs =
     match Miragevpn.new_connection initial_server inital_client_out with
-    | Ok t -> t
+    | Ok (state, outs, _application_data, _act_opt) -> (state, outs)
     | Error e ->
         Format.kasprintf failwith "server error: %a" Miragevpn.pp_error e
   in
-  let server, server_outs = drain "Server" server [ inital_client_out ] in
   let client, client_outs = drain "Client" initial_client server_outs in
   let server, server_outs = drain "Server" server client_outs in
   let client, client_outs = drain "Client" client server_outs in

@@ -327,111 +327,6 @@ let server server_config ~is_not_taken server_ts server_now server_rng =
     server_ip server_config,
     port )
 
-let new_connection server data =
-  let open Result.Syntax in
-  (* XXX(reynir): for now only TCP server *)
-  let protocol = `Tcp in
-  let session =
-    init_session
-      ~my_session_id:(Randomconv.int64 server.server_rng)
-      ~protocol ()
-  in
-  let current_ts = server.server_ts () in
-  let channel = new_channel 0 current_ts in
-  match Config.find Tls_crypt_v2_server server.server_config with
-  | None ->
-      let+ control_crypto =
-        match
-          (tls_auth server.server_config, tls_crypt server.server_config)
-        with
-        | Ok auth, Error _ -> Ok (`Tls_auth auth)
-        | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
-        | _ -> Error (`Msg "server only supports tls-auth or tls-crypt")
-      in
-      {
-        config = server.server_config;
-        is_not_taken = server.is_not_taken;
-        control_crypto;
-        state = Server Server_handshaking;
-        linger = Cstruct.empty;
-        rng = server.server_rng;
-        ts = server.server_ts;
-        now = server.server_now;
-        session;
-        channel;
-        lame_duck = None;
-        last_received = current_ts;
-        last_sent = current_ts;
-      }
-  | Some (_wrapping_key, true) ->
-      (* TODO: HMAC cookie support *)
-      Error (`Msg "Server does not support hmac cookies (yet)")
-  | Some (wrapping_key, false) -> (
-      match Packet.decode_key_op protocol data with
-      | Error `Tcp_partial ->
-          (* It is unlikely that we don't read a full packet in first try and it is annoying to handle. *)
-          assert false
-      | Error _ as e -> e
-      | Ok (Packet.Hard_reset_client_v2, _key, _received, _linger) ->
-          let+ control_crypto =
-            match
-              (tls_auth server.server_config, tls_crypt server.server_config)
-            with
-            | Ok auth, Error _ -> Ok (`Tls_auth auth)
-            | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
-            | _ -> Error (`Msg "server only supports tls-crypt-v2")
-          in
-          {
-            config = server.server_config;
-            is_not_taken = server.is_not_taken;
-            control_crypto;
-            state = Server Server_handshaking;
-            linger = Cstruct.empty;
-            rng = server.server_rng;
-            ts = server.server_ts;
-            now = server.server_now;
-            session;
-            channel;
-            lame_duck = None;
-            last_received = current_ts;
-            last_sent = current_ts;
-          }
-      | Ok (Packet.Hard_reset_client_v3, _key, received, _linger) ->
-          (* decode and unwrap wKc *)
-          let* _actual_packet, wkc =
-            Tls_crypt.Wrapped_key.of_cstruct received
-          in
-          let* tls_crypt, _metadata =
-            Tls_crypt.Wrapped_key.unwrap ~key:wrapping_key wkc
-          in
-          let control_crypto =
-            `Tls_crypt
-              ( {
-                  my = Tls_crypt.server_key tls_crypt;
-                  their = Tls_crypt.client_key tls_crypt;
-                },
-                None )
-          in
-          Ok
-            {
-              config = server.server_config;
-              is_not_taken = server.is_not_taken;
-              control_crypto;
-              state = Server Server_handshaking;
-              linger = Cstruct.empty;
-              rng = server.server_rng;
-              ts = server.server_ts;
-              now = server.server_now;
-              session;
-              channel;
-              lame_duck = None;
-              last_received = current_ts;
-              last_sent = current_ts;
-            }
-      | Ok (_not_hard_reset_client, _key, _received, _linger) ->
-          Error (`Msg "invalid initial packet"))
-(* `No_transition *)
-
 let pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"
   | `Alert typ ->
@@ -1996,6 +1891,98 @@ let incoming state control_crypto buf =
   Log.debug (fun m ->
       m "action %a" Fmt.(option ~none:(any "none") pp_action) act_opt);
   (s', out, List.rev payloads, act_opt)
+
+let new_connection server data =
+  let open Result.Syntax in
+  (* XXX(reynir): for now only TCP server *)
+  let protocol = `Tcp in
+  let session =
+    init_session
+      ~my_session_id:(Randomconv.int64 server.server_rng)
+      ~protocol ()
+  in
+  let current_ts = server.server_ts () in
+  let channel = new_channel 0 current_ts in
+  let* t, (control_crypto : control_tls) =
+    let tls_auth_or_tls_crypt error =
+      let+ (control_crypto : control_tls) =
+        match
+          (tls_auth server.server_config, tls_crypt server.server_config)
+        with
+        | Ok auth, Error _ -> Ok (`Tls_auth auth)
+        | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
+        | _ -> Error error
+      in
+      ( {
+          config = server.server_config;
+          is_not_taken = server.is_not_taken;
+          control_crypto :> control_crypto;
+          state = Server Server_handshaking;
+          linger = Cstruct.empty;
+          rng = server.server_rng;
+          ts = server.server_ts;
+          now = server.server_now;
+          session;
+          channel;
+          lame_duck = None;
+          last_received = current_ts;
+          last_sent = current_ts;
+        },
+        control_crypto )
+    in
+    match Config.find Tls_crypt_v2_server server.server_config with
+    | None ->
+        tls_auth_or_tls_crypt
+          (`Msg "server only supports tls-auth or tls-crypt")
+    | Some (_wrapping_key, true) ->
+        (* TODO: HMAC cookie support *)
+        Error (`Msg "Server does not support hmac cookies (yet)")
+    | Some (wrapping_key, false) -> (
+        match Packet.decode_key_op protocol data with
+        | Error `Tcp_partial ->
+            (* It is unlikely that we don't read a full packet in first try and it is annoying to handle. *)
+            assert false
+        | Error _ as e -> e
+        | Ok (Packet.Hard_reset_client_v2, _key, _received, _linger) ->
+            tls_auth_or_tls_crypt (`Msg "server only supports tls-crypt-v2")
+        | Ok (Packet.Hard_reset_client_v3, _key, received, _linger) ->
+            (* decode and unwrap wKc *)
+            let* _actual_packet, wkc =
+              Tls_crypt.Wrapped_key.of_cstruct received
+            in
+            let* tls_crypt, _metadata =
+              Tls_crypt.Wrapped_key.unwrap ~key:wrapping_key wkc
+            in
+            let control_crypto =
+              `Tls_crypt
+                ( {
+                    my = Tls_crypt.server_key tls_crypt;
+                    their = Tls_crypt.client_key tls_crypt;
+                  },
+                  None )
+            in
+            Ok
+              ( {
+                  config = server.server_config;
+                  is_not_taken = server.is_not_taken;
+                  control_crypto;
+                  state = Server Server_handshaking;
+                  linger = Cstruct.empty;
+                  rng = server.server_rng;
+                  ts = server.server_ts;
+                  now = server.server_now;
+                  session;
+                  channel;
+                  lame_duck = None;
+                  last_received = current_ts;
+                  last_sent = current_ts;
+                },
+                control_crypto )
+        | Ok (_not_hard_reset_client, _key, _received, _linger) ->
+            Error (`Msg "invalid initial packet"))
+    (* `No_transition *)
+  in
+  incoming t control_crypto data
 
 let maybe_ping_timeout state =
   (* timeout fires if no data was received within the configured interval *)
