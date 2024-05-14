@@ -944,7 +944,9 @@ let server_handle_tls_data config is_not_taken session keys tls d =
 let incoming_control_server is_not_taken config rng session channel _now _ts
     _key op data =
   match (channel.channel_st, op) with
-  | Expect_reset, (Packet.Hard_reset_client_v2 | Packet.Soft_reset_v2) ->
+  | ( Expect_reset,
+      ( Packet.Hard_reset_client_v2 | Packet.Hard_reset_client_v3
+      | Packet.Soft_reset_v2 ) ) ->
       (* TODO may need to do client certificate authentication here! *)
       let _ca, server, key =
         ( Config.get Ca config,
@@ -1801,8 +1803,6 @@ let incoming state control_crypto buf =
                         p :: payloads)
                   in
                   (state, out, payloads, act_opt)
-              | Packet.Hard_reset_client_v3 ->
-                  ignore_udp_error (Error (`No_transition (ch, op, received)))
               | op -> (
                   let* p, needs_wkc =
                     ignore_udp_error
@@ -1946,15 +1946,25 @@ let new_connection server data =
         | Ok (Packet.Hard_reset_client_v2, _key, _received, linger) ->
             assert (Cstruct.is_empty linger);
             tls_auth_or_tls_crypt (`Msg "server only supports tls-crypt-v2")
-        | Ok (Packet.Hard_reset_client_v3, _key, received, linger) ->
+        | Ok (Packet.Hard_reset_client_v3, key, received, linger) ->
             assert (Cstruct.is_empty linger);
             (* decode and unwrap wKc *)
             let* actual_packet, wkc =
               Tls_crypt.Wrapped_key.of_cstruct received
             in
-            let* tls_crypt, _metadata =
+            let actual_packet =
+              let buf = Cstruct.create (Cstruct.length actual_packet + 3) in
+              Packet.set_protocol buf `Tcp;
+              Cstruct.set_uint8 buf 2
+                (Packet.op_key Packet.Hard_reset_client_v3 key);
+              Cstruct.blit actual_packet 0 buf 3 (Cstruct.length actual_packet);
+              buf
+            in
+            let* tls_crypt, metadata =
               Tls_crypt.Wrapped_key.unwrap ~key:wrapping_key wkc
             in
+            Log.debug (fun m ->
+                m "metadata is %a" Tls_crypt.Metadata.pp_hum metadata);
             let control_crypto =
               `Tls_crypt
                 ( {
