@@ -1894,7 +1894,6 @@ let incoming state control_crypto buf =
 
 let new_connection server data =
   let open Result.Syntax in
-  (* XXX(reynir): for now only TCP server *)
   let protocol = `Tcp in
   let session =
     init_session
