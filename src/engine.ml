@@ -1902,7 +1902,7 @@ let new_connection server data =
   in
   let current_ts = server.server_ts () in
   let channel = new_channel 0 current_ts in
-  let* t, (control_crypto : control_tls) =
+  let* t, (control_crypto : control_tls), packet =
     let tls_auth_or_tls_crypt error =
       let+ (control_crypto : control_tls) =
         match
@@ -1927,7 +1927,8 @@ let new_connection server data =
           last_received = current_ts;
           last_sent = current_ts;
         },
-        control_crypto )
+        control_crypto,
+        data )
     in
     match Config.find Tls_crypt_v2_server server.server_config with
     | None ->
@@ -1942,11 +1943,13 @@ let new_connection server data =
             (* It is unlikely that we don't read a full packet in first try and it is annoying to handle. *)
             assert false
         | Error _ as e -> e
-        | Ok (Packet.Hard_reset_client_v2, _key, _received, _linger) ->
+        | Ok (Packet.Hard_reset_client_v2, _key, _received, linger) ->
+            assert (Cstruct.is_empty linger);
             tls_auth_or_tls_crypt (`Msg "server only supports tls-crypt-v2")
-        | Ok (Packet.Hard_reset_client_v3, _key, received, _linger) ->
+        | Ok (Packet.Hard_reset_client_v3, _key, received, linger) ->
+            assert (Cstruct.is_empty linger);
             (* decode and unwrap wKc *)
-            let* _actual_packet, wkc =
+            let* actual_packet, wkc =
               Tls_crypt.Wrapped_key.of_cstruct received
             in
             let* tls_crypt, _metadata =
@@ -1976,12 +1979,13 @@ let new_connection server data =
                   last_received = current_ts;
                   last_sent = current_ts;
                 },
-                control_crypto )
+                control_crypto,
+                actual_packet )
         | Ok (_not_hard_reset_client, _key, _received, _linger) ->
             Error (`Msg "invalid initial packet"))
     (* `No_transition *)
   in
-  incoming t control_crypto data
+  incoming t control_crypto packet
 
 let maybe_ping_timeout state =
   (* timeout fires if no data was received within the configured interval *)
