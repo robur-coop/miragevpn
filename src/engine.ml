@@ -1739,7 +1739,7 @@ let validate_control state control_crypto op key payload =
         let key = Tls_crypt.Key.cipher_key their in
         Aes_ctr.decrypt ~key ~ctr encrypted
       in
-      let* to_be_signed =
+      let to_be_signed =
         Packet.Tls_crypt.to_be_signed op key cleartext decrypted
       in
       let computed_hmac =

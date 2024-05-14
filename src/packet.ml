@@ -288,30 +288,14 @@ module Tls_crypt = struct
     hdr_len hmac_len - 1 (* not including acked sequence numbers *)
 
   let to_be_signed op key header decrypted =
-    let open Result.Syntax in
-    let+ bytes_to_use =
-      match op with
-      | Hard_reset_client_v3 ->
-          (* wkc is not part of the signed *)
-          let* () = guard (Cstruct.length decrypted > 1) `Partial in
-          let arr_len = Cstruct.get_uint8 decrypted 0 in
-          let byte_len =
-            1 (* arr_len *) + (arr_len * id_len)
-            (* acks *) + (if arr_len = 0 then 0 else 8)
-            (* remote session *) + 4 (* sequence number *)
-          in
-          let+ () = guard (Cstruct.length decrypted > byte_len) `Partial in
-          byte_len
-      | _ -> Ok (Cstruct.length decrypted)
-    in
     let hdr_len = hdr_len 0 in
-    let len = hdr_len + bytes_to_use in
+    let len = hdr_len + Cstruct.length decrypted in
     let buf = Cstruct.create len in
     Cstruct.set_uint8 buf 0 (op_key op key);
     Cstruct.BE.set_uint64 buf 1 header.local_session;
     Cstruct.BE.set_uint32 buf 9 header.replay_id;
     Cstruct.BE.set_uint32 buf 13 header.timestamp;
-    Cstruct.blit decrypted 0 buf hdr_len bytes_to_use;
+    Cstruct.blit decrypted 0 buf hdr_len (Cstruct.length decrypted);
     buf
 
   let encode_header buf hdr =
