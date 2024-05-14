@@ -332,7 +332,7 @@ val send_control_message :
   t -> string -> (t * Cstruct.t list, [ `Not_ready ]) result
 (** [send_control_message t message] sends [message] over the control channel. *)
 
-val new_connection : server -> t
+val new_connection : server -> (t, [> `Msg of string ]) result
 (** [new_connection server] is to be called when the server accepted a new
     TCP connection, a state [t] is constructed - which can be used with
     {!handle}. *)

@@ -141,67 +141,74 @@ struct
         (ip, `Continue)
 
   let callback t flow =
-    let client_state = ref (Miragevpn.new_connection t.server) in
-    let dst = TCP.dst flow in
-    Log.info (fun m -> m "%a new connection" pp_dst dst);
-    let rec read ?ip f =
-      let rm () =
-        match ip with
-        | None -> ()
-        | Some ip ->
-            Log.info (fun m ->
-                m "%a removing ip %a from connections" pp_dst dst Ipaddr.V4.pp
-                  ip);
-            Hashtbl.remove t.connections ip
-      and add ip = Hashtbl.replace t.connections ip (f, client_state) in
-      TCP.read f >>= function
-      | Error e ->
-          Log.err (fun m ->
-              m "%a error %a while reading" pp_dst dst TCP.pp_error e);
-          rm ();
-          TCP.close flow
-      | Ok `Eof ->
-          Log.warn (fun m -> m "%a eof" pp_dst dst);
-          rm ();
-          TCP.close flow
-      | Ok (`Data cs) -> (
-          match Miragevpn.handle !client_state (`Data cs) with
-          | Error msg ->
+    match Miragevpn.new_connection t.server with
+    | Error (`Msg msg) ->
+        Logs.warn (fun m -> m "couldn't initiate the connection %s" msg);
+        TCP.close flow
+    | Ok cs ->
+        let client_state = ref cs in
+        let dst = TCP.dst flow in
+        Log.info (fun m -> m "%a new connection" pp_dst dst);
+        let rec read ?ip f =
+          let rm () =
+            match ip with
+            | None -> ()
+            | Some ip ->
+                Log.info (fun m ->
+                    m "%a removing ip %a from connections" pp_dst dst
+                      Ipaddr.V4.pp ip);
+                Hashtbl.remove t.connections ip
+          and add ip = Hashtbl.replace t.connections ip (f, client_state) in
+          TCP.read f >>= function
+          | Error e ->
               Log.err (fun m ->
-                  m "%a internal miragevpn error %a" pp_dst dst
-                    Miragevpn.pp_error msg);
+                  m "%a error %a while reading" pp_dst dst TCP.pp_error e);
               rm ();
               TCP.close flow
-          | Ok (s', out, payloads, action) -> (
-              client_state := s';
-              let ip, continue_or_stop =
-                match action with
-                | None -> (ip, `Continue)
-                | Some action -> handle_action dst add rm ip action
-              in
-              (* Do not handle payloads from client that have not yet been
-                 assigned an ip address *)
-              (match ip with
-              | None ->
-                  if payloads <> [] then
-                    Logs.warn (fun m ->
-                        m "%a ignoring %u premature payloads" pp_dst dst
-                          (List.length payloads));
-                  Lwt.return_unit
-              | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
-              >>= fun () ->
-              TCP.writev f out >>= function
-              | Error e ->
+          | Ok `Eof ->
+              Log.warn (fun m -> m "%a eof" pp_dst dst);
+              rm ();
+              TCP.close flow
+          | Ok (`Data cs) -> (
+              match Miragevpn.handle !client_state (`Data cs) with
+              | Error msg ->
                   Log.err (fun m ->
-                      m "%a tcp write failed %a" pp_dst dst TCP.pp_write_error e);
+                      m "%a internal miragevpn error %a" pp_dst dst
+                        Miragevpn.pp_error msg);
                   rm ();
                   TCP.close flow
-              | Ok () -> (
-                  match continue_or_stop with
-                  | `Stop -> TCP.close flow
-                  | `Continue -> read ?ip f)))
-    in
-    read flow
+              | Ok (s', out, payloads, action) -> (
+                  client_state := s';
+                  let ip, continue_or_stop =
+                    match action with
+                    | None -> (ip, `Continue)
+                    | Some action -> handle_action dst add rm ip action
+                  in
+                  (* Do not handle payloads from client that have not yet been
+                     assigned an ip address *)
+                  (match ip with
+                  | None ->
+                      if payloads <> [] then
+                        Logs.warn (fun m ->
+                            m "%a ignoring %u premature payloads" pp_dst dst
+                              (List.length payloads));
+                      Lwt.return_unit
+                  | Some ip ->
+                      Lwt_list.iter_p (handle_payload t dst ip) payloads)
+                  >>= fun () ->
+                  TCP.writev f out >>= function
+                  | Error e ->
+                      Log.err (fun m ->
+                          m "%a tcp write failed %a" pp_dst dst
+                            TCP.pp_write_error e);
+                      rm ();
+                      TCP.close flow
+                  | Ok () -> (
+                      match continue_or_stop with
+                      | `Stop -> TCP.close flow
+                      | `Continue -> read ?ip f)))
+        in
+        read flow
 
   let rec timer server () =
     (* foreach connection, call handle `Tick and follow instructions! *)

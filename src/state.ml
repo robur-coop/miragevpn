@@ -422,7 +422,6 @@ type server = {
   server_rng : int -> Cstruct.t;
   server_ts : unit -> int64;
   server_now : unit -> Ptime.t;
-  tls_auth : tls_auth;
 }
 
 let pp_server ppf _s = Fmt.pf ppf "server"
