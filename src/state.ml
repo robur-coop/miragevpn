@@ -139,7 +139,10 @@ type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
-type action = [ initial_action | `Exit | `Established of ip_config * int ]
+type cc_message = Cc_message.cc_message
+
+type action =
+  [ initial_action | `Exit | `Established of ip_config * int | cc_message ]
 
 let pp_ip_version ppf = function
   | `Ipv4 -> Fmt.string ppf "ipv4"
@@ -158,6 +161,8 @@ let pp_action ppf = function
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) ->
       Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
+  | (`Cc_exit | `Cc_restart | `Cc_halt) as msg ->
+      Fmt.pf ppf "control channel message %a" Cc_message.pp msg
 
 let ip_from_config config =
   match Config.(get Ifconfig config, get Route_gateway config) with

@@ -135,6 +135,12 @@ struct
         rm ();
         Log.info (fun m -> m "%a exiting" pp_dst dst);
         (None, `Stop)
+    | `Cc_exit ->
+        (* server does not produce [`Cc_halt] or [`Cc_restart] actions *)
+        rm ();
+        Log.info (fun m ->
+            m "%a exiting due to explicit exit notification" pp_dst dst);
+        (None, `Stop)
     | a ->
         Log.warn (fun m ->
             m "%a ignoring action %a" pp_dst dst Miragevpn.pp_action a);
@@ -456,7 +462,10 @@ struct
         else (
           Log.warn (fun m -> m "ignoring connection (cancelled by switch)");
           match r with None -> Lwt.return_unit | Some f -> TCP.close f)
-    | `Exit -> failwith "exit called"
+    | `Exit -> (* FIXME *) failwith "exit called"
+    | (`Cc_exit | `Cc_restart | `Cc_halt) as _msg ->
+        (* FIXME *)
+        failwith "exit message received"
     | `Established (ip, mtu) ->
         Log.debug (fun m -> m "action = established");
         Lwt_mvar.put conn.est_mvar (ip, mtu)

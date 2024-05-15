@@ -825,35 +825,22 @@ let incoming_control_client config rng session channel now op data =
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = ip_from_config config' in
       (Some (`Established ip_config), config', { channel with channel_st }, [])
-  | Established (tls, keys), Packet.Control -> (
+  | Established (tls, keys), Packet.Control ->
       let open Result.Syntax in
       let+ tls', d = incoming_tls_without_reply tls data in
-      match d with
-      | Some d ->
-          let d = Cstruct.to_string d in
-          if
-            String.equal d "RESTART\000"
-            || String.equal d "EXIT\000" || String.equal d "HALT\000"
-          then
-            let () = Log.warn (fun m -> m "Received control message: %S" d) in
-            ( Some `Exit,
-              config,
-              { channel with channel_st = Established (tls', keys) },
-              [] )
-          else
-            let () =
-              Log.warn (fun m -> m "Received unknown control message: %S" d)
-            in
-            ( None,
-              config,
-              { channel with channel_st = Established (tls', keys) },
-              [] )
-      | None ->
-          (* a bit odd to return [None] ip_config *)
-          ( None,
-            config,
-            { channel with channel_st = Established (tls', keys) },
-            [] ))
+      let channel = { channel with channel_st = Established (tls', keys) } in
+      let act =
+        match d with
+        | None -> None
+        | Some d -> (
+            let d = Cstruct.to_string d in
+            match Cc_message.parse d with
+            | Some msg -> Some msg
+            | None ->
+                Log.warn (fun m -> m "Received unknown control message: %S" d);
+                None)
+      in
+      (act, config, channel, [])
   | _ -> Error (`No_transition (channel, op, data))
 
 let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
@@ -1008,35 +995,25 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
         in
         Ok (ip_config, config, { channel with channel_st }, out)
       else Error (`Msg "expected push request")
-  | Established (tls, keys), Packet.Control -> (
+  | Established (tls, keys), Packet.Control ->
       let open Result.Syntax in
       let+ tls', d = incoming_tls_without_reply tls data in
-      match d with
-      | Some d ->
-          let d = Cstruct.to_string d in
-          if
-            String.equal d "RESTART\000"
-            || String.equal d "EXIT\000" || String.equal d "HALT\000"
-          then
-            let () = Log.warn (fun m -> m "Received control message: %S" d) in
-            ( Some `Exit,
-              config,
-              { channel with channel_st = Established (tls', keys) },
-              [] )
-          else
-            let () =
-              Log.warn (fun m -> m "Received unknown control message: %S" d)
-            in
-            ( None,
-              config,
-              { channel with channel_st = Established (tls', keys) },
-              [] )
-      | None ->
-          (* a bit odd to return [None] ip_config *)
-          ( None,
-            config,
-            { channel with channel_st = Established (tls', keys) },
-            [] ))
+      let channel = { channel with channel_st = Established (tls', keys) } in
+      let act =
+        match d with
+        | None -> None
+        | Some d -> (
+            let d = Cstruct.to_string d in
+            match Cc_message.parse d with
+            | Some (`Cc_exit as msg) -> Some msg
+            | Some (`Cc_restart | `Cc_halt) ->
+                Log.info (fun m -> m "Received control message (ignored): %S" d);
+                None
+            | None ->
+                Log.warn (fun m -> m "Received unknown control message: %S" d);
+                None)
+      in
+      (act, config, channel, [])
   | _, _ -> Error (`No_transition (channel, op, data))
 
 let incoming_control is_not_taken config rng state session channel now ts key op
@@ -1853,6 +1830,19 @@ let incoming state control_crypto buf =
                                        older %a and using newer %a"
                                       pp_action a_old pp_action `Exit);
                                 Some `Exit
+                          in
+                          Ok (set_ch state ch, out, payloads, act)
+                      | Some (#Cc_message.cc_message as a_new) ->
+                          let act =
+                            match act_opt with
+                            | None -> Some a_new
+                            | Some a_old ->
+                                Log.warn (fun m ->
+                                    m
+                                      "Ignoring new control channel message %a \
+                                       due to older action %a"
+                                      pp_action a_new pp_action a_old);
+                                Some a_old
                           in
                           Ok (set_ch state ch, out, payloads, act)
                       | Some (`Established ip_config) ->

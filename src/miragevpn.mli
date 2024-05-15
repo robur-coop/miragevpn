@@ -274,7 +274,10 @@ type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
-type action = [ initial_action | `Exit | `Established of ip_config * int ]
+type cc_message = [ `Cc_exit | `Cc_restart | `Cc_halt ]
+
+type action =
+  [ initial_action | `Exit | `Established of ip_config * int | cc_message ]
 
 val pp_action : action Fmt.t
 
