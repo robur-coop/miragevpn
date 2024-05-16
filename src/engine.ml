@@ -318,6 +318,16 @@ let server server_config ~is_not_taken ?auth_user_pass server_ts server_now
     server_rng =
   let open Result.Syntax in
   let+ () = Config.is_valid_server_config server_config in
+  (match (auth_user_pass, Config.find Verify_client_cert server_config) with
+  | None, Some `None ->
+      Log.warn (fun m ->
+          m
+            "Server configuration without authentication! Your server accepts \
+             all clients. You should reconsider and use '--verify-client-cert \
+             required' and provide a '--ca' or '--peer-fingerprint'. \
+             Alternatively, provide ~auth_user_pass that checks for usernames \
+             and password.")
+  | _ -> ());
   let port = Option.value ~default:1194 (Config.find Port server_config) in
   ( {
       server_config;
