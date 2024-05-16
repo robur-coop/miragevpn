@@ -463,9 +463,9 @@ struct
           Log.warn (fun m -> m "ignoring connection (cancelled by switch)");
           match r with None -> Lwt.return_unit | Some f -> TCP.close f)
     | `Exit -> (* FIXME *) failwith "exit called"
-    | (`Cc_exit | `Cc_restart | `Cc_halt) as _msg ->
+    | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as exit_msg ->
         (* FIXME *)
-        failwith "exit message received"
+        Format.kasprintf failwith "%a received" Miragevpn.pp_action exit_msg
     | `Established (ip, mtu) ->
         Log.debug (fun m -> m "action = established");
         Lwt_mvar.put conn.est_mvar (ip, mtu)

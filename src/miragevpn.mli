@@ -274,7 +274,8 @@ type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
-type cc_message = [ `Cc_exit | `Cc_restart | `Cc_halt ]
+type cc_message =
+  [ `Cc_exit | `Cc_restart of string option | `Cc_halt of string option ]
 
 type action =
   [ initial_action | `Exit | `Established of ip_config * int | cc_message ]

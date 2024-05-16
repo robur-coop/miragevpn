@@ -1006,7 +1006,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
             let d = Cstruct.to_string d in
             match Cc_message.parse d with
             | Some (`Cc_exit as msg) -> Some msg
-            | Some (`Cc_restart | `Cc_halt) ->
+            | Some (`Cc_restart _ | `Cc_halt _) ->
                 Log.info (fun m -> m "Received control message (ignored): %S" d);
                 None
             | None ->
