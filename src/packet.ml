@@ -595,6 +595,7 @@ let decode_tls_data ?(with_premaster = false) buf =
 
 let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
 let push_reply = Cstruct.of_string "PUSH_REPLY"
+let auth_failed = Cstruct.of_string "AUTH_FAILED\x00"
 
 module Iv_proto = struct
   type t = Request_push | Tls_key_export | Use_cc_exit_notify

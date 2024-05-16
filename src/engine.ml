@@ -537,14 +537,22 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
     tls data =
   let open Result.Syntax in
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
-  let* () =
+  let* authenticated =
     match (auth_user_pass, their_tls_data.user_pass) with
-    | None, _ -> Ok ()
-    | Some _, None -> Error (`Msg "no username and password provided")
+    | None, _ -> Ok true (* erm... *)
+    | Some _, None ->
+      Ok false
     | Some auth, Some (user, pass) ->
-        if auth ~user ~pass then Ok ()
-        else Error (`Msg "couldn't verify username and password")
+        Ok (auth ~user ~pass)
   in
+  if not authenticated then
+    let* tls', payload =
+      Option.to_result ~none:(`Msg "not yet established")
+        (Tls.Engine.send_application_data tls [ Packet.auth_failed ])
+    in
+    Ok (`Authenticaion_failed tls', config, payload)
+
+  else
   let* cipher =
     let client_ciphers =
       match their_tls_data.peer_info with
@@ -937,6 +945,8 @@ let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
   | `State (channel_st, ip_config) ->
       (* keys established, move forward to "expect push request (reply with push reply)" *)
       Ok (ip_config, config, channel_st, [ (`Control, out) ])
+  | `Authenticaion_failed _tls ->
+      Ok (None, config, Expect_reset, [ (`Control, out) ])
 
 let incoming_control_server auth_user_pass is_not_taken config rng session
     channel now _ts _key op data =
