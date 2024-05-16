@@ -294,11 +294,11 @@ let client ?pkcs12_password config ts now rng =
       match Config.find Comp_lzo config with None -> false | Some () -> true
     in
     let session = init_session ~my_session_id:0L ~compress ()
-    and channel = new_channel 0 current_ts
-    and is_not_taken _ = false in
+    and channel = new_channel 0 current_ts in
     {
       config;
-      is_not_taken;
+      is_not_taken = (fun _ -> false);
+      auth_user_pass = None;
       state = Client state;
       control_crypto;
       linger = Cstruct.empty;
@@ -314,11 +314,19 @@ let client ?pkcs12_password config ts now rng =
   in
   Ok (state, action)
 
-let server server_config ~is_not_taken server_ts server_now server_rng =
+let server server_config ~is_not_taken ?auth_user_pass server_ts server_now
+    server_rng =
   let open Result.Syntax in
   let+ () = Config.is_valid_server_config server_config in
   let port = Option.value ~default:1194 (Config.find Port server_config) in
-  ( { server_config; is_not_taken; server_rng; server_ts; server_now },
+  ( {
+      server_config;
+      is_not_taken;
+      auth_user_pass;
+      server_rng;
+      server_ts;
+      server_now;
+    },
     server_ip server_config,
     port )
 
@@ -525,10 +533,18 @@ let tls_ekm tls config =
   | None, Some flags -> if List.mem `Tls_ekm flags then Some tls else None
   | None, None -> None
 
-let kex_server config session (my_key_material : my_key_material) tls data =
+let kex_server config auth_user_pass session (my_key_material : my_key_material)
+    tls data =
   let open Result.Syntax in
-  (* TODO verify username + password, respect incoming data *)
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
+  let* () =
+    match (auth_user_pass, their_tls_data.user_pass) with
+    | None, _ -> Ok ()
+    | Some _, None -> Error (`Msg "no username and password provided")
+    | Some auth, Some (user, pass) ->
+        if auth ~user ~pass then Ok ()
+        else Error (`Msg "couldn't verify username and password")
+  in
   let* cipher =
     let client_ciphers =
       match their_tls_data.peer_info with
@@ -906,9 +922,12 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   in
   Ok (Some (`Established ip_config), config', channel_st, [ (`Control, out) ])
 
-let server_handle_tls_data config is_not_taken session keys tls d =
+let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
+    =
   let open Result.Syntax in
-  let* next, config, out = kex_server config session keys tls d in
+  let* next, config, out =
+    kex_server config auth_user_pass session keys tls d
+  in
   match next with
   | `Send_push_reply (tls', key, tls_data) ->
       let* ip_config, config, channel_st, out' =
@@ -919,8 +938,8 @@ let server_handle_tls_data config is_not_taken session keys tls d =
       (* keys established, move forward to "expect push request (reply with push reply)" *)
       Ok (ip_config, config, channel_st, [ (`Control, out) ])
 
-let incoming_control_server is_not_taken config rng session channel _now _ts
-    _key op data =
+let incoming_control_server auth_user_pass is_not_taken config rng session
+    channel _now _ts _key op data =
   match (channel.channel_st, op) with
   | ( Expect_reset,
       ( Packet.Hard_reset_client_v2 | Packet.Hard_reset_client_v3
@@ -966,7 +985,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       match (channel_st, d) with
       | TLS_established (tls', keys), Some d ->
           let* ip_config, config, channel_st, out' =
-            server_handle_tls_data config is_not_taken session keys tls' d
+            server_handle_tls_data config auth_user_pass is_not_taken session
+              keys tls' d
           in
           Ok (ip_config, config, { channel with channel_st }, out @ out')
       | _ -> Ok (None, config, { channel with channel_st }, out))
@@ -976,7 +996,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       match d with
       | Some d ->
           let* ip_config, config, channel_st, out =
-            server_handle_tls_data config is_not_taken session keys tls' d
+            server_handle_tls_data config auth_user_pass is_not_taken session
+              keys tls' d
           in
           Ok (ip_config, config, { channel with channel_st }, out)
       | None ->
@@ -1014,16 +1035,16 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       (act, config, channel, [])
   | _, _ -> Error (`No_transition (channel, op, data))
 
-let incoming_control is_not_taken config rng state session channel now ts key op
-    data =
+let incoming_control auth_user_pass is_not_taken config rng state session
+    channel now ts key op data =
   Log.info (fun m ->
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
   match state with
   | Client _ -> incoming_control_client config rng session channel now op data
   | Server _ ->
-      incoming_control_server is_not_taken config rng session channel now ts key
-        op data
+      incoming_control_server auth_user_pass is_not_taken config rng session
+        channel now ts key op data
 
 let expected_packet session transport data =
   let open Result.Syntax in
@@ -1793,9 +1814,9 @@ let incoming state control_crypto buf =
                   | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
                   | `Control (_, (_, _, data)) -> (
                       let* est, config, ch, out' =
-                        incoming_control state.is_not_taken state.config
-                          state.rng state.state state.session ch (state.now ())
-                          (state.ts ()) key op data
+                        incoming_control state.auth_user_pass state.is_not_taken
+                          state.config state.rng state.state state.session ch
+                          (state.now ()) (state.ts ()) key op data
                       in
                       Log.debug (fun m ->
                           m "out channel %a, pkts %d" pp_channel ch
@@ -1903,6 +1924,7 @@ let new_connection server data =
       ( {
           config = server.server_config;
           is_not_taken = server.is_not_taken;
+          auth_user_pass = server.auth_user_pass;
           control_crypto :> control_crypto;
           state = Server Server_handshaking;
           linger = Cstruct.empty;
@@ -1964,6 +1986,7 @@ let new_connection server data =
             Ok
               ( {
                   config = server.server_config;
+                  auth_user_pass = server.auth_user_pass;
                   is_not_taken = server.is_not_taken;
                   control_crypto;
                   state = Server Server_handshaking;

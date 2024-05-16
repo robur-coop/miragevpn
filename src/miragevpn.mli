@@ -296,16 +296,18 @@ val client :
 val server :
   Config.t ->
   is_not_taken:(Ipaddr.V4.t -> bool) ->
+  ?auth_user_pass:(user:string -> pass:string -> bool) ->
   (unit -> int64) ->
   (unit -> Ptime.t) ->
   (int -> Cstruct.t) ->
   ( server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int,
     [> `Msg of string ] )
   result
-(** [server config ~is_not_taken ts now rng] constructs a [server], its [ip,
-    netmask] and [port].  The callback [is_not_taken] is provided to avoid IP
-    address collisions. It returns an error if the configuration does not
-    contain a tls-auth element. *)
+(** [server config ~is_not_taken ~auth_user_pass ts now rng] constructs a
+    [server], its [ip, netmask] and [port].  The callback [is_not_taken] is
+    provided to avoid IP address collisions. The callback [auth_user_pass]
+    validates username and password of each connection. It returns an error if
+    the configuration does not contain a tls-auth element. *)
 
 type error
 (** The type of errors when processing incoming data. *)
