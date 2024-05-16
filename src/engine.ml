@@ -987,7 +987,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
                   "server with 'verify-client-cert optional', ensure a \
                    different authentication mechanism is set up.");
             Ok (Some (fun ?ip:_ ~host:_ _certs -> Ok None))
-        | _, None, None ->
+        | Some (`Optional | `Required), None, None ->
             Error
               (`Msg
                 "server without a CA or peer-fingerprint, and \
