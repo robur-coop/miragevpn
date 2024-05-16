@@ -546,11 +546,26 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
         Ok (auth ~user ~pass)
   in
   if not authenticated then
+    let td =
+      let options = Config.server_generate_connect_options config in
+      {
+        Packet.pre_master = Cstruct.empty;
+        random1 = my_key_material.random1;
+        random2 = my_key_material.random2;
+        options;
+        user_pass = None;
+        peer_info = None;
+      }
+    in
     let* tls', payload =
       Option.to_result ~none:(`Msg "not yet established")
-        (Tls.Engine.send_application_data tls [ Packet.auth_failed ])
+        (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
     in
-    Ok (`Authenticaion_failed tls', config, payload)
+    let* tls'', payload' =
+      Option.to_result ~none:(`Msg "not yet established")
+        (Tls.Engine.send_application_data tls' [ Packet.auth_failed ])
+    in
+    Ok (`Authentication_failed tls'', config, [payload; payload'])
 
   else
   let* cipher =
@@ -649,7 +664,7 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
     | _ ->
         Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
   in
-  (state, config, payload)
+  (state, config, [payload])
 
 let push_request tls =
   Option.to_result
@@ -936,17 +951,19 @@ let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
   let* next, config, out =
     kex_server config auth_user_pass session keys tls d
   in
+  let out = List.map (fun out -> (`Control, out)) out in
   match next with
   | `Send_push_reply (tls', key, tls_data) ->
       let* ip_config, config, channel_st, out' =
         server_send_push_reply config is_not_taken tls' session key tls_data
       in
-      Ok (ip_config, config, channel_st, (`Control, out) :: out')
+      Ok (ip_config, config, channel_st, out @ out')
   | `State (channel_st, ip_config) ->
       (* keys established, move forward to "expect push request (reply with push reply)" *)
-      Ok (ip_config, config, channel_st, [ (`Control, out) ])
-  | `Authenticaion_failed _tls ->
-      Ok (None, config, Expect_reset, [ (`Control, out) ])
+      Ok (ip_config, config, channel_st, out)
+  | `Authentication_failed _tls ->
+      (* XXX: we should emit an `Exit action also *)
+      Ok (None, config, Expect_reset, out)
 
 let incoming_control_server auth_user_pass is_not_taken config rng session
     channel now _ts _key op data =
