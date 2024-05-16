@@ -206,6 +206,10 @@ let rec established_action proto fd incoming ifconfig tick client actions =
   | `Established _ ->
       Logs.err (fun m -> m "Unexpected action %a" pp_action action);
       assert false
+  | (`Cc_exit | `Cc_halt _ | `Cc_restart _) as action ->
+      Logs.warn (fun m -> m "Exiting due to received %a" pp_action action);
+      let+ () = Common.safe_close fd in
+      exit 0
   | (`Connect _ | `Resolve _) as action ->
       let* () = Common.safe_close fd in
       connecting_action tick client (action :: actions)
@@ -250,6 +254,11 @@ and connected_action proto fd incoming tick client actions =
   | `Payload _ ->
       Logs.err (fun m -> m "Unexpected action %a" pp_action action);
       assert false
+  | (`Cc_exit | `Cc_halt _ | `Cc_restart _) as action ->
+      (* TODO: restart and exit should result in reconnect *)
+      Logs.warn (fun m -> m "Exiting due to received %a" pp_action action);
+      let+ () = Common.safe_close fd in
+      exit 0
   | (`Connect _ | `Resolve _) as action ->
       let* () = Common.safe_close fd in
       connecting_action tick client (action :: actions)
@@ -293,6 +302,9 @@ and connecting_action tick client actions =
       let* ev, k = connect in
       event k tick client actions ev
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
+  | (`Cc_exit | `Cc_halt _ | `Cc_restart _) as action ->
+      Logs.warn (fun m -> m "Exiting due to received %a" pp_action action);
+      exit 0
   | `Established _ | `Payload _ | `Transmit _ ->
       Logs.err (fun m -> m "Unexpected action %a" pp_action action);
       assert false

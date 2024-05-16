@@ -218,7 +218,10 @@ let handle_action conn = function
       else (
         Logs.warn (fun m -> m "connection cancelled by switch");
         match r with None -> Lwt.return_unit | Some x -> Common.safe_close x)
-  | `Exit -> failwith "exit called"
+  | `Exit -> (* FIXME *) failwith "exit called"
+  | (`Cc_exit | `Cc_halt _ | `Cc_restart _) as exit_msg ->
+      (* FIXME *)
+      Format.kasprintf failwith "%a received" Miragevpn.pp_action exit_msg
   | `Established (ip, mtu) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
       Lwt_mvar.put conn.est_mvar (Ok (ip, mtu))
