@@ -975,28 +975,16 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
                              ~hash:`SHA256 ~fingerprint ?ip ~host chain)
                      (Error (`Msg "No fingerprints provided"))
                      fps))
-        | Some `None, _, _ ->
-            Log.warn (fun m ->
-                m
-                  "server with 'verify-client-cert none', ensure a different \
-                   authentication mechanism is set up.");
-            Ok None
+        | Some `None, _, _ -> Ok None
         | Some `Optional, _, _ ->
             Log.warn (fun m ->
                 m
                   "server with 'verify-client-cert optional', ensure a \
                    different authentication mechanism is set up.");
             Ok (Some (fun ?ip:_ ~host:_ _certs -> Ok None))
-        | Some (`Optional | `Required), None, None ->
-            Error
-              (`Msg
-                "server without a CA or peer-fingerprint, and \
-                 'verify-client-cert' is not set to 'none'")
-        | _, Some _, Some _ ->
-            Error
-              (`Msg
-                "server with both CA and peer-fingerprint, please choose only \
-                 one")
+        | (None | Some `Required), (None | Some _), (None | Some _) ->
+            (* already checked in config.ml *)
+            assert false
       in
       let tls_config =
         Tls.Config.server ?ciphers ?version
