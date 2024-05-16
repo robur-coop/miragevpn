@@ -106,6 +106,7 @@ let established cipher =
     |> add Server (Ipaddr.V4.Prefix.of_string_exn "10.0.1.0/24")
     |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Tls_cert cert
     |> add Tls_key key |> add Cipher cipher
+    |> add Verify_client_cert `None
   in
 
   let[@ocaml.warning "-8"] ( initial_client,
