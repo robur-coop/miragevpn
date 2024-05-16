@@ -939,22 +939,48 @@ let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
       Ok (ip_config, config, channel_st, [ (`Control, out) ])
 
 let incoming_control_server auth_user_pass is_not_taken config rng session
-    channel _now _ts _key op data =
+    channel now _ts _key op data =
+  let open Result.Syntax in
   match (channel.channel_st, op) with
   | ( Expect_reset,
       ( Packet.Hard_reset_client_v2 | Packet.Hard_reset_client_v3
       | Packet.Soft_reset_v2 ) ) ->
-      (* TODO may need to do client certificate authentication here! *)
-      let _ca, server, key =
-        ( Config.get Ca config,
-          Config.get Tls_cert config,
-          Config.get Tls_key config )
+      let server, key =
+        (Config.get Tls_cert config, Config.get Tls_key config)
       in
       let ciphers = tls_ciphers config and version = tls_version config in
+      let* authenticator =
+        match
+          (Config.find Verify_client_cert config, Config.find Ca config)
+        with
+        | None, Some ca | Some `Required, Some ca ->
+            Ok
+              (Some
+                 (X509.Authenticator.chain_of_trust
+                    ~time:(fun () -> Some now)
+                    ~allowed_hashes:Mirage_crypto.Hash.hashes ca))
+        | Some `None, _ ->
+            Log.warn (fun m ->
+                m
+                  "server with 'verify-client-cert none', ensure a different \
+                   authentication mechanism is set up.");
+            Ok None
+        | Some `Optional, _ ->
+            Log.warn (fun m ->
+                m
+                  "server with 'verify-client-cert optional', ensure a \
+                   different authentication mechanism is set up.");
+            Ok (Some (fun ?ip:_ ~host:_ _certs -> Ok None))
+        | _, None ->
+            Error
+              (`Msg
+                "server without a CA, and 'verify-client-cert' is not set to \
+                 'none'")
+      in
       let tls_config =
         Tls.Config.server ?ciphers ?version
           ~certificates:(`Single ([ server ], key))
-          ()
+          ?authenticator ()
       in
       let tls = Tls.Engine.server tls_config in
       let channel = { channel with channel_st = TLS_handshake tls } in
