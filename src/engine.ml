@@ -976,13 +976,9 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
                      (Error (`Msg "No fingerprints provided"))
                      fps))
         | Some `None, _, _ -> Ok None
-        | Some `Optional, _, _ ->
-            Log.warn (fun m ->
-                m
-                  "server with 'verify-client-cert optional', ensure a \
-                   different authentication mechanism is set up.");
-            Ok (Some (fun ?ip:_ ~host:_ _certs -> Ok None))
-        | (None | Some `Required), (None | Some _), (None | Some _) ->
+        | Some `Optional, _, _
+        | (None | Some `Required), None, None
+        | (None | Some `Required), Some _, Some _ ->
             (* already checked in config.ml *)
             assert false
       in

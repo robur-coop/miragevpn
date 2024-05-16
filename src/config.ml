@@ -416,9 +416,14 @@ module Conf_map = struct
              if not (mem Ca t || mem Peer_fingerprint t) then
                Error
                  "server without a --ca or --peer-fingerprint, but \
-                  'verify-client-cert' is not set to 'required'"
+                  --verify-client-cert is set to 'required' (or not provided, \
+                  and required is the default)."
              else Ok ()
-         | _ -> Ok ()
+         | Some `Optional ->
+             Error
+               "server with --verify-client-cert optional, which is not \
+                supported at the moment. Please get in touch with the \
+                developers."
        in
        let* () =
          if mem Ca t && mem Peer_fingerprint t then
