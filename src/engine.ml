@@ -742,7 +742,7 @@ let incoming_control_client config rng session channel now op data =
                 ~time:(fun () -> Some now)
                 ca
           | _, Some fps ->
-              Logs.info (fun m ->
+              Log.info (fun m ->
                   m "authenticating with fingerprints %a"
                     Fmt.(list ~sep:(any "\n") Hex.pp)
                     (List.map Hex.of_cstruct fps));
