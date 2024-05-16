@@ -547,13 +547,11 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
     tls data =
   let open Result.Syntax in
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
-  let* authenticated =
+  let authenticated =
     match (auth_user_pass, their_tls_data.user_pass) with
-    | None, _ -> Ok true (* erm... *)
-    | Some _, None ->
-      Ok false
-    | Some auth, Some (user, pass) ->
-        Ok (auth ~user ~pass)
+    | None, _ -> true (* erm... *)
+    | Some _, None -> false
+    | Some auth, Some (user, pass) -> auth ~user ~pass
   in
   if not authenticated then
     let td =
@@ -575,106 +573,109 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
       Option.to_result ~none:(`Msg "not yet established")
         (Tls.Engine.send_application_data tls' [ Packet.auth_failed ])
     in
-    Ok (`Authentication_failed tls'', config, [payload; payload'])
-
+    Ok (`Authentication_failed tls'', config, [ payload; payload' ])
   else
-  let* cipher =
-    let client_ciphers =
-      match their_tls_data.peer_info with
-      | Some pi -> (
-          match List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") pi with
-          | Some ciphers ->
-              List.filter_map Config.aead_cipher_of_string
-                (String.split_on_char ':'
-                   (String.sub ciphers 11 (String.length ciphers - 11)))
-          | None ->
-              if List.mem "IV_NCP=2" pi then [ `AES_128_GCM; `AES_256_GCM ]
-              else [])
-      | None -> []
+    let* cipher =
+      let client_ciphers =
+        match their_tls_data.peer_info with
+        | Some pi -> (
+            match
+              List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") pi
+            with
+            | Some ciphers ->
+                List.filter_map Config.aead_cipher_of_string
+                  (String.split_on_char ':'
+                     (String.sub ciphers 11 (String.length ciphers - 11)))
+            | None ->
+                if List.mem "IV_NCP=2" pi then [ `AES_128_GCM; `AES_256_GCM ]
+                else [])
+        | None -> []
+      in
+      List.find_opt
+        (fun candidate -> List.mem candidate client_ciphers)
+        (Config.get Config.Data_ciphers config)
+      |> Option.to_result ~none:(`Msg "No shared ciphers")
     in
-    List.find_opt
-      (fun candidate -> List.mem candidate client_ciphers)
-      (Config.get Config.Data_ciphers config)
-    |> Option.to_result ~none:(`Msg "No shared ciphers")
-  in
-  let iv_proto =
-    let ( let* ) = Option.bind in
-    let prefix = "IV_PROTO=" in
-    let* peer_info = their_tls_data.peer_info in
-    let* iv_proto_s = List.find_opt (String.starts_with ~prefix) peer_info in
-    let v =
-      String.sub iv_proto_s (String.length prefix)
-        (String.length iv_proto_s - String.length prefix)
+    let iv_proto =
+      let ( let* ) = Option.bind in
+      let prefix = "IV_PROTO=" in
+      let* peer_info = their_tls_data.peer_info in
+      let* iv_proto_s = List.find_opt (String.starts_with ~prefix) peer_info in
+      let v =
+        String.sub iv_proto_s (String.length prefix)
+          (String.length iv_proto_s - String.length prefix)
+      in
+      int_of_string_opt v
     in
-    int_of_string_opt v
-  in
-  let config = Config.add Cipher (cipher :> Config.cipher) config in
-  let config =
-    let supports_tls_ekm =
-      Option.fold iv_proto ~none:false
-        ~some:Packet.Iv_proto.(contains Tls_key_export)
-    in
+    let config = Config.add Cipher (cipher :> Config.cipher) config in
     let config =
-      if
-        supports_tls_ekm
-        && Option.fold iv_proto ~none:false
-             ~some:Packet.Iv_proto.(contains Use_cc_exit_notify)
-      then Config.add_protocol_flag `Tls_ekm config
+      let supports_tls_ekm =
+        Option.fold iv_proto ~none:false
+          ~some:Packet.Iv_proto.(contains Tls_key_export)
+      in
+      let config =
+        if
+          supports_tls_ekm
+          && Option.fold iv_proto ~none:false
+               ~some:Packet.Iv_proto.(contains Use_cc_exit_notify)
+        then Config.add_protocol_flag `Tls_ekm config
+        else config
+      in
+      (* XXX(reynir): if a client supports tls-ekm and set [Use_cc_exit_notify]
+         it is unnecessary to use 'key-derivation tls-ekm' in addition to
+         'protocol-flags tls-ekm'. In that case 'protocol-flags tls-ekm' is
+         sufficient. *)
+      if supports_tls_ekm then Config.add Key_derivation `Tls_ekm config
       else config
     in
-    (* XXX(reynir): if a client supports tls-ekm and set [Use_cc_exit_notify]
-       it is unnecessary to use 'key-derivation tls-ekm' in addition to
-       'protocol-flags tls-ekm'. In that case 'protocol-flags tls-ekm' is
-       sufficient. *)
-    if supports_tls_ekm then Config.add Key_derivation `Tls_ekm config
-    else config
-  in
-  let options = Config.server_generate_connect_options config in
-  let td =
-    {
-      Packet.pre_master = Cstruct.empty;
-      random1 = my_key_material.random1;
-      random2 = my_key_material.random2;
-      options;
-      user_pass = None;
-      peer_info = None;
-    }
-  in
-  let* tls', payload =
-    Option.to_result ~none:(`Msg "not yet established")
-      (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
-  in
-  let+ state =
-    match Config.find Ifconfig config with
-    | None ->
-        let requested_push =
-          Option.fold iv_proto ~none:false
-            ~some:Packet.Iv_proto.(contains Request_push)
-        in
-        if requested_push then
-          Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
-        else
+    let options = Config.server_generate_connect_options config in
+    let td =
+      {
+        Packet.pre_master = Cstruct.empty;
+        random1 = my_key_material.random1;
+        random2 = my_key_material.random2;
+        options;
+        user_pass = None;
+        peer_info = None;
+      }
+    in
+    let* tls', payload =
+      Option.to_result ~none:(`Msg "not yet established")
+        (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
+    in
+    let+ state =
+      match Config.find Ifconfig config with
+      | None ->
+          let requested_push =
+            Option.fold iv_proto ~none:false
+              ~some:Packet.Iv_proto.(contains Request_push)
+          in
+          if requested_push then
+            Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
+          else
+            Ok
+              (`State
+                (Push_request_sent (tls', my_key_material, their_tls_data), None))
+      | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
+          let ip_config =
+            let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
+            { cidr; gateway = fst (server_ip config) }
+          in
+          let cipher = Config.get Cipher config
+          and hmac_algorithm = Config.get Auth config
+          and tls_ekm = tls_ekm tls' config in
+          let keys_ctx =
+            kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+              their_tls_data
+          in
           Ok
             (`State
-              (Push_request_sent (tls', my_key_material, their_tls_data), None))
-    | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
-        let ip_config =
-          let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-          { cidr; gateway = fst (server_ip config) }
-        in
-        let cipher = Config.get Cipher config
-        and hmac_algorithm = Config.get Auth config
-        and tls_ekm = tls_ekm tls' config in
-        let keys_ctx =
-          kdf ~tls_ekm session cipher hmac_algorithm my_key_material
-            their_tls_data
-        in
-        Ok
-          (`State (Established (tls', keys_ctx), Some (`Established ip_config)))
-    | _ ->
-        Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
-  in
-  (state, config, [payload])
+              (Established (tls', keys_ctx), Some (`Established ip_config)))
+      | _ ->
+          Error
+            (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
+    in
+    (state, config, [ payload ])
 
 let push_request tls =
   Option.to_result
@@ -971,9 +972,7 @@ let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
   | `State (channel_st, ip_config) ->
       (* keys established, move forward to "expect push request (reply with push reply)" *)
       Ok (ip_config, config, channel_st, out)
-  | `Authentication_failed _tls ->
-      (* XXX: we should emit an `Exit action also *)
-      Ok (None, config, Expect_reset, out)
+  | `Authentication_failed _tls -> Ok (Some `Exit, config, Expect_reset, out)
 
 let incoming_control_server auth_user_pass is_not_taken config rng session
     channel now _ts _key op data =
