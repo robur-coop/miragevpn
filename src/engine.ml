@@ -951,31 +951,52 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let ciphers = tls_ciphers config and version = tls_version config in
       let* authenticator =
         match
-          (Config.find Verify_client_cert config, Config.find Ca config)
+          ( Config.find Verify_client_cert config,
+            Config.find Ca config,
+            Config.find Peer_fingerprint config )
         with
-        | None, Some ca | Some `Required, Some ca ->
+        | None, Some ca, None | Some `Required, Some ca, None ->
             Ok
               (Some
                  (X509.Authenticator.chain_of_trust
                     ~time:(fun () -> Some now)
                     ~allowed_hashes:Mirage_crypto.Hash.hashes ca))
-        | Some `None, _ ->
+        | None, None, Some fps | Some `Required, None, Some fps ->
+            Ok
+              (Some
+                 (fun ?ip ~host chain ->
+                   List.fold_left
+                     (fun acc fingerprint ->
+                       match acc with
+                       | Ok _ -> acc
+                       | Error _ ->
+                           X509.Validation.trust_cert_fingerprint
+                             ~time:(fun () -> Some now)
+                             ~hash:`SHA256 ~fingerprint ?ip ~host chain)
+                     (Error (`Msg "No fingerprints provided"))
+                     fps))
+        | Some `None, _, _ ->
             Log.warn (fun m ->
                 m
                   "server with 'verify-client-cert none', ensure a different \
                    authentication mechanism is set up.");
             Ok None
-        | Some `Optional, _ ->
+        | Some `Optional, _, _ ->
             Log.warn (fun m ->
                 m
                   "server with 'verify-client-cert optional', ensure a \
                    different authentication mechanism is set up.");
             Ok (Some (fun ?ip:_ ~host:_ _certs -> Ok None))
-        | _, None ->
+        | _, None, None ->
             Error
               (`Msg
-                "server without a CA, and 'verify-client-cert' is not set to \
-                 'none'")
+                "server without a CA or peer-fingerprint, and \
+                 'verify-client-cert' is not set to 'none'")
+        | _, Some _, Some _ ->
+            Error
+              (`Msg
+                "server with both CA and peer-fingerprint, please choose only \
+                 one")
       in
       let tls_config =
         Tls.Config.server ?ciphers ?version
