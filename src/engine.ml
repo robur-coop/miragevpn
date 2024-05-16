@@ -830,9 +830,7 @@ let incoming_control_client config rng session channel now op data =
       let+ tls', d = incoming_tls_without_reply tls data in
       let channel = { channel with channel_st = Established (tls', keys) } in
       let act =
-        match d with
-        | None -> None
-        | Some d -> (
+        Option.bind d (fun d ->
             let d = Cstruct.to_string d in
             match Cc_message.parse d with
             | Some msg -> Some msg
