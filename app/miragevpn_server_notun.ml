@@ -226,12 +226,11 @@ let callback t fd =
 let connect config =
   let open Lwt.Infix in
   let connections = Hashtbl.create 7 in
-  let is_not_taken ip = not (Hashtbl.mem connections ip)
-  and auth_user_pass ~user:_ ~pass:_ = false in
+  let is_not_taken ip = not (Hashtbl.mem connections ip) in
   let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
   and now = Ptime_clock.now
   and rng = Mirage_crypto_rng.generate in
-  match Miragevpn.server config ~is_not_taken ~auth_user_pass ts now rng with
+  match Miragevpn.server config ~is_not_taken ts now rng with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "server construction failed %s" msg);
       assert false
