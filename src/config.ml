@@ -404,6 +404,34 @@ module Conf_map = struct
          | None | Some (_, `Tcp _) -> Ok ()
          | Some (_, `Udp) -> Error "only TCP supported in the server"
        in
+       let* () =
+         match find Verify_client_cert t with
+         | Some `None ->
+             Log.warn (fun m ->
+                 m
+                   "server with 'verify-client-cert none', ensure a different \
+                    authentication mechanism is set up.");
+             Ok ()
+         | None | Some `Required ->
+             if not (mem Ca t || mem Peer_fingerprint t) then
+               Error
+                 "server without a --ca or --peer-fingerprint, but \
+                  --verify-client-cert is set to 'required' (or not provided, \
+                  and required is the default)."
+             else Ok ()
+         | Some `Optional ->
+             Error
+               "server with --verify-client-cert optional, which is not \
+                supported at the moment. Please get in touch with the \
+                developers."
+       in
+       let* () =
+         if mem Ca t && mem Peer_fingerprint t then
+           Error
+             "While --ca and --peer-fingerprint are not mutually exclusive the \
+              semantics are unclear to us and thus not implemented"
+         else Ok ()
+       in
        Ok ())
 
   let is_valid_client_config t =

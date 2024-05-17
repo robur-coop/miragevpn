@@ -283,6 +283,7 @@ let pp_state ppf = function
 type t = {
   config : Config.t;
   is_not_taken : Ipaddr.V4.t -> bool;
+  auth_user_pass : (user:string -> pass:string -> bool) option;
   linger : Cstruct.t;
   rng : int -> Cstruct.t;
   ts : unit -> int64;
@@ -424,6 +425,7 @@ let transition_to_established t =
 type server = {
   server_config : Config.t;
   is_not_taken : Ipaddr.V4.t -> bool;
+  auth_user_pass : (user:string -> pass:string -> bool) option;
   server_rng : int -> Cstruct.t;
   server_ts : unit -> int64;
   server_now : unit -> Ptime.t;

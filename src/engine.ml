@@ -294,11 +294,11 @@ let client ?pkcs12_password config ts now rng =
       match Config.find Comp_lzo config with None -> false | Some () -> true
     in
     let session = init_session ~my_session_id:0L ~compress ()
-    and channel = new_channel 0 current_ts
-    and is_not_taken _ = false in
+    and channel = new_channel 0 current_ts in
     {
       config;
-      is_not_taken;
+      is_not_taken = (fun _ -> false);
+      auth_user_pass = None;
       state = Client state;
       control_crypto;
       linger = Cstruct.empty;
@@ -314,11 +314,29 @@ let client ?pkcs12_password config ts now rng =
   in
   Ok (state, action)
 
-let server server_config ~is_not_taken server_ts server_now server_rng =
+let server server_config ~is_not_taken ?auth_user_pass server_ts server_now
+    server_rng =
   let open Result.Syntax in
   let+ () = Config.is_valid_server_config server_config in
+  (match (auth_user_pass, Config.find Verify_client_cert server_config) with
+  | None, Some `None ->
+      Log.warn (fun m ->
+          m
+            "Server configuration without authentication! Your server accepts \
+             all clients. You should reconsider and use '--verify-client-cert \
+             required' and provide a '--ca' or '--peer-fingerprint'. \
+             Alternatively, provide ~auth_user_pass that checks for usernames \
+             and password.")
+  | _ -> ());
   let port = Option.value ~default:1194 (Config.find Port server_config) in
-  ( { server_config; is_not_taken; server_rng; server_ts; server_now },
+  ( {
+      server_config;
+      is_not_taken;
+      auth_user_pass;
+      server_rng;
+      server_ts;
+      server_now;
+    },
     server_ip server_config,
     port )
 
@@ -525,107 +543,141 @@ let tls_ekm tls config =
   | None, Some flags -> if List.mem `Tls_ekm flags then Some tls else None
   | None, None -> None
 
-let kex_server config session (my_key_material : my_key_material) tls data =
+let kex_server config auth_user_pass session (my_key_material : my_key_material)
+    tls data =
   let open Result.Syntax in
-  (* TODO verify username + password, respect incoming data *)
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
-  let* cipher =
-    let client_ciphers =
-      match their_tls_data.peer_info with
-      | Some pi -> (
-          match List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") pi with
-          | Some ciphers ->
-              List.filter_map Config.aead_cipher_of_string
-                (String.split_on_char ':'
-                   (String.sub ciphers 11 (String.length ciphers - 11)))
-          | None ->
-              if List.mem "IV_NCP=2" pi then [ `AES_128_GCM; `AES_256_GCM ]
-              else [])
-      | None -> []
-    in
-    List.find_opt
-      (fun candidate -> List.mem candidate client_ciphers)
-      (Config.get Config.Data_ciphers config)
-    |> Option.to_result ~none:(`Msg "No shared ciphers")
+  let authenticated =
+    match (auth_user_pass, their_tls_data.user_pass) with
+    | None, _ ->
+        true
+        (* if there's no auth_user_pass and no verify-client-cert, we warn in the server constructor. There are servers that only do client certificate authentication. *)
+    | Some _, None -> false
+    | Some auth, Some (user, pass) -> auth ~user ~pass
   in
-  let iv_proto =
-    let ( let* ) = Option.bind in
-    let prefix = "IV_PROTO=" in
-    let* peer_info = their_tls_data.peer_info in
-    let* iv_proto_s = List.find_opt (String.starts_with ~prefix) peer_info in
-    let v =
-      String.sub iv_proto_s (String.length prefix)
-        (String.length iv_proto_s - String.length prefix)
+  if not authenticated then
+    let td =
+      let options = Config.server_generate_connect_options config in
+      {
+        Packet.pre_master = Cstruct.empty;
+        random1 = my_key_material.random1;
+        random2 = my_key_material.random2;
+        options;
+        user_pass = None;
+        peer_info = None;
+      }
     in
-    int_of_string_opt v
-  in
-  let config = Config.add Cipher (cipher :> Config.cipher) config in
-  let config =
-    let supports_tls_ekm =
-      Option.fold iv_proto ~none:false
-        ~some:Packet.Iv_proto.(contains Tls_key_export)
+    let* tls', payload =
+      Option.to_result ~none:(`Msg "not yet established")
+        (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
     in
+    let* tls'', payload' =
+      Option.to_result ~none:(`Msg "not yet established")
+        (Tls.Engine.send_application_data tls' [ Packet.auth_failed ])
+    in
+    Ok (`Authentication_failed tls'', config, [ payload; payload' ])
+  else
+    let* cipher =
+      let client_ciphers =
+        match their_tls_data.peer_info with
+        | Some pi -> (
+            match
+              List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") pi
+            with
+            | Some ciphers ->
+                List.filter_map Config.aead_cipher_of_string
+                  (String.split_on_char ':'
+                     (String.sub ciphers 11 (String.length ciphers - 11)))
+            | None ->
+                if List.mem "IV_NCP=2" pi then [ `AES_128_GCM; `AES_256_GCM ]
+                else [])
+        | None -> []
+      in
+      List.find_opt
+        (fun candidate -> List.mem candidate client_ciphers)
+        (Config.get Config.Data_ciphers config)
+      |> Option.to_result ~none:(`Msg "No shared ciphers")
+    in
+    let iv_proto =
+      let ( let* ) = Option.bind in
+      let prefix = "IV_PROTO=" in
+      let* peer_info = their_tls_data.peer_info in
+      let* iv_proto_s = List.find_opt (String.starts_with ~prefix) peer_info in
+      let v =
+        String.sub iv_proto_s (String.length prefix)
+          (String.length iv_proto_s - String.length prefix)
+      in
+      int_of_string_opt v
+    in
+    let config = Config.add Cipher (cipher :> Config.cipher) config in
     let config =
-      if
-        supports_tls_ekm
-        && Option.fold iv_proto ~none:false
-             ~some:Packet.Iv_proto.(contains Use_cc_exit_notify)
-      then Config.add_protocol_flag `Tls_ekm config
+      let supports_tls_ekm =
+        Option.fold iv_proto ~none:false
+          ~some:Packet.Iv_proto.(contains Tls_key_export)
+      in
+      let config =
+        if
+          supports_tls_ekm
+          && Option.fold iv_proto ~none:false
+               ~some:Packet.Iv_proto.(contains Use_cc_exit_notify)
+        then Config.add_protocol_flag `Tls_ekm config
+        else config
+      in
+      (* XXX(reynir): if a client supports tls-ekm and set [Use_cc_exit_notify]
+         it is unnecessary to use 'key-derivation tls-ekm' in addition to
+         'protocol-flags tls-ekm'. In that case 'protocol-flags tls-ekm' is
+         sufficient. *)
+      if supports_tls_ekm then Config.add Key_derivation `Tls_ekm config
       else config
     in
-    (* XXX(reynir): if a client supports tls-ekm and set [Use_cc_exit_notify]
-       it is unnecessary to use 'key-derivation tls-ekm' in addition to
-       'protocol-flags tls-ekm'. In that case 'protocol-flags tls-ekm' is
-       sufficient. *)
-    if supports_tls_ekm then Config.add Key_derivation `Tls_ekm config
-    else config
-  in
-  let options = Config.server_generate_connect_options config in
-  let td =
-    {
-      Packet.pre_master = Cstruct.empty;
-      random1 = my_key_material.random1;
-      random2 = my_key_material.random2;
-      options;
-      user_pass = None;
-      peer_info = None;
-    }
-  in
-  let* tls', payload =
-    Option.to_result ~none:(`Msg "not yet established")
-      (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
-  in
-  let+ state =
-    match Config.find Ifconfig config with
-    | None ->
-        let requested_push =
-          Option.fold iv_proto ~none:false
-            ~some:Packet.Iv_proto.(contains Request_push)
-        in
-        if requested_push then
-          Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
-        else
+    let options = Config.server_generate_connect_options config in
+    let td =
+      {
+        Packet.pre_master = Cstruct.empty;
+        random1 = my_key_material.random1;
+        random2 = my_key_material.random2;
+        options;
+        user_pass = None;
+        peer_info = None;
+      }
+    in
+    let* tls', payload =
+      Option.to_result ~none:(`Msg "not yet established")
+        (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
+    in
+    let+ state =
+      match Config.find Ifconfig config with
+      | None ->
+          let requested_push =
+            Option.fold iv_proto ~none:false
+              ~some:Packet.Iv_proto.(contains Request_push)
+          in
+          if requested_push then
+            Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
+          else
+            Ok
+              (`State
+                (Push_request_sent (tls', my_key_material, their_tls_data), None))
+      | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
+          let ip_config =
+            let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
+            { cidr; gateway = fst (server_ip config) }
+          in
+          let cipher = Config.get Cipher config
+          and hmac_algorithm = Config.get Auth config
+          and tls_ekm = tls_ekm tls' config in
+          let keys_ctx =
+            kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+              their_tls_data
+          in
           Ok
             (`State
-              (Push_request_sent (tls', my_key_material, their_tls_data), None))
-    | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
-        let ip_config =
-          let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-          { cidr; gateway = fst (server_ip config) }
-        in
-        let cipher = Config.get Cipher config
-        and hmac_algorithm = Config.get Auth config
-        and tls_ekm = tls_ekm tls' config in
-        let keys_ctx =
-          kdf ~tls_ekm session cipher hmac_algorithm my_key_material
-            their_tls_data
-        in
-        Ok
-          (`State (Established (tls', keys_ctx), Some (`Established ip_config)))
-    | _ ->
-        Error (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
-  in
-  (state, config, payload)
+              (Established (tls', keys_ctx), Some (`Established ip_config)))
+      | _ ->
+          Error
+            (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
+    in
+    (state, config, [ payload ])
 
 let push_request tls =
   Option.to_result
@@ -692,7 +744,7 @@ let incoming_control_client config rng session channel now op data =
                 ~time:(fun () -> Some now)
                 ca
           | _, Some fps ->
-              Logs.info (fun m ->
+              Log.info (fun m ->
                   m "authenticating with fingerprints %a"
                     Fmt.(list ~sep:(any "\n") Hex.pp)
                     (List.map Hex.of_cstruct fps));
@@ -906,36 +958,72 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   in
   Ok (Some (`Established ip_config), config', channel_st, [ (`Control, out) ])
 
-let server_handle_tls_data config is_not_taken session keys tls d =
+let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
+    =
   let open Result.Syntax in
-  let* next, config, out = kex_server config session keys tls d in
+  let* next, config, out =
+    kex_server config auth_user_pass session keys tls d
+  in
+  let out = List.map (fun out -> (`Control, out)) out in
   match next with
   | `Send_push_reply (tls', key, tls_data) ->
       let* ip_config, config, channel_st, out' =
         server_send_push_reply config is_not_taken tls' session key tls_data
       in
-      Ok (ip_config, config, channel_st, (`Control, out) :: out')
+      Ok (ip_config, config, channel_st, out @ out')
   | `State (channel_st, ip_config) ->
       (* keys established, move forward to "expect push request (reply with push reply)" *)
-      Ok (ip_config, config, channel_st, [ (`Control, out) ])
+      Ok (ip_config, config, channel_st, out)
+  | `Authentication_failed _tls -> Ok (Some `Exit, config, Expect_reset, out)
 
-let incoming_control_server is_not_taken config rng session channel _now _ts
-    _key op data =
+let incoming_control_server auth_user_pass is_not_taken config rng session
+    channel now _ts _key op data =
+  let open Result.Syntax in
   match (channel.channel_st, op) with
   | ( Expect_reset,
       ( Packet.Hard_reset_client_v2 | Packet.Hard_reset_client_v3
       | Packet.Soft_reset_v2 ) ) ->
-      (* TODO may need to do client certificate authentication here! *)
-      let _ca, server, key =
-        ( Config.get Ca config,
-          Config.get Tls_cert config,
-          Config.get Tls_key config )
+      let server, key =
+        (Config.get Tls_cert config, Config.get Tls_key config)
       in
       let ciphers = tls_ciphers config and version = tls_version config in
+      let* authenticator =
+        match
+          ( Config.find Verify_client_cert config,
+            Config.find Ca config,
+            Config.find Peer_fingerprint config )
+        with
+        | None, Some ca, None | Some `Required, Some ca, None ->
+            Ok
+              (Some
+                 (X509.Authenticator.chain_of_trust
+                    ~time:(fun () -> Some now)
+                    ~allowed_hashes:Mirage_crypto.Hash.hashes ca))
+        | None, None, Some fps | Some `Required, None, Some fps ->
+            Ok
+              (Some
+                 (fun ?ip ~host chain ->
+                   List.fold_left
+                     (fun acc fingerprint ->
+                       match acc with
+                       | Ok _ -> acc
+                       | Error _ ->
+                           X509.Validation.trust_cert_fingerprint
+                             ~time:(fun () -> Some now)
+                             ~hash:`SHA256 ~fingerprint ?ip ~host chain)
+                     (Error (`Msg "No fingerprints provided"))
+                     fps))
+        | Some `None, _, _ -> Ok None
+        | Some `Optional, _, _
+        | (None | Some `Required), None, None
+        | (None | Some `Required), Some _, Some _ ->
+            (* already checked in config.ml *)
+            assert false
+      in
       let tls_config =
         Tls.Config.server ?ciphers ?version
           ~certificates:(`Single ([ server ], key))
-          ()
+          ?authenticator ()
       in
       let tls = Tls.Engine.server tls_config in
       let channel = { channel with channel_st = TLS_handshake tls } in
@@ -966,7 +1054,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       match (channel_st, d) with
       | TLS_established (tls', keys), Some d ->
           let* ip_config, config, channel_st, out' =
-            server_handle_tls_data config is_not_taken session keys tls' d
+            server_handle_tls_data config auth_user_pass is_not_taken session
+              keys tls' d
           in
           Ok (ip_config, config, { channel with channel_st }, out @ out')
       | _ -> Ok (None, config, { channel with channel_st }, out))
@@ -976,7 +1065,8 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       match d with
       | Some d ->
           let* ip_config, config, channel_st, out =
-            server_handle_tls_data config is_not_taken session keys tls' d
+            server_handle_tls_data config auth_user_pass is_not_taken session
+              keys tls' d
           in
           Ok (ip_config, config, { channel with channel_st }, out)
       | None ->
@@ -998,9 +1088,7 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       let+ tls', d = incoming_tls_without_reply tls data in
       let channel = { channel with channel_st = Established (tls', keys) } in
       let act =
-        match d with
-        | None -> None
-        | Some d -> (
+        Option.bind d (fun d ->
             let d = Cstruct.to_string d in
             match Cc_message.parse d with
             | Some (`Cc_exit as msg) -> Some msg
@@ -1014,16 +1102,16 @@ let incoming_control_server is_not_taken config rng session channel _now _ts
       (act, config, channel, [])
   | _, _ -> Error (`No_transition (channel, op, data))
 
-let incoming_control is_not_taken config rng state session channel now ts key op
-    data =
+let incoming_control auth_user_pass is_not_taken config rng state session
+    channel now ts key op data =
   Log.info (fun m ->
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
   match state with
   | Client _ -> incoming_control_client config rng session channel now op data
   | Server _ ->
-      incoming_control_server is_not_taken config rng session channel now ts key
-        op data
+      incoming_control_server auth_user_pass is_not_taken config rng session
+        channel now ts key op data
 
 let expected_packet session transport data =
   let open Result.Syntax in
@@ -1793,9 +1881,9 @@ let incoming state control_crypto buf =
                   | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
                   | `Control (_, (_, _, data)) -> (
                       let* est, config, ch, out' =
-                        incoming_control state.is_not_taken state.config
-                          state.rng state.state state.session ch (state.now ())
-                          (state.ts ()) key op data
+                        incoming_control state.auth_user_pass state.is_not_taken
+                          state.config state.rng state.state state.session ch
+                          (state.now ()) (state.ts ()) key op data
                       in
                       Log.debug (fun m ->
                           m "out channel %a, pkts %d" pp_channel ch
@@ -1903,6 +1991,7 @@ let new_connection server data =
       ( {
           config = server.server_config;
           is_not_taken = server.is_not_taken;
+          auth_user_pass = server.auth_user_pass;
           control_crypto :> control_crypto;
           state = Server Server_handshaking;
           linger = Cstruct.empty;
@@ -1964,6 +2053,7 @@ let new_connection server data =
             Ok
               ( {
                   config = server.server_config;
+                  auth_user_pass = server.auth_user_pass;
                   is_not_taken = server.is_not_taken;
                   control_crypto;
                   state = Server Server_handshaking;
