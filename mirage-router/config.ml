@@ -1,4 +1,4 @@
-(* mirage >= 4.5.0 & < 4.6.0 *)
+(* mirage >= 4.5.1 & < 4.6.0 *)
 
 open Mirage
 
@@ -43,15 +43,15 @@ let management_stack =
        (netif ~group:"management" "management"))
     stack
 
-let docs = "MONITORING PARAMETERS"
-
 let name =
-  runtime_arg ~pos:__POS__ ~name:"name"
-    {|(let doc = Cmdliner.Arg.info ~doc:"Name of the unikernel" ~docs:%S [ "name" ] in
-       Cmdliner.Arg.(value & opt string "a.ns.robur.coop" doc))|} docs
+  runtime_arg ~pos:__POS__
+    {|let doc = Cmdliner.Arg.info ~doc:"Name of the unikernel"
+        ~docs:Mirage_runtime.s_log [ "name" ]
+      in
+      Cmdliner.Arg.(value & opt string "a.ns.robur.coop" doc)|}
 
 let monitoring =
-  let monitor = Runtime_arg.(v (monitor ~docs None)) in
+  let monitor = Runtime_arg.(v (monitor None)) in
   let connect _ modname = function
     | [ _ ; _ ; stack ; name ; monitor ] ->
       code ~pos:__POS__
@@ -68,7 +68,7 @@ let monitoring =
     (time @-> pclock @-> stackv4v6 @-> job)
 
 let syslog =
-  let syslog = Runtime_arg.(v (syslog ~docs None)) in
+  let syslog = Runtime_arg.(v (syslog None)) in
   let connect _ modname = function
     | [ _ ; stack ; name ; syslog ] ->
       code ~pos:__POS__
