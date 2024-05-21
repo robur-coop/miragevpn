@@ -96,6 +96,15 @@ struct
             m "%a received payload where source ip %a doesn't match expected %a"
               pp_dst dst Ipaddr.V4.pp ip.Ipv4_packet.src Ipaddr.V4.pp source_ip);
         Lwt.return_unit
+    | Ok (ip, _)
+      when Ipaddr.V4.(
+             compare (Prefix.broadcast (snd t.ip)) ip.Ipv4_packet.dst = 0)
+           || Ipaddr.V4.(compare broadcast ip.Ipv4_packet.dst = 0)
+           || Ipaddr.V4.is_multicast ip.Ipv4_packet.dst ->
+        Log.warn (fun m ->
+            m "%a received multicast or broadcast packet, ignoring %a" pp_dst
+              dst Ipv4_packet.pp ip);
+        Lwt.return_unit
     | Ok (ip, payload)
       when ip.Ipv4_packet.proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
            && Ipaddr.V4.compare ip.Ipv4_packet.dst (fst t.ip) = 0 -> (
