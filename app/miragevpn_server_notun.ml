@@ -3,6 +3,7 @@ open Lwt.Syntax
 (* NOTE: copied from mirage/miragevpn_mirage.ml Server functor - please
    carefully contribute back changes there *)
 type t = {
+  config : Miragevpn.Config.t;
   server : Miragevpn.server;
   ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t;
   connections : (Ipaddr.V4.t, Lwt_unix.file_descr * Miragevpn.t ref) Hashtbl.t;
@@ -31,12 +32,17 @@ let write t dst cs =
               Hashtbl.remove t.connections dst
           | Ok () -> ()))
 
-let handle_payload t dst _peer data =
+let handle_payload t dst source_ip data =
   match Ipv4_packet.Unmarshal.of_cstruct data with
   | Error e ->
       Logs.warn (fun m ->
           m "%a received payload (error %s) %a" pp_dst dst e Cstruct.hexdump_pp
             data);
+      Lwt.return_unit
+  | Ok (ip, _) when Ipaddr.V4.compare ip.Ipv4_packet.src source_ip <> 0 ->
+      Logs.warn (fun m ->
+          m "%a received payload where source ip %a doesn't match expected %a"
+            pp_dst dst Ipaddr.V4.pp ip.Ipv4_packet.src Ipaddr.V4.pp source_ip);
       Lwt.return_unit
   | Ok (ip, payload)
     when ip.Ipv4_packet.proto = Ipv4_packet.Marshal.protocol_to_int `ICMP
@@ -66,6 +72,31 @@ let handle_payload t dst _peer data =
               m "ignoring icmp frame from %a, decoding error %s" Ipaddr.V4.pp
                 ip.src e);
           Lwt.return_unit)
+  | Ok (ip, payload)
+    when Miragevpn.Config.mem Client_to_client t.config
+         && Ipaddr.V4.Prefix.mem ip.Ipv4_packet.dst (snd t.ip) ->
+      (* local routing *)
+      let dst = ip.Ipv4_packet.dst in
+      if Hashtbl.mem t.connections dst then write t dst data
+      else
+        let reply =
+          Icmpv4_packet.
+            {
+              ty = Icmpv4_wire.Destination_unreachable;
+              code = 1;
+              subheader = Unused;
+            }
+        and ip' = { ip with src = ip.dst; dst = ip.src } in
+        let data =
+          Cstruct.append
+            (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
+            payload
+        in
+        let hdr =
+          Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.length data)
+            ip'
+        in
+        write t ip.src (Cstruct.append hdr data)
   | Ok (ip, _) ->
       Logs.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip);
       Lwt.return_unit
@@ -239,7 +270,7 @@ let connect config =
           m "miragevpn server listening on port %d, using %a/%d" port
             Ipaddr.V4.pp (fst ip)
             (Ipaddr.V4.Prefix.bits (snd ip)));
-      let server = { server; ip; connections } in
+      let server = { config; server; ip; connections } in
       let fd = Lwt_unix.(socket PF_INET6 SOCK_STREAM 0) in
       Lwt_unix.(setsockopt fd SO_REUSEADDR true);
       Lwt_unix.(setsockopt fd IPV6_ONLY false);
