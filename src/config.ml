@@ -184,6 +184,7 @@ module Conf_map = struct
     | Ca : X509.Certificate.t list k
     | Cipher
         : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
+    | Client_to_client : flag k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
     | Connect_retry_max : [ `Unlimited | `Times of int ] k
@@ -585,6 +586,7 @@ module Conf_map = struct
         | Some (`Ip ip) -> p () "%alocal %a" sep () Ipaddr.pp ip)
     | Ca, ca -> pp_ca ca
     | Cipher, cipher -> p () "cipher %a" pp_cipher cipher
+    | Client_to_client, () -> p () "client-to-client"
     | Comp_lzo, () -> p () "comp-lzo"
     | Connect_retry, (low, high) -> p () "connect-retry %d %d" low high
     | Connect_retry_max, `Unlimited -> p () "connect-retry-max unlimited"
@@ -911,6 +913,10 @@ let a_number_range min' max' =
   a_number >>= function
   | n when n <= max' && min' <= n -> return n
   | n -> fail (Fmt.str "Number out of range: %d" n)
+
+let a_client_to_client =
+  string "client-to-client" *> a_ign_whitespace
+  *> return (`Entry (B (Client_to_client, ())))
 
 let a_client =
   (* alias for --tls-client --pull *)
@@ -1762,6 +1768,7 @@ let a_config_entry : line A.t =
   a_ign_whitespace_no_comment
   *> Angstrom.choice
        [
+         a_client_to_client;
          a_client;
          a_dev;
          a_dev_type;
