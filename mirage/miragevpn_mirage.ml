@@ -147,7 +147,7 @@ struct
                 code = 1;
                 subheader = Unused;
               }
-          and ip' = { ip with src = ip.dst; dst = ip.src } in
+          and ip' = { ip with src = fst t.ip; dst = ip.src } in
           let payload = Cstruct.sub data 0 (min 28 (Cstruct.length data)) in
           let data =
             Cstruct.append
