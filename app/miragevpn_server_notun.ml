@@ -72,7 +72,7 @@ let handle_payload t dst source_ip data =
               m "ignoring icmp frame from %a, decoding error %s" Ipaddr.V4.pp
                 ip.src e);
           Lwt.return_unit)
-  | Ok (ip, payload)
+  | Ok (ip, _)
     when Miragevpn.Config.mem Client_to_client t.config
          && Ipaddr.V4.Prefix.mem ip.Ipv4_packet.dst (snd t.ip) ->
       (* local routing *)
@@ -87,6 +87,7 @@ let handle_payload t dst source_ip data =
               subheader = Unused;
             }
         and ip' = { ip with src = ip.dst; dst = ip.src } in
+        let payload = Cstruct.sub data 0 (min 28 (Cstruct.length data)) in
         let data =
           Cstruct.append
             (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
