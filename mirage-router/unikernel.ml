@@ -168,10 +168,6 @@ struct
   }
 
   module Nat = struct
-    let log = Logs.Src.create "nat" ~doc:"NAT device"
-    module Log = (val Logs.src_log log : Logs.LOG)
-    module Private_routing = Routing.Make (Log) (A)
-
     let of_ipv4 ip_hdr payload =
       match Ipv4_packet.(Unmarshal.int_to_protocol ip_hdr.proto) with
       | Some `TCP ->
@@ -202,6 +198,59 @@ struct
         Logs.debug (fun m -> m "Ignoring non-TCP/UDP/ICMP packet: %a"
                        Ipv4_packet.pp ip_hdr);
         None
+
+    let payload_to_buf pkt =
+      match pkt with
+      | `IPv4 (ip_hdr, p) ->
+        let src = ip_hdr.Ipv4_packet.src and dst = ip_hdr.dst in
+        match p with
+        | `ICMP (icmp_header, payload) -> begin
+            let payload_start = Icmpv4_wire.sizeof_icmpv4 in
+            let buf = Cstruct.create (payload_start + Cstruct.length payload) in
+            Cstruct.blit payload 0 buf payload_start (Cstruct.length payload);
+            match Icmpv4_packet.Marshal.into_cstruct icmp_header ~payload buf with
+            | Error s ->
+              Logs.warn (fun m -> m "Error writing ICMPv4 packet: %s" s);
+              Error ()
+            | Ok () -> Ok (buf, `ICMP, ip_hdr)
+          end
+        | `UDP (udp_header, udp_payload) -> begin
+            let payload_start = Udp_wire.sizeof_udp in
+            let buf = Cstruct.create (payload_start + Cstruct.length udp_payload) in
+            Cstruct.blit udp_payload 0 buf payload_start (Cstruct.length udp_payload);
+            let pseudoheader =
+              Ipv4_packet.Marshal.pseudoheader ~src ~dst ~proto:`UDP
+                (Cstruct.length udp_payload + Udp_wire.sizeof_udp)
+            in
+            match Udp_packet.Marshal.into_cstruct
+                    ~pseudoheader ~payload:udp_payload udp_header buf
+            with
+            | Error s ->
+              Logs.warn (fun m -> m "Error writing UDP packet: %s" s);
+              Error ()
+            | Ok () -> Ok (buf, `UDP, ip_hdr)
+          end
+        | `TCP (tcp_header, tcp_payload) -> begin
+            let payload_start =
+              let options_length = Tcp.Options.lenv tcp_header.Tcp.Tcp_packet.options in
+              (Tcp.Tcp_wire.sizeof_tcp + options_length)
+            in
+            let buf = Cstruct.create (payload_start + Cstruct.length tcp_payload) in
+            Cstruct.blit tcp_payload 0 buf payload_start (Cstruct.length tcp_payload);
+            (* and now transport header *)
+            let pseudoheader =
+              Ipv4_packet.Marshal.pseudoheader ~src ~dst ~proto:`TCP
+                (Cstruct.length tcp_payload + payload_start)
+            in
+            match Tcp.Tcp_packet.Marshal.into_cstruct
+                    ~pseudoheader tcp_header
+                    ~payload:tcp_payload buf
+            with
+            | Error s ->
+              Logs.warn (fun m -> m "Error writing TCP packet: %s" s);
+              Error ()
+            | Ok _ -> Ok (buf, `TCP, ip_hdr)
+          end
 
     let output_tunnel t packet =
       match Nat_packet.to_cstruct ~mtu:(O.mtu t.ovpn) packet with
@@ -247,56 +296,19 @@ struct
         Lwt.return_unit
       | Ok () -> ingest_private t private_ip table packet
 
-
-    let output_private private_ip eth arp packet =
-      let dst = match packet with `IPv4 (p, _) -> p.Ipv4_packet.dst in
-      Private_routing.destination_mac private_ip None arp dst
-      >>= function
-      | Error e ->
-        Logs.err (fun m ->
-            m "could not send packet, error: %s"
-              (match e with
-               | `Local -> "local"
-               | `Gateway -> "gateway"));
-        Lwt.return_unit
-      | Ok dst -> (
-          let more = ref [] in
-          E.write eth dst `IPv4 (fun b ->
-              match Nat_packet.into_cstruct packet b with
-              | Ok (n, adds) ->
-                more := adds;
-                n
-              | Error e ->
-                (* E.write takes a fill function (Cstruct.t -> int), which
-                   can not result in an error. Now, if Nat_packet results in
-                   an error (e.g. need to fragment, but fragmentation is not
-                   allowed (don't fragment bit is set)), we can't pass this
-                   information up the stack. Instead we log an error and
-                   return 0 -- thus an empty Ethernet header will be
-                   transmitted on the wire. *)
-                (* TODO an ICMP error should be sent to the packet origin *)
-                Logs.err (fun m ->
-                    m "error %a while Nat_packet.into_cstruct"
-                      Nat_packet.pp_error e);
-                0)
-          >>= function
-          | Ok () ->
-            Lwt_list.iter_s
-              (fun pkt ->
-                 let size = Cstruct.length pkt in
-                 E.write eth dst `IPv4 ~size (fun buf ->
-                     Cstruct.blit pkt 0 buf 0 size;
-                     size)
-                 >|= function
-                 | Error e ->
-                   Logs.err (fun f ->
-                       f "Failed to send packet to private %a"
-                         E.pp_error e)
-                 | Ok () -> ())
-              !more
-          | Error e ->
-            Logs.err (fun m -> m "error %a while writing" E.pp_error e);
-            Lwt.return_unit)
+    let output_private t nat_packet =
+      match payload_to_buf nat_packet with
+      | Ok (buf, proto, ip_hdr) ->
+        (I.write t.private_ip ~ttl:ip_hdr.Ipv4_packet.ttl
+           ~src:ip_hdr.src ip_hdr.dst proto (fun _ -> 0) [ buf ]
+         >|= function
+         | Ok () -> ()
+         | Error _e ->
+           (* could send back host unreachable if this was an arp timeout *)
+           (* Logs.err (fun m -> m "error %a while forwarding %a"
+              I.pp_error e Ipv4_packet.pp hdr)) *)
+           ())
+        | Error () -> Lwt.return_unit
   end
 
   let forward_packet_over_tunnel t ip_hdr pay =
@@ -401,9 +413,9 @@ struct
                  | Some packet ->
                    match Mirage_nat_lru.translate table packet with
                    | Ok packet ->
-                     Lwt.async (fun () ->
-                         Nat.output_private private_ip eth arp packet)
+                     Lwt.async (fun () -> Nat.output_private t packet)
                    | Error e ->
+                     (* TODO should return ICMP error *)
                      let msg =
                        match e with
                        | `TTL_exceeded -> "ttl exceeded"
