@@ -12,17 +12,6 @@ freebsd_client_task:
   client_artifacts:
     path: mirage-client/dist/ovpn-client.hvt
 
-freebsd_nat_task:
-  pkg_install_script: pkg install -y ocaml-opam gmake bash
-  ocaml_script: opam init -a --comp=4.14.2
-  mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>=4.5.0"
-  configure_script: eval `opam env` && cd mirage-nat && mirage configure -t hvt
-  depend_script: eval `opam env` && cd mirage-nat && gmake depend
-  copy_script: rm -rf mirage-nat/duniverse/miragevpn/* && cp -R dune-project miragevpn.opam src mirage mirage-nat/duniverse/miragevpn/
-  build_script: eval `opam env` && cd mirage-nat && gmake build
-  nat_artifacts:
-    path: mirage-nat/dist/ovpn-nat.hvt
-
 freebsd_router_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
   ocaml_script: opam init -a --comp=4.14.2
