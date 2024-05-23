@@ -395,7 +395,7 @@ struct
     | Ok () -> Logs.info (fun m -> m "listening on private network finished")
 
   (* packets received over the tunnel *)
-  let rec ovpn_recv t private_ip eth arp =
+  let rec ovpn_recv t private_ip =
     O.read t.ovpn >>= fun datas ->
     let ts = M.elapsed_ns () in
     Lwt_list.fold_left_s
@@ -482,7 +482,7 @@ struct
       t.ovpn_fragments datas
     >>= fun frags ->
     t.ovpn_fragments <- frags;
-    ovpn_recv t private_ip eth arp
+    ovpn_recv t private_ip
 
   let start _ _ _ _ s net eth arp ip block private_ip nat nat_table_size =
     (let open Lwt_result.Infix in
@@ -510,7 +510,7 @@ struct
        }
      in
      Lwt_result.ok (Lwt.join
-                      [ ovpn_recv t private_ip eth arp;
+                      [ ovpn_recv t private_ip;
                         private_recv t private_ip net eth arp ]))
     >|= function
     | Ok () -> Logs.warn (fun m -> m "unikernel finished without error...")
