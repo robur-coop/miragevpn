@@ -253,7 +253,7 @@ struct
           end
 
     let output_tunnel t packet =
-      match Nat_packet.to_cstruct ~mtu:(O.mtu t.ovpn) packet with
+      match Nat_packet.to_cstruct ~mtu:(O.mtu t.ovpn - Ipv4_wire.sizeof_ipv4) packet with
       | Ok pkts ->
         Lwt_list.fold_left_s
           (fun r p -> if r then O.write t.ovpn p else Lwt.return r)
@@ -266,35 +266,37 @@ struct
             m "NAT to_cstruct failed %a" Nat_packet.pp_error e);
         Lwt.return_unit
 
-    let rec ingest_private t private_ip table packet =
-      Logs.debug (fun f ->
-          f "Private interface got a packet: %a" Nat_packet.pp packet);
-      let dst = match packet with `IPv4 (p, _) -> p.Ipv4_packet.dst in
-      if
-        Ipaddr.V4.compare dst (Ipaddr.V4.Prefix.address private_ip) = 0
-      then (
-        Logs.debug (fun m -> m "ignoring ip packet for ourselves");
-        Lwt.return_unit)
-      else
-        match Mirage_nat_lru.translate table packet with
-        | Ok packet -> output_tunnel t packet
-        | Error `Untranslated -> add_rule t private_ip table packet
-        | Error `TTL_exceeded ->
-          (* TODO should report ICMP error message to src *)
-          Logs.warn (fun f -> f "TTL exceeded");
-          Lwt.return_unit
-    and add_rule t private_ip table packet =
+    let add_rule t table packet =
       let public_ip = O.get_ip t.ovpn in
       match
         Mirage_nat_lru.add table packet public_ip
-          (fun () -> Some (Randomconv.int16 R.generate))
-          `NAT
+          (fun () -> Some (Randomconv.int16 R.generate)) `NAT
       with
       | Error e ->
         Logs.debug (fun m ->
             m "Failed to add a NAT rule: %a" Mirage_nat.pp_error e);
         Lwt.return_unit
-      | Ok () -> ingest_private t private_ip table packet
+      | Ok () ->
+        match Mirage_nat_lru.translate table packet with
+        | Ok packet -> output_tunnel t packet
+        | Error `Untranslated ->
+          Logs.warn (fun m -> m "can't translate packet, giving up");
+          Lwt.return_unit
+        | Error `TTL_exceeded ->
+          (* TODO should report ICMP error message to src *)
+          Logs.warn (fun f -> f "TTL exceeded");
+          Lwt.return_unit
+
+    let ingest_private t table packet =
+      Logs.debug (fun f ->
+          f "Private interface got a packet: %a" Nat_packet.pp packet);
+      match Mirage_nat_lru.translate table packet with
+      | Ok packet -> output_tunnel t packet
+      | Error `Untranslated -> add_rule t table packet
+      | Error `TTL_exceeded ->
+        (* TODO should report ICMP error message to src *)
+        Logs.warn (fun f -> f "TTL exceeded");
+        Lwt.return_unit
 
     let output_private t nat_packet =
       match payload_to_buf nat_packet with
@@ -312,36 +314,20 @@ struct
   end
 
   let forward_packet_over_tunnel t ip_hdr pay =
-    let pay_mtu = O.mtu t.ovpn - 20 in
+    let pay_mtu = O.mtu t.ovpn - Ipv4_wire.sizeof_ipv4 (* the unencrypted IP header *) in
     match forward_or_reject ip_hdr pay pay_mtu with
     | Ok hdr ->
-      let hdr, fst, rest =
-        if Cstruct.length pay > pay_mtu then
-          let fst, rest = Cstruct.split pay pay_mtu in
-          (* need to set 'more fragments' bit in the IPv4 header *)
-          let hdr = { hdr with Ipv4_packet.off = 0x2000 } in
-          (hdr, fst, Fragments.fragment ~mtu:pay_mtu hdr rest)
-        else (hdr, pay, [])
-      in
-      let hdr_cs =
-        Ipv4_packet.Marshal.make_cstruct
-          ~payload_len:(Cstruct.length fst) hdr
-      in
+      let to_send = Fragments.fragment ~mtu:pay_mtu hdr pay in
+      (* TODO respect the return value from write *)
       let write_one data = O.write t.ovpn data >|= fun _ -> () in
-      write_one (Cstruct.append hdr_cs pay) >>= fun () ->
-      Lwt_list.iter_s write_one rest
+      Lwt_list.iter_s write_one to_send
     | Error (`Icmp payload) ->
-      Lwt.async (fun () ->
-          I.write t.private_ip ~ttl:255 ip_hdr.Ipv4_packet.src `ICMP
-            (fun _ -> 0)
-            [ payload ]
-          >|= function
-          | Ok () -> ()
-          | Error err ->
-            Logs.warn (fun m ->
-                m "error %a while sending an ICMP error" I.pp_error
-                  err));
-      Lwt.return_unit
+      (I.write t.private_ip ~ttl:255 ip_hdr.Ipv4_packet.src `ICMP
+         (fun _ -> 0) [ payload ] >|= function
+           | Ok () -> ()
+           | Error err ->
+             Logs.warn (fun m -> m "error %a while sending an ICMP error"
+                           I.pp_error err))
     | Error `Drop -> Lwt.return_unit
 
   let push_packet_over_tunnel t private_ip ip_hdr payload =
@@ -357,7 +343,7 @@ struct
       | Some table ->
         match Nat.of_ipv4 ip_hdr payload with
         | None -> Lwt.return_unit
-        | Some pkt -> Nat.ingest_private t private_ip table pkt
+        | Some pkt -> Nat.ingest_private t table pkt
 
   let private_recv t private_ip net eth arp =
     let ipv4 payload =
@@ -485,6 +471,7 @@ struct
     ovpn_recv t private_ip
 
   let start _ _ _ _ s net eth arp ip block private_ip nat nat_table_size =
+    (* TODO maybe rename private to local? *)
     (let open Lwt_result.Infix in
      read_config block >>= fun config ->
      let nat =
