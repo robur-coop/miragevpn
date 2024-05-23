@@ -153,16 +153,7 @@ struct
   }
 
   let private_recv net eth arp t private_ip =
-    let our_listen =
-      E.input ~arpv4:(A.input arp)
-        ~ipv4:(fun _ ->
-          Logs.warn (fun m -> m "ignoring IPv4");
-          Lwt.return_unit)
-        ~ipv6:(fun _ ->
-          Logs.warn (fun m -> m "ignoring IPv6");
-          Lwt.return_unit)
-        eth
-    and forward_packet ip_hdr payload =
+    let forward_packet ip_hdr payload =
       let c, pkt =
         Fragments.process t.private_fragments (M.elapsed_ns ()) ip_hdr payload
       in
@@ -206,35 +197,34 @@ struct
               Lwt.return_unit
           | Error `Drop -> Lwt.return_unit)
     in
-    let listen buf =
-      (* addressed on ethernet layer to us _and_ on ip layer src = local_network *)
-      (* and ip layer dst <> local_network *)
-      let should_be_routed eth_hdr ip_hdr =
-        Macaddr.compare eth_hdr.Ethernet.Packet.destination (N.mac net) = 0
-        && local_network private_ip ip_hdr.Ipv4_packet.src
+    let ipv4 payload =
+      (* addressed with src = local_network and dst <> local_network *)
+      let should_be_routed ip_hdr =
+        local_network private_ip ip_hdr.Ipv4_packet.src
         && not (local_network private_ip ip_hdr.Ipv4_packet.dst)
       in
-      match Ethernet.Packet.of_cstruct buf with
-      | Ok (eth_hdr, payload) when eth_hdr.Ethernet.Packet.ethertype = `IPv4
-        -> (
-          match Ipv4_packet.Unmarshal.of_cstruct payload with
-          | Ok (ip_hdr, payload) ->
-              if should_be_routed eth_hdr ip_hdr then
-                forward_packet ip_hdr payload
-              else our_listen buf
-          | Error e ->
-              Logs.err (fun m ->
-                  m "couldn't decode ipv4 packet %s: %a" e Cstruct.hexdump_pp
-                    buf);
-              Lwt.return_unit)
+      match Ipv4_packet.Unmarshal.of_cstruct payload with
+      | Ok (ip_hdr, payload) ->
+        if should_be_routed ip_hdr then
+          forward_packet ip_hdr payload
+        else
+          (Logs.warn (fun m -> m "ignoring IPv4 which should not be routed (IP header: %a)"
+                         Ipv4_packet.pp ip_hdr);
+           Lwt.return_unit)
       | Error e ->
-          Logs.err (fun m ->
-              m "couldn't decode ethernet packet %s: %a" e Cstruct.hexdump_pp
-                buf);
-          Lwt.return_unit
-      | Ok _ -> our_listen buf
+        Logs.err (fun m ->
+            m "couldn't decode IPv4 packet %s: %a" e Cstruct.hexdump_pp payload);
+        Lwt.return_unit
     in
-    N.listen net ~header_size:Ethernet.Packet.sizeof_ethernet listen
+    let input =
+      E.input ~arpv4:(A.input arp)
+        ~ipv4
+        ~ipv6:(fun _ ->
+          Logs.warn (fun m -> m "ignoring IPv6 packet");
+          Lwt.return_unit)
+        eth
+    in
+    N.listen net ~header_size:Ethernet.Packet.sizeof_ethernet input
     >|= function
     | Error e ->
         Logs.warn (fun m ->
