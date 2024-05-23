@@ -9,6 +9,9 @@ let private_arp = arp private_ethernet
 let ip = Runtime_arg.V4.network ~group:"private" (Ipaddr.V4.Prefix.of_string_exn "10.0.0.2/24")
 let private_ipv4 = create_ipv4 ~group:"private" private_ethernet private_arp
 
+let nat = runtime_arg ~pos:__POS__ "Unikernel.K.nat"
+let nat_table_size = runtime_arg ~pos:__POS__ "Unikernel.K.nat_table_size"
+
 let miragevpn_handler =
   let packages =
     let pin = "git+https://github.com/robur-coop/miragevpn.git" in
@@ -16,9 +19,9 @@ let miragevpn_handler =
       package "logs";
       package ~pin ~sublibs:[ "mirage" ] "miragevpn";
       package "mirage-kv";
-      package ~min:"3.8.0" "mirage-runtime";
+      package ~min:"3.0.0" "mirage-nat";
     ]
-  and runtime_args = [ Runtime_arg.v ip ]
+  and runtime_args = [ Runtime_arg.v ip ; nat ; nat_table_size ]
   in
   main ~runtime_args ~packages "Unikernel.Main"
     (random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> network
