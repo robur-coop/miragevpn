@@ -922,6 +922,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
     Config.find Topology config |> Option.value ~default:`Subnet
   in
   let reply_things =
+    let sep = Fmt.any "," in
     [
       "";
       (* need an initial , after PUSH_REPLY *)
@@ -938,10 +939,12 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
     (* XXX(reynir): here we assume the binding for [Key_derivation] is only ever [`Tls_ekm] *)
     @ (if Config.mem Key_derivation config then [ "key-derivation tls-ekm" ]
        else [])
-    @ (Option.to_list (Config.find Protocol_flags config)
-      |> List.map (fun flags ->
-             Fmt.str "%a" (Config.pp_b ?sep:None)
-               (Config.Conf_map.B (Protocol_flags, flags))))
+    @ (Config.find Protocol_flags config
+      |> Option.map (fun flags ->
+             Fmt.str "%a" (Config.pp_b ~sep)
+               (Config.Conf_map.B (Protocol_flags, flags)))
+      |> Option.to_list)
+    @ Option.value ~default:[] (Config.find Push config)
   in
   let reply = String.concat "," reply_things in
   let* tls', out = push_reply tls reply in
