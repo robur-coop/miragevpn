@@ -880,15 +880,30 @@ let a_whitespace_unit = skip (function ' ' | '\t' -> true | _ -> false)
 
 let a_single_param =
   (* Handles single-quoted or double-quoted, using backslash as escaping char.*)
+  (* quoting in OpenVPN is slightly odd. You are only allowed to quote
+     using double quotes or single quotes *if they occur in the
+     beginning*! Otherwise quote characters are taken as is. When the
+     *end* quote (or unquote) is reached the parameter is considered
+     *done*. That is [{|"foo"bar|}] is tokenized as [["foo"; "bar"]].
+
+     Escaping can be done using backslash - only whitespace characters,
+     double quote and backslash itself can be escaped - other characters
+     will result in an error. Escaping can not be done in single quoted
+     parameters - e.g. '\' is interpreted as the string consisting of a
+     single quote character, and '\'' is interpreted as before followed
+     by an unterminated single quoted parameter(!). If the line ends with
+     a backslash the backslash is silently ignored(!)
+   *)
   let rec escaped q acc : string Angstrom.t =
     let again = escaped q in
     let ret acc = return (String.concat "" (List.rev acc)) in
     peek_char >>= function
-    | Some '\\' -> (
+    | Some '\\' when q = '"' -> (
         advance 1 >>= fun () ->
         any_char >>= function
-        | q2 when q = q2 -> again (String.make 1 q :: acc)
-        | c -> again (String.make 1 c :: "\\" :: acc))
+        | '"' -> again ("\"" :: acc)
+        | '\\' -> again ("\\" :: acc)
+        | c -> Printf.ksprintf fail "Illegal escape sequence '\\' %C" c)
     | Some q2 when q = q2 -> ret acc
     | Some c -> advance 1 >>= fun () -> again (String.make 1 c :: acc)
     | None ->
@@ -896,19 +911,54 @@ let a_single_param =
           ("end of input while looking for matching " ^ String.make 1 q
          ^ " quote")
   in
+  let unescaped buf = function
+    | ' ' | '\t' | '\n' | '\r' -> `Done
+    | '\\' -> `Escape_sequence
+    | c -> Buffer.add_char buf c; `Unescaped
+  and escape_sequence buf = function
+      | ' ' | '\t' | '"' | '\\' as c -> Buffer.add_char buf c; `Unescaped
+      | c -> `Illegal_escape c
+  in
+  let unquoted buf : string Angstrom.t =
+    let state : [ `Unescaped | `Escape_sequence | `Done | `Illegal_escape of char ] ref = ref `Unescaped in
+    peek_char_fail >>= function
+    | '"' | '\'' -> fail "unquoted cannot start with quote"
+    | _ ->
+      skip_while (fun c ->
+          match
+            match !state with
+            | `Unescaped -> unescaped buf c
+            | `Escape_sequence -> escape_sequence buf c
+            | `Illegal_escape _ | `Done as s -> s
+          with
+          | `Done -> state := `Done; false
+          | `Illegal_escape _ as e -> state := e; false
+          | `Unescaped | `Escape_sequence as s -> state := s; true
+        ) >>= fun () ->
+      match !state with
+      | `Unescaped | `Done ->
+        (* We reached end of file or a space *)
+        let result = Buffer.contents buf in
+        Buffer.clear buf;
+        state := `Unescaped;
+        return result
+      | `Illegal_escape c ->
+        Buffer.clear buf;
+        state := `Unescaped;
+        Printf.ksprintf fail "Illegal escape sequence '\\' %C" c
+      | `Escape_sequence ->
+        (* We reached end of file after a backslash. *)
+        Log.warn (fun m -> m "Ignoring unterminated escape sequence");
+        let result = Buffer.contents buf in
+        Buffer.clear buf;
+        state := `Unescaped;
+        return result
+  in
   choice
     [
       char '\'' *> Angstrom.commit *> escaped '\'' [] <* char '\'';
       char '"' *> Angstrom.commit *> escaped '"' [] <* char '"';
-      ( take_while (function
-          | ' ' | '\t' | '\'' | '"' | '\n' -> false
-          | _ -> true)
-      >>= fun v ->
-        if
-          String.(contains_from v (min 0 @@ length v) '\'')
-          || String.(contains_from v (min 0 @@ length v) '"')
-        then fail "unquoted parameter contains quote"
-        else return v );
+      unquoted (Buffer.create 1024);
     ]
 
 let a_whitespace_or_comment = a_comment <|> a_whitespace_unit

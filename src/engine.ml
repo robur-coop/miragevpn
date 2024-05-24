@@ -946,6 +946,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
       |> Option.to_list)
     @ Option.value ~default:[] (Config.find Push config)
   in
+  let reply_things = List.map (fun s -> s ^ "\n") reply_things in
   let reply = String.concat "," reply_things in
   let* tls', out = push_reply tls reply in
   let cipher = Config.get Cipher config
