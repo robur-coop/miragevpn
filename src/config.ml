@@ -475,10 +475,13 @@ module Conf_map = struct
          "server tls-crypt-v2 key passed in tls-crypt-v2")
 
   let pp_param ppf s =
-    (* XXX(reynir): a_param backslash escaping is probably not correct *)
+    (* XXX(reynir): a_single_param backslash escaping is not correct. Spaces
+       (as considered by isspace()) are not correctly unescaped, and all other
+       escape sequences should be illegal but are accepted. Thus we only escape
+       double quotes here. *)
     let escape ppf s =
       Fmt.char ppf '"';
-      Fmt.(list ~sep:(any "\\\"") string) ppf (String.split_on_char '"' s);
+      Fmt.(list ~sep:(any {|\"|}) string) ppf (String.split_on_char '"' s);
       Fmt.char ppf '"'
     in
     if String.exists (function '"' | '\'' | ' ' -> true | _ -> false) s then
