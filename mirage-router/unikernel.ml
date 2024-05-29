@@ -317,10 +317,22 @@ struct
     let pay_mtu = O.mtu t.ovpn - Ipv4_wire.sizeof_ipv4 (* the unencrypted IP header *) in
     match forward_or_reject ip_hdr pay pay_mtu with
     | Ok hdr ->
-      let to_send = Fragments.fragment ~mtu:pay_mtu hdr pay in
+      let hdr, fst, rest =
+        if Cstruct.length pay > pay_mtu then
+          let fst, rest = Cstruct.split pay pay_mtu in
+          (* need to set 'more fragments' bit in the IPv4 header *)
+          let hdr = { hdr with Ipv4_packet.off = 0x2000 } in
+          (hdr, fst, Fragments.fragment ~mtu:pay_mtu hdr rest)
+        else (hdr, pay, [])
+      in
+      let hdr_cs =
+        Ipv4_packet.Marshal.make_cstruct
+          ~payload_len:(Cstruct.length fst) hdr
+      in
       (* TODO respect the return value from write *)
       let write_one data = O.write t.ovpn data >|= fun _ -> () in
-      Lwt_list.iter_s write_one to_send
+      write_one (Cstruct.append hdr_cs pay) >>= fun () ->
+      Lwt_list.iter_s write_one rest
     | Error (`Icmp payload) ->
       (I.write t.private_ip ~ttl:255 ip_hdr.Ipv4_packet.src `ICMP
          (fun _ -> 0) [ payload ] >|= function
