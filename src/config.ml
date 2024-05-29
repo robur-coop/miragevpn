@@ -1675,7 +1675,7 @@ let a_push =
       Fmt.str "Push option contains illegal comma (',') in string: %S"
         push_option
     in
-    return (`Ignored msg)
+    fail msg
   else return (`Entry (B (Push, [ push_option ])))
 
 let a_connection =
