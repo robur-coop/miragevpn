@@ -1,4 +1,3 @@
 mirage-client/*
-mirage-nat/*
 mirage-router/*
 mirage-server/*
