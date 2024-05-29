@@ -212,6 +212,7 @@ module Conf_map = struct
     | Pkcs12 : X509.PKCS12.t k
     | Port : int k
     | Pull : flag k
+    | Push : string list k
     | Proto
         : ([ `Ipv6 | `Ipv4 ] option
           * [ `Udp | `Tcp of [ `Server | `Client ] option ])
@@ -473,6 +474,20 @@ module Conf_map = struct
        ensure_not Tls_crypt_v2_server
          "server tls-crypt-v2 key passed in tls-crypt-v2")
 
+  let pp_param ppf s =
+    (* XXX(reynir): a_single_param backslash escaping is not correct. Spaces
+       (as considered by isspace()) are not correctly unescaped, and all other
+       escape sequences should be illegal but are accepted. Thus we only escape
+       double quotes here. *)
+    let escape ppf s =
+      Fmt.char ppf '"';
+      Fmt.(list ~sep:(any {|\"|}) string) ppf (String.split_on_char '"' s);
+      Fmt.char ppf '"'
+    in
+    if String.exists (function '"' | '\'' | ' ' -> true | _ -> false) s then
+      escape ppf s
+    else Fmt.string ppf s
+
   let pp_opt_direction ppf = function
     | None -> ()
     | Some `Incoming -> Fmt.pf ppf " 1"
@@ -649,6 +664,10 @@ module Conf_map = struct
               (append (any " ") (of_to_string Protocol_flag.to_string)))
           flags
     | Pull, () -> p () "pull"
+    | Push, push_options ->
+        p () "%a"
+          Fmt.(list ~sep (fun ppf -> pf ppf "push %a" pp_param))
+          push_options
     | Remote, lst ->
         p () "%a"
           Fmt.(
@@ -1642,6 +1661,23 @@ let a_remote :
 
 let a_remote_entry = a_remote
 
+let a_push =
+  string "push" *> a_whitespace *> commit *> a_single_param
+  >>= fun push_option ->
+  (* the OpenVPN man page says only a subset of options can be pushed.
+     This is however misleading as the server can push what it pleases.
+     Only, the client will filter out unaccepted options.
+
+     The only constraint seems to be the option can't contain commas as
+     comma will be used as a separator when pushing options. *)
+  if String.contains push_option ',' then
+    let msg =
+      Fmt.str "Push option contains illegal comma (',') in string: %S"
+        push_option
+    in
+    return (`Ignored msg)
+  else return (`Entry (B (Push, [ push_option ])))
+
 let a_connection =
   skip_many (a_whitespace_or_comment <|> a_newline) *> a_remote_entry
   <* skip_many (a_whitespace_or_comment <|> a_newline)
@@ -1817,6 +1853,7 @@ let a_config_entry : line A.t =
          a_rport;
          a_pkcs12;
          a_peer_fingerprint;
+         a_push;
          a_flag;
          a_ca;
          a_cert;
@@ -2061,6 +2098,12 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
               Error
                 "Remote config tried to change ping timeout action from 'exit' \
                  to 'restart'")
+      | Push -> (
+          match (find Push t, v) with
+          | Some [], [] | None, [] -> Ok None (* prune empty *)
+          | Some push_options, push_options' ->
+              Ok (Some (Push, push_options @ push_options'))
+          | None, push_options -> Ok (Some (Push, push_options)))
       (* adding wouldn't change anything: *)
       | _ when v = v2 ->
           (* TODO polymorphic comparison *)

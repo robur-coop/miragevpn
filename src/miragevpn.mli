@@ -111,6 +111,7 @@ module Config : sig
     | Pkcs12 : X509.PKCS12.t k
     | Port : int k
     | Pull : flag k
+    | Push : string list k
     | Proto
         : ([ `Ipv6 | `Ipv4 ] option
           * [ `Udp | `Tcp of [ `Server | `Client ] option ])
