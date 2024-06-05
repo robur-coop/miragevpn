@@ -112,7 +112,8 @@ let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
 let now () = Ptime_clock.now ()
 
 let resolve (name, ip_version) =
-  let res = Dns_client_lwt.create () in
+  let happy_eyeballs = Happy_eyeballs_lwt.create () in
+  let res = Dns_client_lwt.create happy_eyeballs in
   match ip_version with
   | `Ipv4 | `Any -> (
       Dns_client_lwt.gethostbyname res name >|= function

@@ -328,7 +328,8 @@ module Make
     (T : Mirage_time.S)
     (S : Tcpip.Stack.V4V6) =
 struct
-  module DNS = Dns_client_mirage.Make (R) (T) (M) (P) (S)
+  module H = Happy_eyeballs_mirage.Make (T) (M) (S)
+  module DNS = Dns_client_mirage.Make (R) (T) (M) (P) (S) (H)
   module TCP = S.TCP
   module UDP = S.UDP
 
@@ -350,6 +351,7 @@ struct
 
   let now () = Ptime.v (P.now_d_ps ())
   let get_ip t = Ipaddr.V4.Prefix.address t.ip_config.Miragevpn.cidr
+  let configured_ips t = [t.ip_config.Miragevpn.cidr]
   let mtu t = t.mtu
 
   let transmit_tcp flow data =
@@ -397,7 +399,8 @@ struct
   let read t = Lwt_mvar.take t.conn.data_mvar
 
   let resolve_hostname s name =
-    let res = DNS.create s in
+    let happy_eyeballs = H.create s in
+    let res = DNS.create (s, happy_eyeballs) in
     DNS.gethostbyname res name >|= function
     | Ok ip -> Some (Ipaddr.V4 ip)
     | Error (`Msg msg) ->
@@ -625,6 +628,10 @@ struct
 
   let get_ip t = O.get_ip t.ovpn
   let mtu t ~dst:_ = O.mtu t.ovpn
+
+  type prefix = Ipaddr.V4.Prefix.t
+  let pp_prefix = Ipaddr.V4.Prefix.pp
+  let configured_ips t = O.configured_ips t.ovpn
 
   let encode hdr data =
     let payload_len = Cstruct.length data
