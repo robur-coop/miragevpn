@@ -45,12 +45,12 @@ depends: [
   "cstruct-lwt"
   "mirage-crypto-rng-lwt" {>= "0.11.0"}
   "mtime"
-  "dns-client-lwt" {>= "7.0.0"}
+  "dns-client-lwt" {>= "8.0.0"}
   "tuntap" {>= "1.8.1"}
   "base64" {>= "3.0.0"}
   "hxd"
   # mirage:
-  "dns-client-mirage" {>= "7.0.0"}
+  "dns-client-mirage" {>= "8.0.0"}
   "tcpip" {>= "7.0.0"}
   "mirage-random" {>= "2.0.0"}
   "mirage-clock" {>= "3.0.0"}
