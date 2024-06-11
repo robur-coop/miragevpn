@@ -403,8 +403,8 @@ module Conf_map = struct
        in
        let* () =
          match find Proto t with
-         | None | Some (_, `Tcp _) -> Ok ()
-         | Some (_, `Udp) -> Error "only TCP supported in the server"
+         | Some (_, `Tcp _) -> Ok ()
+         | None | Some (_, `Udp) -> Error "only TCP supported in the server"
        in
        let* () =
          match find Verify_client_cert t with

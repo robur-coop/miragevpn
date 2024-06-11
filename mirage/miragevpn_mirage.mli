@@ -13,7 +13,7 @@ module Server
     (S : Tcpip.Stack.V4V6) : sig
   type t
 
-  val connect : Miragevpn.Config.t -> S.t -> t
+  val connect : ?payloadv4_from_tunnel:(Ipv4_packet.t -> Cstruct.t -> unit Lwt.t) -> Miragevpn.Config.t -> S.t -> t
   val write : t -> Ipaddr.V4.t -> Cstruct.t -> unit Lwt.t
 end
 
