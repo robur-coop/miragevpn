@@ -160,8 +160,7 @@ struct
               ip'
           in
           write t ip.src (Cstruct.append hdr data)
-    | Ok (ip, ip_payload) ->
-        t.payloadv4_from_tunnel ip ip_payload
+    | Ok (ip, ip_payload) -> t.payloadv4_from_tunnel ip ip_payload
 
   let handle_action dst add rm ip action =
     match action with
@@ -315,8 +314,17 @@ struct
             m "miragevpn server listening on port %d, using %a/%d" port
               Ipaddr.V4.pp (fst ip)
               (Ipaddr.V4.Prefix.bits (snd ip)));
-        let payloadv4_from_tunnel = Option.value ~default:(fun ip _ -> Log.info (fun m -> m "ignoring IPv4 packet from tunnel %a" Ipv4_packet.pp ip); Lwt.return_unit) payloadv4_from_tunnel in
-        let server = { config; server; ip; connections; payloadv4_from_tunnel } in
+        let payloadv4_from_tunnel =
+          Option.value
+            ~default:(fun ip _ ->
+              Log.info (fun m ->
+                  m "ignoring IPv4 packet from tunnel %a" Ipv4_packet.pp ip);
+              Lwt.return_unit)
+            payloadv4_from_tunnel
+        in
+        let server =
+          { config; server; ip; connections; payloadv4_from_tunnel }
+        in
         S.TCP.listen (S.tcp stack) ~port (callback server);
         Lwt.async (timer server);
         server
@@ -352,7 +360,7 @@ struct
 
   let now () = Ptime.v (P.now_d_ps ())
   let get_ip t = Ipaddr.V4.Prefix.address t.ip_config.Miragevpn.cidr
-  let configured_ips t = [t.ip_config.Miragevpn.cidr]
+  let configured_ips t = [ t.ip_config.Miragevpn.cidr ]
   let mtu t = t.mtu
 
   let transmit_tcp flow data =
@@ -631,6 +639,7 @@ struct
   let mtu t ~dst:_ = O.mtu t.ovpn
 
   type prefix = Ipaddr.V4.Prefix.t
+
   let pp_prefix = Ipaddr.V4.Prefix.pp
   let configured_ips t = O.configured_ips t.ovpn
 
