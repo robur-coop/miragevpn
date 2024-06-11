@@ -1,5 +1,5 @@
 freebsd_instance:
-  image_family: freebsd-13-2
+  image_family: freebsd-14-1
 
 freebsd_client_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
