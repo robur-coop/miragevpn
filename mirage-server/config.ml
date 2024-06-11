@@ -27,7 +27,7 @@ let miragevpn_handler =
 
 let eth = etif default_network
 let arp = arp eth
-let ipv6 = create_ipv6 ~no_init:(Runtime_arg.ipv4_only ()) default_network eth
+let ipv6 = create_ipv6 default_network eth
 let () =
   register "ovpn-server"
     [

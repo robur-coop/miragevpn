@@ -180,7 +180,7 @@ struct
               match Nat.payload_to_buf packet with
               | Ok (buf, _proto, ip_hdr) ->
                 let pkt = Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.length buf) ip_hdr in
-                !_write ip_hdr.dst pkt
+                !_write ip_hdr.dst (Cstruct.append pkt buf)
               | Error () -> Lwt.return_unit
             end
             | Error e ->
