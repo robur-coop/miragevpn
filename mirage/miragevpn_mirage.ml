@@ -57,6 +57,7 @@ struct
     server : Miragevpn.server;
     ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t;
     connections : (Ipaddr.V4.t, TCP.flow * Miragevpn.t ref) Hashtbl.t;
+    payloadv4_from_tunnel : Ipv4_packet.t -> Cstruct.t -> unit Lwt.t;
   }
 
   let now () = Ptime.v (P.now_d_ps ())
@@ -159,9 +160,7 @@ struct
               ip'
           in
           write t ip.src (Cstruct.append hdr data)
-    | Ok (ip, _) ->
-        Log.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip);
-        Lwt.return_unit
+    | Ok (ip, ip_payload) -> t.payloadv4_from_tunnel ip ip_payload
 
   let handle_action dst add rm ip action =
     match action with
@@ -303,19 +302,29 @@ struct
     List.iter (Hashtbl.remove server.connections) to_remove;
     T.sleep_ns (Duration.of_sec 1) >>= fun () -> timer server ()
 
-  let connect config stack =
+  let connect ?payloadv4_from_tunnel config stack =
     let connections = Hashtbl.create 7 in
     let is_not_taken ip = not (Hashtbl.mem connections ip) in
     match Miragevpn.server config ~is_not_taken M.elapsed_ns now R.generate with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "server construction failed %s" msg);
-        assert false
+        exit 64
     | Ok (server, ip, port) ->
         Log.info (fun m ->
             m "miragevpn server listening on port %d, using %a/%d" port
               Ipaddr.V4.pp (fst ip)
               (Ipaddr.V4.Prefix.bits (snd ip)));
-        let server = { config; server; ip; connections } in
+        let payloadv4_from_tunnel =
+          Option.value
+            ~default:(fun ip _ ->
+              Log.info (fun m ->
+                  m "ignoring IPv4 packet from tunnel %a" Ipv4_packet.pp ip);
+              Lwt.return_unit)
+            payloadv4_from_tunnel
+        in
+        let server =
+          { config; server; ip; connections; payloadv4_from_tunnel }
+        in
         S.TCP.listen (S.tcp stack) ~port (callback server);
         Lwt.async (timer server);
         server
@@ -351,7 +360,7 @@ struct
 
   let now () = Ptime.v (P.now_d_ps ())
   let get_ip t = Ipaddr.V4.Prefix.address t.ip_config.Miragevpn.cidr
-  let configured_ips t = [t.ip_config.Miragevpn.cidr]
+  let configured_ips t = [ t.ip_config.Miragevpn.cidr ]
   let mtu t = t.mtu
 
   let transmit_tcp flow data =
@@ -630,6 +639,7 @@ struct
   let mtu t ~dst:_ = O.mtu t.ovpn
 
   type prefix = Ipaddr.V4.Prefix.t
+
   let pp_prefix = Ipaddr.V4.Prefix.pp
   let configured_ips t = O.configured_ips t.ovpn
 
