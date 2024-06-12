@@ -1,8 +1,5 @@
 open Mirage
 
-let data_key = Key.(value @@ kv_ro ~group:"data" ())
-let data = generic_kv_ro ~key:data_key "configuration"
-
 let miragevpn_handler =
   let packages =
     let pin = "git+https://github.com/robur-coop/miragevpn.git" in
@@ -23,7 +20,10 @@ let miragevpn_handler =
     runtime_arg ~pos:__POS__ "Unikernel.K.nat_table_size";
   ] in
   main ~runtime_args ~packages "Unikernel.Main"
-    (random @-> mclock @-> pclock @-> time @-> network @-> ethernet @-> arpv4 @-> ipv6 @-> kv_ro @-> job)
+    (random @-> mclock @-> pclock @-> time @-> network @-> ethernet @-> arpv4 @-> ipv6 @-> block @-> job)
+
+let block =
+  Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file "disk.img"))
 
 let eth = etif default_network
 let arp = arp eth
@@ -34,5 +34,5 @@ let () =
       miragevpn_handler $ default_random $ default_monotonic_clock
       $ default_posix_clock $ default_time
       $ default_network $ eth $ arp $ ipv6
-      $ data;
+      $ block;
     ]

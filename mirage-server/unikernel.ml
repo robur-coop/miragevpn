@@ -10,7 +10,7 @@ module K = struct
     Mirage_runtime_network.V4.gateway None
 
   let ipv4_only = Mirage_runtime_network.ipv4_only ()
-  
+
   let ipv6_only = Mirage_runtime_network.ipv6_only ()
 
   let nat_table_size =
@@ -27,7 +27,7 @@ module Main
     (E : Ethernet.S)
     (A : Arp.S)
     (IPV6 : Tcpip.Ip.S with type ipaddr = Ipaddr.V6.t and type prefix = Ipaddr.V6.Prefix.t)
-    (FS : Mirage_kv.RO) =
+    (B : Mirage_block.S) =
 struct
 
   module Nat = struct
@@ -117,11 +117,11 @@ struct
   end
 
   let is_listening_port_proto config proto port =
-    let _, cfg_proto = match Miragevpn.proto config
-    and cfg_port = Miragevpn.server_bind_port config 
+    let cfg_proto = ((snd (Miragevpn.proto config)) :> [ `Tcp | `Udp | `Icmp ])
+    and cfg_port = Miragevpn.server_bind_port config
     in
     proto = cfg_proto && port = cfg_port
- 
+
   (* construct a stack and divert packets to NAT that are not the listening port *)
   module Ipv4 = struct
     module I = Static_ipv4.Make (R) (M) (E) (A)
@@ -206,13 +206,35 @@ struct
   module S = Tcpip_stack_direct.MakeV4V6(T)(R)(N)(E)(A)(IPV4V6)(ICMP)(UDP)(TCP)
 
   module O = Miragevpn_mirage.Server (R) (M) (P) (T) (S)
-  
-  let read_config data =
-    FS.get data (Mirage_kv.Key.v "openvpn.config") >|= function
-    | Error e -> Error (`Msg (Fmt.to_to_string FS.pp_error e))
-    | Ok data ->
-        let string_of_file _ = Error (`Msg "no string_of_file support") in
-        Miragevpn.Config.parse_server ~string_of_file data
+
+  let strip_0_suffix cfg =
+    let rec find0 idx =
+      if idx < Cstruct.length cfg then
+        if Cstruct.get_uint8 cfg idx = 0 then idx else find0 (succ idx)
+      else idx
+    in
+    Cstruct.sub cfg 0 (find0 0)
+
+  let read_data block =
+    B.get_info block >>= fun { Mirage_block.sector_size; size_sectors; _ } ->
+    let data =
+      let rec more acc = function
+        | 0 -> acc
+        | n -> more (Cstruct.create sector_size :: acc) (pred n)
+      in
+      more [] (Int64.to_int size_sectors)
+    in
+    B.read block 0L data >|= function
+    | Ok () -> Ok data
+    | Error e -> Error (`Msg (Fmt.to_to_string B.pp_error e))
+
+  let read_config block =
+    let open Lwt_result.Infix in
+    read_data block >>= fun data ->
+    let config = strip_0_suffix (Cstruct.concat data) in
+    let string_of_file _ = Error (`Msg "not supported") in
+    Lwt.return
+      (Miragevpn.Config.parse_server ~string_of_file (Cstruct.to_string config))
 
   let find_free_port config protocol =
     let rec free () =
@@ -233,7 +255,7 @@ struct
         match Mirage_nat_lru.translate table packet with
         | Ok packet -> Some packet
         | Error `Untranslated ->
-begin  
+begin
       let public_ip =
         match S.IP.src (S.ip s) ~dst:(Ipaddr.V4 ip_hdr.dst) with
         | Ipaddr.V4 ip -> ip
@@ -258,7 +280,7 @@ begin
           (* TODO should report ICMP error message to src *)
           Logs.warn (fun f -> f "TTL exceeded");
           None
-    end 
+    end
         | Error `TTL_exceeded ->
           (* TODO should report ICMP error message to src *)
           Logs.warn (fun f -> f "TTL exceeded");
@@ -276,8 +298,8 @@ begin
     | Error e -> Logs.warn (fun m -> m "error %a when sending data received over tunnel"
                                S.IP.pp_error e)
 
-  let start _ _ _ _ net eth arp ipv6 data ipv4 ipv4_gateway ipv4_only ipv6_only nat_table_size =
-    read_config data >>= function
+  let start _ _ _ _ net eth arp ipv6 block ipv4 ipv4_gateway ipv4_only ipv6_only nat_table_size =
+    read_config block >>= function
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "error while reading config %s" msg);
         failwith "config file error"
@@ -289,13 +311,12 @@ begin
                         icmp_size tcp_size tcp_size);
           Mirage_nat_lru.empty ~tcp_size ~udp_size:tcp_size ~icmp_size
         in
-    Ipv4.connect ~no_init:ipv6_only ~cidr:ipv4 ?gateway:ipv4_gateway eth arp table config >>= fun ipv4 ->
-    IPV4V6.connect ~ipv4_only ~ipv6_only ipv4 ipv6 >>= fun ip ->
-    ICMP.connect ipv4 >>= fun icmp ->
-    UDP.connect ip >>= fun udp ->
-    TCP.connect ip >>= fun tcp ->
-    S.connect net eth arp ip icmp udp tcp >>= fun stack ->
- 
+        Ipv4.connect ~no_init:ipv6_only ~cidr:ipv4 ?gateway:ipv4_gateway eth arp table config >>= fun ipv4 ->
+        IPV4V6.connect ~ipv4_only ~ipv6_only ipv4 ipv6 >>= fun ip ->
+        ICMP.connect ipv4 >>= fun icmp ->
+        UDP.connect ip >>= fun udp ->
+        TCP.connect ip >>= fun tcp ->
+        S.connect net eth arp ip icmp udp tcp >>= fun stack ->
         let payloadv4_from_tunnel = payloadv4_from_tunnel config table stack in
         let t = O.connect ~payloadv4_from_tunnel config stack in
         Ipv4.inject_write (O.write t);
