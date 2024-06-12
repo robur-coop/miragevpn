@@ -176,11 +176,6 @@ module Conf_map = struct
     | Auth_retry : [ `Interact | `Nointeract | `None ] k
     | Auth_user_pass : (string * string) k
     | Auth_user_pass_verify : (string * [ `Via_env | `Via_file ]) k
-    | Bind
-        : (int option
-          * [ `Domain of [ `host ] Domain_name.t | `Ip of Ipaddr.t ] option)
-          option
-          k
     | Ca : X509.Certificate.t list k
     | Cipher
         : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
@@ -201,6 +196,8 @@ module Conf_map = struct
     | Ifconfig_nowarn : flag k
     | Key_derivation : [ `Tls_ekm ] k
     | Link_mtu : int k
+    | Local : Ipaddr.t k
+    | Lport : int k
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
@@ -218,12 +215,13 @@ module Conf_map = struct
           * [ `Udp | `Tcp of [ `Server | `Client ] option ])
           k
       (* see socket.c:static const struct proto_names proto_names[] *)
+    | Proto_force : [ `Udp | `Tcp ] k
     | Protocol_flags : Protocol_flag.t list k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]
-          * int
-          * [ `Udp | `Tcp ])
+          * int option
+          * [ `Udp | `Tcp ] option)
           list
           k
     | Remote_cert_tls : [ `Server | `Client ] k
@@ -245,6 +243,7 @@ module Conf_map = struct
     | Route_gateway : [ `Ip of Ipaddr.t | `Default | `Dhcp ] k
     | Route_metric : [ `Default | `Metric of int ] k
     | Route_nopull : flag k
+    | Rport : int k
     | Script_security : int k
     | Secret
         : ([ `Incoming | `Outgoing ] option
@@ -333,6 +332,8 @@ module Conf_map = struct
       Error (`Msg "The --key-derivation option is reserved for push replies")
     else if mem Protocol_flags t then
       Error (`Msg "The --protocol-flags option is reserved for push replies")
+    else if mem Port t && (mem Lport t || mem Rport t) then
+      Error (`Msg "Both --port and (--lport or --rport) is present")
     else Ok ()
 
   let cert_key_or_pkcs12 t =
@@ -359,8 +360,7 @@ module Conf_map = struct
     let* () = is_valid_config t in
     Result.map_error
       (fun err -> `Msg ("not a valid server config: " ^ err))
-      (let* () = ensure_mem Bind "does not contain 'bind'" in
-       let* () =
+      (let* () =
          ensure_mem Ping_interval
            "does not contain 'ping-interval' (or 'keepalive')"
        in
@@ -589,16 +589,6 @@ module Conf_map = struct
     | Auth_user_pass_verify, (cmd, mode) ->
         p () "auth-user-pass-verify %s %s" cmd
           (match mode with `Via_file -> "via-file" | `Via_env -> "via-env")
-    | Bind, None -> p () "nobind"
-    | Bind, Some opts -> (
-        p () "bind";
-        (match fst opts with
-        | Some port -> p () "%alport %d" sep () port
-        | None -> ());
-        match snd opts with
-        | None -> ()
-        | Some (`Domain n) -> p () "%alocal %a" sep () Domain_name.pp n
-        | Some (`Ip ip) -> p () "%alocal %a" sep () Ipaddr.pp ip)
     | Ca, ca -> pp_ca ca
     | Cipher, cipher -> p () "cipher %a" pp_cipher cipher
     | Client_to_client, () -> p () "client-to-client"
@@ -629,6 +619,8 @@ module Conf_map = struct
     | Ifconfig_nowarn, () -> p () "ifconfig-nowarn"
     | Key_derivation, `Tls_ekm -> p () "key-derivation tls-ekm"
     | Link_mtu, i -> p () "link-mtu %d" i
+    | Local, ip -> p () "local %a" Ipaddr.pp ip
+    | Lport, port -> p () "lport %d" port
     | Ping_interval, n -> p () "ping %d" (int_of_ping_interval n)
     | Ping_timeout, `Exit timeout -> p () "ping-exit %d" timeout
     | Ping_timeout, `Restart timeout -> p () "ping-restart %d" timeout
@@ -663,6 +655,8 @@ module Conf_map = struct
             list ~sep:nop
               (append (any " ") (of_to_string Protocol_flag.to_string)))
           flags
+    | Proto_force, proto ->
+        p () "proto-force %s" (match proto with `Udp -> "udp" | `Tcp -> "tcp")
     | Pull, () -> p () "pull"
     | Push, push_options ->
         p () "%a"
@@ -681,9 +675,13 @@ module Conf_map = struct
                   ( (fun ppf () -> Ipaddr.pp ppf ip),
                     match ip with V4 _ -> "4" | V6 _ -> "6" )
             in
-            pf ppf "remote %a %d %s%s" pp_endpoint () port
-              (match proto with `Udp -> "udp" | `Tcp -> "tcp")
-              ip_proto)
+            pf ppf "remote %a%a%s" pp_endpoint ()
+              Fmt.(option (append (any " ") int))
+              port
+              (match proto with
+              | Some `Udp -> " udp" ^ ip_proto
+              | Some `Tcp -> " tcp" ^ ip_proto
+              | None -> ""))
           lst
     | Remote_cert_tls, `Server -> p () "remote-cert-tls server"
     | Remote_cert_tls, `Client -> p () "remote-cert-tls client"
@@ -718,6 +716,7 @@ module Conf_map = struct
     | Route_gateway, `Dhcp -> p () "route-gateway dhcp"
     | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.pp ip
     | Route_nopull, () -> p () "route-nopull"
+    | Rport, port -> p () "rport %d" port
     | Script_security, d -> p () "script-security %u" d
     | Secret, (direction, a, b, c, d) ->
         p () "secret [inline]%a\n<secret>\n%a\n</secret>" pp_opt_direction
@@ -805,15 +804,11 @@ module Defaults = struct
 
   let client =
     let open Conf_map in
-    common |> add Tls_timeout 2
-    |> add Bind (Some (None, None))
-    |> add Resolv_retry `Infinite |> add Auth_retry `None
-    |> add Connect_timeout 120
+    common |> add Tls_timeout 2 |> add Resolv_retry `Infinite
+    |> add Auth_retry `None |> add Connect_timeout 120
     |> add Connect_retry_max `Unlimited
 
-  let server =
-    let open Conf_map in
-    common |> add Bind (Some (Some 1194, None))
+  let server = common
 end
 
 open Conf_map
@@ -826,13 +821,6 @@ type non_block =
   | `Comment of string
   | `Ignored of string
   | `Keepalive of int * int (* interval * timeout *)
-  | `Remote of
-    [ `Domain of [ `host ] Domain_name.t * [ `Ipv6 | `Ipv4 | `Any ]
-    | `Ip of Ipaddr.t ]
-    * [ `Port of int | `Default_rport ]
-    * [ `Udp | `Tcp ] option
-  | `Rport of int (* remote port number used by --remote option *)
-  | `Proto_force of [ `Tcp | `Udp ]
   | `Socks_proxy of string * int * [ `Inline | `Path of string ]
   | inline_or_path
   | `Dev of string (* [dev name] stanza requiring a [dev-type]*)
@@ -843,28 +831,11 @@ type line = [ block | non_block ]
 let pp_line ppf (x : [< line ]) =
   let v = Fmt.pf in
   match x with
-  | `Remote (host, port, proto) ->
-      let pphost ppf () =
-        match host with
-        | `Domain (dom, _proto) -> Domain_name.pp ppf dom
-        | `Ip ip -> Ipaddr.pp ppf ip
-      in
-      v ppf "(remote %a, %s, %s)" pphost ()
-        (match port with
-        | `Default_rport -> "default"
-        | `Port i -> string_of_int i)
-        (match proto with
-        | None -> "any"
-        | Some `Tcp -> "tcp"
-        | Some `Udp -> "udp")
   | `Entries bs -> v ppf "entries: @[<v>%a@]" Fmt.(list ~sep:(any "@,") pp_b) bs
   | `Entry b -> v ppf "entry: %a" (fun v -> pp_b v) b
   | `Comment s -> v ppf "# %s" s
   | `Ignored s -> v ppf "# IGNORED: %s" s
   | `Keepalive (interval, timeout) -> v ppf "keepalive %d %d" interval timeout
-  | `Rport d -> v ppf "rport %d" d
-  | `Proto_force `Tcp -> v ppf "proto-force tcp"
-  | `Proto_force `Udp -> v ppf "proto-force udp"
   | `Socks_proxy _ -> v ppf "socks-proxy"
   | `Inline (tag, content) -> v ppf "<%s>:%S" tag content
   | `Path (fn, _) -> v ppf "inline-or-path: %s" fn
@@ -998,7 +969,7 @@ let a_proto =
 let a_proto_force =
   string "proto-force" *> a_whitespace
   *> choice [ string "tcp" *> return `Tcp; string "udp" *> return `Udp ]
-  >>| fun prot -> `Proto_force prot
+  >>| fun prot -> `Entry (B (Proto_force, prot))
 
 let a_protocol_flags =
   string "protocol-flags"
@@ -1311,8 +1282,6 @@ let a_flag =
   choice
     [
       string "auth-nocache" *> r Auth_nocache ();
-      string "bind" *> r Bind (Some (None, None));
-      string "nobind" *> r Bind None;
       string "float" *> r Float ();
       string "remote-random" *> r Remote_random ();
       string "tls-client" *> r Tls_mode `Client;
@@ -1397,8 +1366,7 @@ let a_reneg_sec =
   a_entry_one_number "reneg-sec" >>| fun n ->
   `Entry (B (Renegotiate_seconds, n))
 
-let a_lport =
-  a_entry_one_number "lport" >>| fun n -> `Entry (B (Bind, Some (Some n, None)))
+let a_lport = a_entry_one_number "lport" >>| fun n -> `Entry (B (Lport, n))
 
 let a_ipv4_dotted_quad =
   take_while1 (function '0' .. '9' | '.' -> true | _ -> false) >>= fun ip ->
@@ -1452,10 +1420,9 @@ let a_verify_x509_name =
   | _ -> failwith ("verify-x509-name: only type = name supported, not: " ^ t)
 
 let a_local =
-  string "local" *> a_whitespace *> a_domain_or_ip >>| fun dom ->
-  `Entry (B (Bind, Some (None, Some dom)))
+  string "local" *> a_whitespace *> a_ip >>| fun ip -> `Entry (B (Local, ip))
 
-let a_rport = a_entry_one_number "rport" >>| fun n -> `Rport n
+let a_rport = a_entry_one_number "rport" >>| fun n -> `Entry (B (Rport, n))
 
 let a_ping =
   (a_entry_one_number "ping" >>| function
@@ -1624,18 +1591,9 @@ let a_ifconfig =
   string "ifconfig" *> a_whitespace *> a_ip >>= fun local ->
   a_whitespace *> a_ip >>| fun remote -> `Entry (B (Ifconfig, (local, remote)))
 
-(* TODO
-   what are the semantics if proto and remote proto is provided? *)
-let a_remote :
-    [> `Remote of
-       [ `Domain of [ `host ] Domain_name.t * [ `Ipv6 | `Ipv4 | `Any ]
-       | `Ip of Ipaddr.t ]
-       * [ `Port of int | `Default_rport ]
-       * [ `Udp | `Tcp ] option ]
-    A.t =
+let a_remote =
   string "remote" *> a_whitespace *> a_domain_or_ip >>= fun host_or_ip ->
-  ( option `Default_rport (a_whitespace *> a_number >>| fun p -> `Port p)
-  >>= fun port ->
+  ( option None (a_whitespace *> a_number >>| fun p -> Some p) >>= fun port ->
     (option None (a_whitespace *> a_single_param >>| fun p -> Some p)
      >>= function
      | Some "udp" -> return (Some `Udp, `Any)
@@ -1649,11 +1607,12 @@ let a_remote :
     >>| fun protos -> (port, protos) )
   >>= fun (port, protos) ->
   match (host_or_ip, protos) with
-  | `Domain host, (dp, ipv) -> return @@ `Remote (`Domain (host, ipv), port, dp)
+  | `Domain host, (dp, ipv) ->
+      return @@ `Entry (B (Remote, [ (`Domain (host, ipv), port, dp) ]))
   | `Ip (Ipaddr.V4 _ as i), (dp, (`Any | `Ipv4)) ->
-      return @@ `Remote (`Ip i, port, dp)
+      return @@ `Entry (B (Remote, [ (`Ip i, port, dp) ]))
   | `Ip (Ipaddr.V6 _ as i), (dp, (`Any | `Ipv6)) ->
-      return @@ `Remote (`Ip i, port, dp)
+      return @@ `Entry (B (Remote, [ (`Ip i, port, dp) ]))
   | `Ip ip, (_, ((`Ipv4 | `Ipv6) as v)) ->
       fail
         (Fmt.str "remote: ip addr %a is required to be %s." Ipaddr.pp ip
@@ -1783,6 +1742,7 @@ let a_not_implemented =
       string "log";
       string "user";
       string "group";
+      string "nobind";
       (* TODO: *)
       string "redirect-gateway";
       string "block-outside-dns";
@@ -1917,13 +1877,8 @@ let parse_inline ~file str = function
          proto, remote, rport, socks-proxy, tun-mtu and tun-mtu-extra. *)
       (* TODO basically a Connection block is a subset of Conf_map.t,
          we should use the same parser.*)
-      let* (`Remote (host, port, proto)) =
-        parse_string ~consume:Consume.All a_connection str
-      in
-      (* TODO consult `Proto and `Proto_force *)
-      let proto = match proto with None -> `Udp | Some x -> x in
-      let port = match port with `Default_rport -> 1194 | `Port i -> i in
-      Ok (B (Remote, [ (host, port, proto) ]))
+      let* (`Entry e) = parse_string ~consume:Consume.All a_connection str in
+      Ok e
   | `Ca -> a_ca_payload str
   | `Tls_cert -> a_cert_payload str
   | `Tls_key -> a_key_payload str
@@ -2032,30 +1987,6 @@ let resolve_conflict (type a) t (k : a key) (v : a) :
                  when called from merge_push_reply. TODO.");
           Ok (Some (k, v2))
       (* can coalesce: *)
-      | Bind -> (
-          match (v, v2) with
-          | None, None -> Ok (Some (Bind, None))
-          | Some _, None | None, Some _ ->
-              Error "Conflicting [bind] directives."
-          | Some v, Some v2 ->
-              let open Result.Syntax in
-              let* (port : int option) =
-                match (fst v, fst v2) with
-                (* coalesce port binding *)
-                | (Some _ as x), None -> Ok x
-                | None, (Some _ as x) -> Ok x
-                | v1, v2 when v1 = v2 -> Ok v1
-                | _ -> Error "conflicting [port] options in [bind] directives"
-              in
-              let* (host : _ option) =
-                match (snd v, snd v2) with
-                (* coalesce host/ip binding *)
-                | (Some _ as x), None -> Ok x
-                | None, (Some _ as x) -> Ok x
-                | v1, v2 when v1 = v2 -> Ok v1
-                | _ -> Error "conflicting [host] options in [bind] directives"
-              in
-              Ok (Some (Bind, Some (port, host))))
       | Dev when fst v = fst v2 -> (
           (* verify that dev-type is the same, and let Dev stanza
              override an empty name.*)
@@ -2191,32 +2122,6 @@ let parse_next (effect : parser_effect) initial_state :
                 Error ("not found: needed [inline]: " ^ looking_for))
         | `Ignored _ -> loop blocks acc tl
         | `Comment _ -> loop blocks acc tl
-        | `Rport _ as this_directive ->
-            (* The parser for `Remote will look for `Rport when needed.
-               To avoid an endless loop here we ignore the present `Rport
-               directive when no more `Remote exist in [tl].
-               If there ARE more `Remote (that use `Default_port),
-               we sort [tl] in this order:
-               [`Remote ; `Rport ; ... the rest]:
-            *)
-            if
-              not
-              @@ List.exists
-                   (function
-                     | `Remote (_, `Default_rport, _) -> true | _ -> false)
-                   tl
-            then multib [] (* ignore this directive*)
-            else
-              let sorted_tl =
-                List.sort
-                  (fun a b ->
-                    match (a, b) with
-                    | `Remote _, `Rport _ -> -1 (* remote goes first *)
-                    | `Rport _, `Remote _ -> 1 (* remote goes first *)
-                    | _ -> compare a b)
-                  (this_directive :: tl)
-              in
-              loop blocks acc sorted_tl
         | `Entry b -> retb b
         | `Entries lst -> multib lst
         | `Keepalive (interval, timeout) ->
@@ -2259,38 +2164,10 @@ let parse_next (effect : parser_effect) initial_state :
               keepalive_action was_old timeout action
             in
             loop blocks (add Ping_timeout timeout acc) tl
-        | (`Proto_force _ | `Socks_proxy _) as line ->
+        | `Socks_proxy _ as line ->
             Log.warn (fun m ->
                 m "ignoring unimplemented option: %a" pp_line line);
             multib []
-        | `Remote (host, port, proto) -> (
-            let proto =
-              match proto with
-              | Some x -> x
-              | None -> (
-                  match Conf_map.find Proto acc with
-                  | Some (_, `Tcp _) -> `Tcp
-                  | _ -> `Udp)
-            in
-            (* TODO consult `Proto_force *)
-            let rec consult_tl ?rport = function
-              | [] -> Ok rport
-              | `Rport conf :: _ when rport <> None && Some conf <> rport ->
-                  Error
-                    (Fmt.str "conflicting rport directives: %d <> %a" conf
-                       Fmt.(option int)
-                       rport)
-              | `Rport rport :: tl -> consult_tl ~rport tl
-              | _hd :: tl -> consult_tl ?rport tl
-            in
-            match port with
-            | `Default_rport ->
-                let* port =
-                  let+ p = consult_tl tl in
-                  Option.value ~default:1194 p (* hardcoded port *)
-                in
-                retb (B (Remote, [ (host, port, proto) ]))
-            | `Port port -> retb (B (Remote, [ (host, port, proto) ])))
         | (`Dev _ | `Dev_type _) as current -> (
             (* there must be a corresponding `Dev or `Dev_type in [tl]*)
             let typs, names, tl =

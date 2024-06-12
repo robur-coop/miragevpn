@@ -24,26 +24,6 @@ module Config : sig
     *)
     | Auth_user_pass : (string * string) k  (** username, password*)
     | Auth_user_pass_verify : (string * [ `Via_env | `Via_file ]) k
-    | Bind
-        : (int option
-          * [ `Domain of [ `host ] Domain_name.t | `Ip of Ipaddr.t ] option)
-          option
-          k
-        (** local [port],[host] to bind to.
-        Defaults to [Some (None, None)], see [--bind] in [man openvpn].
-
-        [None] if [nobind].
-
-        [port] is [Some p] if [lport p] was specified.
-        Only numeric ports are accepted by this implementation
-        ([openvpn] also allows [lport x]
-        where [x] matches a port name from [/etc/services]).
-
-        [host] is governed by [--local] and defaults to [None]
-        (meaning "bind all interfaces").
-
-        [bind ipv6only] is unimplemented.
-    *)
     | Ca : X509.Certificate.t list k
     | Cipher
         : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
@@ -90,6 +70,8 @@ module Config : sig
     | Link_mtu : int k
         (** MTU of the network interface used to receive/transmit encrypted packets,
         e.g. the network interface that connects OpenVPN client and server. *)
+    | Local : Ipaddr.t k
+    | Lport : int k
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
@@ -115,24 +97,16 @@ module Config : sig
     | Proto
         : ([ `Ipv6 | `Ipv4 ] option
           * [ `Udp | `Tcp of [ `Server | `Client ] option ])
-          k  (** TODO should Proto be bound to a remote? *)
+          k
+    | Proto_force : [ `Udp | `Tcp ] k
     | Protocol_flags : Protocol_flag.t list k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]
-          * int
-          * [ `Udp | `Tcp ])
+          * int option
+          * [ `Udp | `Tcp ] option)
           list
           k
-        (** [Remote _] specifies the list of peers to connect to.
-        Each peer consists of the tuple [address,port,protocol].
-        The [rport] directive is supported while parsing the configuration,
-        so the [port] tuple element for each peer that did not explicitly
-        specify a port number will have the value of the given [rport].
-        However, the original value of the [rport] directive is not preserved,
-        so an OpenVPN config serialized from a {!t} will have the port number
-        spelled out explicitly for each peer.
-    *)
     | Remote_cert_tls : [ `Server | `Client ] k
     | Remote_random : flag k
     | Renegotiate_bytes : int k  (** reneg-bytes *)
@@ -156,6 +130,7 @@ module Config : sig
     | Route_metric : [ `Default | `Metric of int ] k
         (** Default metric for [Route _] directives *)
     | Route_nopull : flag k
+    | Rport : int k
     | Script_security : int k
     | Secret
         : ([ `Incoming | `Outgoing ] option
@@ -261,6 +236,17 @@ type server
 type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
 
 val pp_ip_config : ip_config Fmt.t
+val server_bind_port : Config.t -> int
+
+val remotes :
+  Config.t ->
+  ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
+   | `Ip of Ipaddr.t ]
+  * int
+  * [ `Udp | `Tcp ])
+  list
+
+val proto : Config.t -> [ `Any | `Ipv4 | `Ipv6 ] * [ `Udp | `Tcp ]
 
 type event =
   [ `Resolved of Ipaddr.t

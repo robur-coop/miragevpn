@@ -114,11 +114,6 @@ let set_keys ch keys =
   in
   { ch with channel_st }
 
-type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
-
-let pp_ip_config ppf { cidr; gateway } =
-  Fmt.pf ppf "ip %a gateway %a" Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
-
 type event =
   [ `Resolved of Ipaddr.t
   | `Resolve_failed
@@ -142,7 +137,10 @@ type initial_action =
 type cc_message = Cc_message.cc_message
 
 type action =
-  [ initial_action | `Exit | `Established of ip_config * int | cc_message ]
+  [ initial_action
+  | `Exit
+  | `Established of Config_ext.ip_config * int
+  | cc_message ]
 
 let pp_ip_version ppf = function
   | `Ipv4 -> Fmt.string ppf "ipv4"
@@ -160,31 +158,14 @@ let pp_action ppf = function
       Fmt.pf ppf "connect %a %a:%d" pp_proto proto Ipaddr.pp ip port
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu) ->
-      Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
+      Fmt.pf ppf "established %a, mtu %d" Config_ext.pp_ip_config ip mtu
   | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as msg ->
       Fmt.pf ppf "control channel message %a" Cc_message.pp msg
-
-let ip_from_config config =
-  match Config.(get Ifconfig config, get Route_gateway config) with
-  | (V4 address, V4 netmask), `Ip (V4 gateway) ->
-      let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-      { cidr; gateway }
-  | _ -> assert false
-
-let server_ip config =
-  let cidr = Config.get Server config in
-  let network = Ipaddr.V4.Prefix.network cidr
-  and ip = Ipaddr.V4.Prefix.address cidr in
-  if not (Ipaddr.V4.compare ip network = 0) then (ip, cidr)
-  else
-    (* take first IP in subnet (unless server a.b.c.d/netmask) with a.b.c.d not being the network address *)
-    let ip' = Ipaddr.V4.Prefix.first cidr in
-    (ip', cidr)
 
 let next_free_ip config is_not_taken =
   let cidr = Config.get Server config in
   let network = Ipaddr.V4.Prefix.network cidr in
-  let server_ip = fst (server_ip config) in
+  let server_ip = fst (Config_ext.server_ip config) in
   (* could be smarter than a linear search *)
   let rec isit ip =
     if Ipaddr.V4.Prefix.mem ip cidr then
@@ -295,6 +276,12 @@ type t = {
   lame_duck : (channel * int64) option;
   last_received : int64;
   last_sent : int64;
+  remotes :
+    ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
+     | `Ip of Ipaddr.t ]
+    * int
+    * [ `Udp | `Tcp ])
+    list;
 }
 
 let pp ppf t =

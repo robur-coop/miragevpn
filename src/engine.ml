@@ -177,11 +177,11 @@ let client ?pkcs12_password config ts now rng =
   let open Result.Syntax in
   let current_ts = ts () in
   let* () = Config.is_valid_client_config config in
-  let config =
+  let remotes =
+    let remotes = Config_ext.remotes config in
     match Config.get Remote_random config with
-    | exception Not_found -> config
+    | exception Not_found -> remotes
     | () ->
-        let remotes = Config.get Remote config in
         let remotes = Array.of_list remotes in
         for i = Array.length remotes - 1 downto 1 do
           let j = Randomconv.int rng ~bound:(succ i) in
@@ -189,8 +189,7 @@ let client ?pkcs12_password config ts now rng =
           remotes.(i) <- remotes.(j);
           remotes.(j) <- t
         done;
-        let remotes = Array.to_list remotes in
-        Config.add Remote remotes config
+        Array.to_list remotes
   in
   let* config =
     match Config.find Pkcs12 config with
@@ -252,7 +251,7 @@ let client ?pkcs12_password config ts now rng =
                    (List.length keys))))
   in
   let* action, state =
-    match Config.get Remote config with
+    match remotes with
     | (`Domain (name, ip_version), _port, _proto) :: _ ->
         Ok (`Resolve (name, ip_version), Resolving (0, current_ts, 0))
     | (`Ip ip, port, dp) :: _ ->
@@ -310,6 +309,7 @@ let client ?pkcs12_password config ts now rng =
       lame_duck = None;
       last_received = current_ts;
       last_sent = current_ts;
+      remotes;
     }
   in
   Ok (state, action)
@@ -328,7 +328,7 @@ let server server_config ~is_not_taken ?auth_user_pass server_ts server_now
              Alternatively, provide ~auth_user_pass that checks for usernames \
              and password.")
   | _ -> ());
-  let port = Option.value ~default:1194 (Config.find Port server_config) in
+  let port = Config_ext.server_bind_port server_config in
   ( {
       server_config;
       is_not_taken;
@@ -337,7 +337,7 @@ let server server_config ~is_not_taken ?auth_user_pass server_ts server_now
       server_ts;
       server_now;
     },
-    server_ip server_config,
+    Config_ext.server_ip server_config,
     port )
 
 let pp_tls_error ppf = function
@@ -661,7 +661,7 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
       | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
           let ip_config =
             let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-            { cidr; gateway = fst (server_ip config) }
+            { Config_ext.cidr; gateway = fst (Config_ext.server_ip config) }
           in
           let cipher = Config.get Cipher config
           and hmac_algorithm = Config.get Auth config
@@ -827,7 +827,7 @@ let incoming_control_client config rng session channel now op data =
           (* this may be a bit too early since tls_response...  *)
           match Config.(find Ifconfig config) with
           | Some _ ->
-              let ip_config = ip_from_config config in
+              let ip_config = Config_ext.ip_from_config config in
               let cipher = Config.get Cipher config
               and hmac_algorithm = Config.get Auth config
               and tls_ekm = tls_ekm tls' config in
@@ -875,7 +875,7 @@ let incoming_control_client config rng session channel now op data =
       let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
       let channel_st = Established (tls', keys) in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
-      let ip_config = ip_from_config config' in
+      let ip_config = Config_ext.ip_from_config config' in
       (Some (`Established ip_config), config', { channel with channel_st }, [])
   | Established (tls, keys), Packet.Control ->
       let open Result.Syntax in
@@ -906,7 +906,7 @@ let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
 let server_send_push_reply config is_not_taken tls session key tls_data =
   let open Result.Syntax in
   (* send push reply, register IP etc. *)
-  let server_ip = fst (server_ip config) in
+  let server_ip = fst (Config_ext.server_ip config) in
   let* ip, cidr = next_free_ip config is_not_taken in
   let ping =
     match Config.get Ping_interval config with
@@ -953,7 +953,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   and tls_ekm = tls_ekm tls' config in
   let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
   let channel_st = Established (tls', keys) in
-  let ip_config = { cidr; gateway = server_ip } in
+  let ip_config = { Config_ext.cidr; gateway = server_ip } in
   let config' =
     Config.add Ifconfig
       (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
@@ -2006,6 +2006,7 @@ let new_connection server data =
           lame_duck = None;
           last_received = current_ts;
           last_sent = current_ts;
+          remotes = [];
         },
         control_crypto,
         data )
@@ -2069,6 +2070,7 @@ let new_connection server data =
                   lame_duck = None;
                   last_received = current_ts;
                   last_sent = current_ts;
+                  remotes = [];
                 },
                 control_crypto,
                 actual_packet )
@@ -2115,10 +2117,9 @@ let retransmit timeout ts transport =
 let resolve_connect_client t ts s ev =
   let open Result.Syntax in
   let remote, next_remote =
-    let remotes = Config.get Remote t.config in
-    let r idx = List.nth remotes idx in
+    let r idx = List.nth t.remotes idx in
     let next idx =
-      if succ idx = List.length remotes then None else Some (r (succ idx))
+      if succ idx = List.length t.remotes then None else Some (r (succ idx))
     in
     (r, next)
   and retry_exceeded r =
@@ -2287,7 +2288,9 @@ let handle_static_client t s keys ev =
           | V4 my_ip, V4 their_ip ->
               let mtu = data_mtu t.config t.session in
               let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
-              let est = `Established ({ cidr; gateway = their_ip }, mtu) in
+              let est =
+                `Established ({ Config_ext.cidr; gateway = their_ip }, mtu)
+              in
               let protocol = match remote idx with _, _, proto -> proto in
               let session = { t.session with protocol } in
               let hmac_algorithm = Config.get Auth t.config in

@@ -117,10 +117,8 @@ struct
   end
 
   let is_listening_port_proto config proto port =
-    let cfg_proto = match Miragevpn.Config.find Proto config with
-      | None | Some (_, `Udp) -> `Udp
-      | Some (_, `Tcp _) -> `Tcp
-    and cfg_port = Option.value ~default:1194 (Miragevpn.Config.find Port config)
+    let _, cfg_proto = match Miragevpn.proto config
+    and cfg_port = Miragevpn.server_bind_port config 
     in
     proto = cfg_proto && port = cfg_port
  

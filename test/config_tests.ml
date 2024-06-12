@@ -98,7 +98,6 @@ let minimal_config =
   |> add Ping_interval `Not_configured
   |> add Ping_timeout (`Restart 120)
   |> add Renegotiate_seconds 3600
-  |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
   |> add Handshake_window 60 |> add Transition_window 3600 |> add Tls_timeout 2
   |> add Resolv_retry `Infinite |> add Auth_retry `None
   |> add Connect_timeout 120
@@ -110,7 +109,7 @@ let minimal_config =
   |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
   |> add Tls_mode `Client
   |> add Auth_user_pass ("testuser", "testpass")
-  |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp) ]
+  |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), None, None) ]
 
 let tls_auth_config =
   minimal_config
@@ -230,12 +229,12 @@ dev myvlan
        @ [
            ( `Domain
                (Domain_name.(of_string_exn "number1.org" |> host_exn), `Any),
-             11,
-             `Udp );
+             Some 11,
+             None );
            ( `Domain
                (Domain_name.(of_string_exn "number2.org" |> host_exn), `Any),
-             22,
-             `Udp );
+             Some 22,
+             None );
          ]
   in
   Alcotest.(check (result conf_map pmsg))
@@ -301,17 +300,17 @@ let auth_user_pass_trailing_whitespace () =
          never gonna tell a lie and hurt you\n"))
 
 let rport_precedence () =
-  (* NOTE: at the moment this is expected to fail because we do not implement
-     the rport directive correctly. TODO *)
   (* see https://github.com/robur-coop/miragevpn/pull/12#issuecomment-581449319 *)
   let config =
-    Miragevpn.Config.add Remote
-      [
-        (`Ip (Ipaddr.of_string_exn "10.0.42.5"), 1234, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.42.3"), 1194, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.42.4"), 1234, `Udp);
-      ]
-      tls_auth_config
+    Miragevpn.Config.(
+      add Rport 1234
+        (add Remote
+           [
+             (`Ip (Ipaddr.of_string_exn "10.0.42.5"), None, None);
+             (`Ip (Ipaddr.of_string_exn "10.0.42.3"), Some 1194, None);
+             (`Ip (Ipaddr.of_string_exn "10.0.42.4"), None, None);
+           ]
+           tls_auth_config))
   in
   let sample =
     {|
@@ -344,10 +343,10 @@ testuser
 testpass
 </auth-user-pass>
 
-    remote 10.0.42.5 1234
+    remote 10.0.42.5
     remote 10.0.42.3 1194
     rport 1234
-    remote 10.0.42.4 1234
+    remote 10.0.42.4
 |}
     ^ tls_auth
     |> parse_noextern_client
@@ -372,17 +371,14 @@ testpass
     "order of remotes stays correct" (Ok expected_remotes)
     (let open Infix in
      sample >>| fun sample ->
-     get Remote sample
+     Miragevpn.remotes sample
      |> List.map (function
           | `Ip ip, port, _ ->
               "ip:" ^ Ipaddr.to_string ip ^ ":" ^ string_of_int port
           | `Domain _, _, _ -> failwith ""));
   Alcotest.(check @@ result string reject)
     "serialized version stays correct"
-    (Ok
-       "remote 10.0.42.5 1234 udp4\n\
-        remote 10.0.42.3 1194 udp4\n\
-        remote 10.0.42.4 1234 udp4")
+    (Ok "remote 10.0.42.5\nremote 10.0.42.3 1194\nremote 10.0.42.4")
     (let open Infix in
      sample >>| fun sample ->
      Fmt.str "%a" pp (singleton Remote (get Remote sample)))
@@ -478,10 +474,10 @@ remote 10.0.0.4
   let config =
     Miragevpn.Config.add Remote
       [
-        (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.0.2"), 1194, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.0.3"), 1194, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.0.4"), 1194, `Udp);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.1"), None, None);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.2"), None, None);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.3"), None, None);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.4"), None, None);
       ]
       tls_auth_config
   in
@@ -508,10 +504,10 @@ remote 10.0.0.4 1234
   let config =
     Miragevpn.Config.add Remote
       [
-        (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1234, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.0.2"), 1234, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.0.3"), 1234, `Udp);
-        (`Ip (Ipaddr.of_string_exn "10.0.0.4"), 1234, `Udp);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.1"), Some 1234, None);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.2"), Some 1234, None);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.3"), Some 1234, None);
+        (`Ip (Ipaddr.of_string_exn "10.0.0.4"), Some 1234, None);
       ]
       tls_auth_config
   in
@@ -552,11 +548,10 @@ let client_conf =
   |> add Remote
        [
          ( `Domain (Domain_name.(host_exn (of_string_exn "my-server-1")), `Any),
-           1194,
-           `Udp );
+           Some 1194,
+           None );
        ]
-  |> add Resolv_retry `Infinite |> add Bind None |> add Persist_key ()
-  |> add Persist_tun ()
+  |> add Resolv_retry `Infinite |> add Persist_key () |> add Persist_tun ()
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
   |> add_b (a_cert_payload (string_of_file "client.crt"))
   |> add_b (a_key_payload (string_of_file "client.key"))
@@ -591,7 +586,7 @@ f508feaf3818d8bb35d0afea0e609681
     minimal_config |> remove Auth_user_pass |> remove Tls_mode
     |> add Dev (`Tun, None)
     |> add Proto (None, `Udp)
-    |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), 1194, `Udp) ]
+    |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), None, None) ]
     |> add Verb 3
     |> add Ifconfig
          (Ipaddr.of_string_exn "10.1.0.2", Ipaddr.of_string_exn "10.1.0.1")
@@ -603,7 +598,7 @@ let tls_home_conf =
   let open Miragevpn.Config in
   minimal_config |> remove Auth_user_pass
   |> add Dev (`Tun, None)
-  |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), 1194, `Udp) ]
+  |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), None, None) ]
   |> add Ifconfig
        (Ipaddr.of_string_exn "10.1.0.2", Ipaddr.of_string_exn "10.1.0.1")
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
@@ -689,11 +684,11 @@ efabaa5e34619f13adbe58b6c83536d3
   |> add Dev (`Tun, Some "tun0")
   |> add Remote
        [
-         (`Domain (host "pw.openvpn.ipredator.se", `Any), 1194, `Udp);
-         (`Domain (host "pw.openvpn.ipredator.me", `Any), 1194, `Udp);
-         (`Domain (host "pw.openvpn.ipredator.es", `Any), 1194, `Udp);
+         (`Domain (host "pw.openvpn.ipredator.se", `Any), Some 1194, None);
+         (`Domain (host "pw.openvpn.ipredator.me", `Any), Some 1194, None);
+         (`Domain (host "pw.openvpn.ipredator.es", `Any), Some 1194, None);
        ]
-  |> add Bind None |> add Auth_retry `Nointeract
+  |> add Auth_retry `Nointeract
   |> add Auth_user_pass ("foo", "bar")
   |> add Ca [ ca ] |> add Tls_auth tls_auth
   |> add Remote_cert_tls `Server

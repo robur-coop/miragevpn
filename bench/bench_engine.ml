@@ -70,7 +70,6 @@ let established cipher =
     |> add Ping_interval `Not_configured
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
-    |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
     |> add Handshake_window 60 |> add Transition_window 3600
     |> add Tls_timeout 2 |> add Resolv_retry `Infinite |> add Auth_retry `None
     |> add Connect_timeout 120
@@ -82,7 +81,7 @@ let established cipher =
     |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
     |> add Tls_mode `Client
     |> add Auth_user_pass ("testuser", "testpass")
-    |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), 1194, `Tcp) ]
+    |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), None, Some `Tcp) ]
     |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Cipher cipher
   in
   let minimal_server_config =
@@ -92,7 +91,6 @@ let established cipher =
     |> add Ping_interval `Not_configured
     |> add Ping_timeout (`Restart 120)
     |> add Renegotiate_seconds 3600
-    |> add Bind (Some (None, None)) (* TODO default to 1194 for servers? *)
     |> add Handshake_window 60 |> add Transition_window 3600
     |> add Tls_timeout 2 |> add Resolv_retry `Infinite |> add Auth_retry `None
     |> add Connect_timeout 120

@@ -96,6 +96,18 @@ authentication for tls clients. For `--tls-auth` it is still used to choose the
 hmac used for the control channel while for `--tls-crypt` and `--tls-crypt-v2`
 the hmac is hardcoded (as per OpenVPN™).
 
+If a "port" is specified, "lport" and "rport" may not be specified.
+
+If a "remote" is specified with an IP address and no protocol (and thus no
+address family), and a default "proto" with an IP address family is specified,
+we ignore that default IP address family:
+```
+proto udpv6
+remote 127.0.0.1
+```
+We consider this as "remote 127.0.0.1 <port> udp4".
+
+
 ## Funding
 
 This project was funded in 2019 for six months by the [German federal ministry for education and research](https://www.bmbf.de) via the [Prototypefund](https://prototypefund.de) - the amount was 47500 EUR.
