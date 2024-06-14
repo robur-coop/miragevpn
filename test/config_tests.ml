@@ -589,7 +589,7 @@ f508feaf3818d8bb35d0afea0e609681
     |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), None, None) ]
     |> add Verb 3
     |> add Ifconfig
-         (Ipaddr.of_string_exn "10.1.0.2", Ipaddr.of_string_exn "10.1.0.1")
+         (Ipaddr.V4.of_string_exn "10.1.0.2", Ipaddr.V4.of_string_exn "10.1.0.1")
     |> add Secret (None, k_a, k_b, k_c, k_d)
   in
   (cfg, cfg |> add Secret (Some `Outgoing, k_a, k_b, k_c, k_d))
@@ -600,7 +600,7 @@ let tls_home_conf =
   |> add Dev (`Tun, None)
   |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), None, None) ]
   |> add Ifconfig
-       (Ipaddr.of_string_exn "10.1.0.2", Ipaddr.of_string_exn "10.1.0.1")
+       (Ipaddr.V4.of_string_exn "10.1.0.2", Ipaddr.V4.of_string_exn "10.1.0.1")
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
   |> add_b (a_cert_payload (string_of_file "client.crt"))
   |> add_b (a_key_payload (string_of_file "client.key"))

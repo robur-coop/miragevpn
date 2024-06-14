@@ -62,7 +62,7 @@ module Config : sig
         of transmission of tunnel data.
         TODO pasted from `man openvpn`
     *)
-    | Ifconfig : (Ipaddr.t * Ipaddr.t) k
+    | Ifconfig : (Ipaddr.V4.t * Ipaddr.V4.t) k
         (**  TODO --ifconfig parameters which are IP addresses can also be  speci‐
               fied as a DNS or /etc/hosts file resolvable name.*)
     | Ifconfig_nowarn : flag k
@@ -100,6 +100,7 @@ module Config : sig
           k
     | Proto_force : [ `Udp | `Tcp ] k
     | Protocol_flags : Protocol_flag.t list k
+    | Redirect_gateway : [ `Def1 ] list k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]
@@ -115,20 +116,19 @@ module Config : sig
     | Replay_window : (int * int) k
     | Resolv_retry : [ `Infinite | `Seconds of int ] k
     | Route
-        : ([ `Ip of Ipaddr.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
-          * Ipaddr.Prefix.t option
-          * [ `Ip of Ipaddr.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
+        : ([ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
+          * Ipaddr.V4.t option
+          * [ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
             option
-          * [ `Default | `Metric of int ])
+          * int option)
           list
           k  (** Route consists of: network , netmask , gateway , metric *)
     | Route_delay : (int * int) k
         (** [n,w] seconds to wait after connection establishment before adding
         routes to the routing table. *)
-    | Route_gateway : [ `Ip of Ipaddr.t | `Default | `Dhcp ] k
+    | Route_gateway : [ `Ip of Ipaddr.V4.t | `Dhcp ] k
         (** DHCP: should be executed on the encrypted VPN LAN interface *)
-    | Route_metric : [ `Default | `Metric of int ] k
-        (** Default metric for [Route _] directives *)
+    | Route_metric : int k  (** Default metric for [Route _] directives *)
     | Route_nopull : flag k
     | Rport : int k
     | Script_security : int k
