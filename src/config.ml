@@ -1673,9 +1673,20 @@ let a_network_or_gateway4 =
 
 let a_route =
   (* --route network/IP [netmask] [gateway] [metric] *)
+  let route ?netmask ?gateway ?metric network =
+    `Entry (B (Route, [ (network, netmask, gateway, metric) ]))
+  in
   string "route" *> a_whitespace *> a_network_or_gateway4 >>= fun network ->
   (* TODO: [netmask [gateway [metric]]] *)
-  return (`Entry (B (Route, [ (network, None, None, None) ])))
+  option (route network)
+    ( a_whitespace *> commit *> a_ipv4_dotted_quad >>= fun netmask ->
+      option (route network ~netmask)
+        ( a_whitespace *> a_network_or_gateway4 >>= fun gateway ->
+          option
+            (route network ~netmask ~gateway)
+            ( a_whitespace *> a_entry_one_number "route" >>= fun metric ->
+              if metric < 0 then fail "negative metric"
+              else return (route network ~netmask ~gateway ~metric) ) ) )
 
 let a_route_gateway =
   string "route-gateway" *> a_whitespace
