@@ -1677,7 +1677,6 @@ let a_route =
     `Entry (B (Route, [ (network, netmask, gateway, metric) ]))
   in
   string "route" *> a_whitespace *> a_network_or_gateway4 >>= fun network ->
-  (* TODO: [netmask [gateway [metric]]] *)
   option (route network)
     ( a_whitespace *> commit *> a_ipv4_dotted_quad >>= fun netmask ->
       option (route network ~netmask)
