@@ -16,7 +16,7 @@ module Main
     (S : Tcpip.Stack.V4V6)
     (FS : Mirage_kv.RO) =
 struct
-  module O = Miragevpn_mirage.Make_stack (R) (M) (P) (T) (S)
+  module O = Miragevpn_mirage.Client_stack (R) (M) (P) (T) (S)
   module I = Icmpv4.Make (O)
 
   let read_config data =
