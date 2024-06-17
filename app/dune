@@ -60,7 +60,7 @@
  (public_name openvpn-config-parser)
  (package miragevpn)
  (modules openvpn_config_parser)
- (libraries miragevpn logs logs.fmt fmt.tty))
+ (libraries miragevpn common logs logs.fmt fmt.tty cmdliner))
 
 (executable
  (name key)
