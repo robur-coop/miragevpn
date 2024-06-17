@@ -100,7 +100,17 @@ module Config : sig
           k
     | Proto_force : [ `Udp | `Tcp ] k
     | Protocol_flags : Protocol_flag.t list k
-    | Redirect_gateway : [ `Def1 ] list k
+    | Redirect_gateway
+        : [ `Def1
+          | `Local
+          | `Auto_local
+          | `Bypass_dhcp
+          | `Bypass_dns
+          | `Block_local
+          | `Ipv6
+          | `Not_ipv4 ]
+          list
+          k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]

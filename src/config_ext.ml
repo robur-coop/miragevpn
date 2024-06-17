@@ -98,8 +98,7 @@ let routes config : (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
   let default_route =
     match Config.find Redirect_gateway config with
     | None -> []
-    | Some [] -> [ (Ipaddr.V4.Prefix.global, default_gateway, default_metric) ]
-    | Some (`Def1 :: (_ : [ `Def1 ] list)) ->
+    | Some xs when List.mem `Def1 xs ->
         [
           ( Ipaddr.V4.Prefix.of_string_exn "0.0.0.0/1",
             default_gateway,
@@ -108,6 +107,7 @@ let routes config : (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
             default_gateway,
             default_metric );
         ]
+    | Some _ -> [ (Ipaddr.V4.Prefix.global, default_gateway, default_metric) ]
   in
   let routes =
     Config.find Route config |> Option.value ~default:[]

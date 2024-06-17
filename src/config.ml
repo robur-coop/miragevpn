@@ -155,15 +155,13 @@ end
 
 type redirect_gateway_flag =
   [ `Def1
-    (*
   | `Local
-  | `AutoLocal
+  | `Auto_local
   | `Bypass_dhcp
   | `Bypass_dns
   | `Block_local
   | `Ipv6
-  | `Not_ipv4 *)
-  ]
+  | `Not_ipv4 ]
 
 module Conf_map = struct
   type flag = unit
@@ -675,11 +673,18 @@ module Conf_map = struct
         p () "%a"
           Fmt.(list ~sep (fun ppf -> pf ppf "push %a" pp_param))
           push_options
-    | Redirect_gateway, (flags : [ `Def1 ] list) ->
-        (* FIXME: only supports [`Def1] flag *)
-        p () "redirect-gateway%a"
-          Fmt.(list ~sep:nop (append (any " ") (any "def1")))
-          flags
+    | Redirect_gateway, flags ->
+        let pp_flag ppf = function
+          | `Def1 -> Fmt.string ppf " def1"
+          | `Ipv6 -> Fmt.string ppf " ipv6"
+          | `Bypass_dns -> Fmt.string ppf " bypass-dns"
+          | `Bypass_dhcp -> Fmt.string ppf " bypass-dhcp"
+          | `Not_ipv4 -> Fmt.string ppf " !ipv4"
+          | `Local -> Fmt.string ppf " local"
+          | `Auto_local -> Fmt.string ppf " autolocal"
+          | `Block_local -> Fmt.string ppf " block-local"
+        in
+        p () "redirect-gateway%a" Fmt.(list ~sep:nop pp_flag) flags
     | Remote, lst ->
         p () "%a"
           Fmt.(
@@ -1608,8 +1613,21 @@ let a_ifconfig =
   `Entry (B (Ifconfig, (local, remote)))
 
 let a_redirect_gateway =
+  let parse_flag =
+    choice
+      [
+        string "def1" *> return `Def1;
+        string "ipv6" *> return `Ipv6;
+        string "local" *> return `Local;
+        string "autolocal" *> return `Auto_local;
+        string "bypass-dns" *> return `Bypass_dns;
+        string "bypass-dhcp" *> return `Bypass_dhcp;
+        string "block-local" *> return `Block_local;
+        string "!ipv4" *> return `Not_ipv4;
+      ]
+  in
   string "redirect-gateway"
-  *> option [] (a_whitespace *> commit *> string "def1" *> return [ `Def1 ])
+  *> option [] (a_whitespace *> commit *> sep_by a_whitespace parse_flag)
   >>| fun flags -> `Entry (B (Redirect_gateway, flags))
 
 let a_remote =
