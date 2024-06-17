@@ -86,15 +86,14 @@ let route_metric config =
   Config.find Route_metric config |> Option.value ~default:0
 
 (** Returns (cidr, gateway, metric) list *)
-let routes ~net_gateway ~remote_host config :
-    (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
+let routes config : (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
   let default_gateway = route_gateway config
   and default_metric = route_metric config in
   let resolve_network_or_gateway = function
     | `Ip ip -> ip
-    | `Net_gateway -> net_gateway
+    | `Net_gateway -> assert false
     | `Vpn_gateway -> vpn_gateway config
-    | `Remote_host -> remote_host
+    | `Remote_host -> assert false
   in
   let default_route =
     match Config.find Redirect_gateway config with

@@ -162,7 +162,7 @@ let rec timer server () =
 
 let handle_action dst add rm ip action =
   match action with
-  | `Established ({ Miragevpn.cidr; _ }, _) ->
+  | `Established ({ Miragevpn.cidr; _ }, _, _) ->
       Logs.info (fun m ->
           m "%a insert ip %a, registering flow" pp_dst dst Ipaddr.V4.Prefix.pp
             cidr);

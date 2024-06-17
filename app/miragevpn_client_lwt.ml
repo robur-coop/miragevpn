@@ -2,64 +2,91 @@ open Lwt.Infix
 
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
-let open_tun config { Miragevpn.cidr; gateway } :
-    (Miragevpn.Config.t * Lwt_unix.file_descr, [> `Msg of string ]) Lwt_result.t
-    =
+type supported = FreeBSD | Linux
+
+let platform =
+  let cmd = Bos.Cmd.(v "uname" % "-s") in
+  lazy
+    (match Bos.OS.Cmd.(run_out cmd |> out_string |> success) with
+    | Ok s when s = "FreeBSD" -> FreeBSD
+    | Ok s when s = "Linux" -> Linux
+    | Ok s -> invalid_arg (Printf.sprintf "OS %s not supported" s)
+    | Error (`Msg m) -> invalid_arg m)
+
+let open_tun config { Miragevpn.cidr; gateway } routes :
+    (Miragevpn.Config.t * Lwt_unix.file_descr, [> `Msg of string ]) result =
   (* This returns a Config with updated MTU, and a file descriptor for
      the TUN interface *)
-  let open Lwt_result.Infix in
-  (match Miragevpn.Config.find Dev config with
-  | None | Some (`Tun, None) -> Ok None
-  | Some (`Tun, Some name) -> Ok (Some name)
-  | Some (`Tap, name) ->
-      error_msgf "using a TAP interface (for %S) is not supported"
-        (match name with Some n -> n | None -> "dynamic device"))
-  |> Lwt_result.lift
-  >>= fun devname ->
-  try
-    let fd, dev = Tuntap.opentun ?devname () in
+  let ( let* ) = Result.bind in
+  let* devname =
+    match Miragevpn.Config.find Dev config with
+    | None | Some (`Tun, None) -> Ok None
+    | Some (`Tun, Some name) -> Ok (Some name)
+    | Some (`Tap, name) ->
+        error_msgf "using a TAP interface (for %S) is not supported"
+          (match name with Some n -> n | None -> "dynamic device")
+  in
+  let* fd, dev =
+    try Ok (Tuntap.opentun ?devname ())
+    with Failure msg ->
+      error_msgf "%s: Failed to allocate TUN interface: %s"
+        (match devname with None -> "dynamic" | Some dev -> dev)
+        msg
+  in
+  let* () =
     (* pray to god we don't get raced re: tun dev teardown+creation here;
        TODO should patch Tuntap to operate on fd instead of dev name:*)
     Logs.debug (fun m -> m "opened TUN interface %s" dev);
     Tuntap.set_up_and_running dev;
     Logs.debug (fun m -> m "set TUN interface up and running");
-    (* TODO set the mtu of the device *)
-    let config =
-      match Miragevpn.Config.find Tun_mtu config with
-      | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
-      | None -> Miragevpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config
+    let local = Ipaddr.V4.to_string (Ipaddr.V4.Prefix.address cidr)
+    and remote = Ipaddr.V4.to_string gateway in
+    let cmd =
+      match Lazy.force platform with
+      | Linux ->
+          Bos.Cmd.(
+            v "ip" % "addr" % "add" % "dev" % dev % local % "remote" % remote)
+      | FreeBSD -> Bos.Cmd.(v "ifconfig" % dev % local % remote)
     in
-    (* TODO factor the uname -s out into a separate library *)
-    (let local = Ipaddr.V4.to_string (Ipaddr.V4.Prefix.address cidr)
-     and remote = Ipaddr.V4.to_string gateway in
-     match
-       let cmd = "uname -s" in
-       let process = Unix.open_process_in cmd in
-       let output = input_line process in
-       let _ = Unix.close_process_in process in
-       output
-     with
-     (* TODO handle errors appropriately (use bos) *)
-     | "Linux" ->
-         Unix.system
-           (Format.sprintf "ip addr add dev %s %s remote %s" dev local remote)
-         |> ignore
-     | "FreeBSD" ->
-         Unix.system (Format.sprintf "ifconfig %s %s %s" dev local remote)
-         |> ignore
-     | s ->
-         Logs.err (fun m ->
-             m "unknown system %s, no tun setup %s (local %s remote %s)." s dev
-               local remote));
-    (* TODO add stuff to routing table if desired/demanded by server *)
-    (* TODO use tuntap API once it does the right thing Tuntap.set_ipv4 ~netmask dev ip ;*)
-    Logs.debug (fun m -> m "allocated TUN interface %s" dev);
-    Lwt_result.return (config, Lwt_unix.of_unix_file_descr fd)
-  with Failure msg ->
-    Lwt.return
-      (error_msgf "%s: Failed to allocate TUN interface: %s"
-         (match devname with None -> "dynamic" | Some dev -> dev)
-         msg)
+    Bos.OS.Cmd.run cmd
+  in
+  (* TODO set the mtu of the device *)
+  let config =
+    match Miragevpn.Config.find Tun_mtu config with
+    | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
+    | None -> Miragevpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config
+  in
+  let* on_exit =
+    match
+      List.fold_left
+        (fun acc (net, gw, _metric) ->
+          let* cmds_on_exit = acc in
+          let net = Ipaddr.V4.Prefix.to_string net
+          and gw = Ipaddr.V4.to_string gw in
+          let cmd_add, cmd_del =
+            match Lazy.force platform with
+            | Linux ->
+                ( Bos.Cmd.(v "ip" % "route" % "add" % net % "via" % gw),
+                  Bos.Cmd.(v "ip" % "route" % "del" % net) )
+            | FreeBSD ->
+                ( Bos.Cmd.(v "route" % "add" % net % gw),
+                  Bos.Cmd.(v "route" % "delete" % net) )
+          in
+          match Bos.OS.Cmd.run cmd_add with
+          | Ok () -> Ok (cmd_del :: cmds_on_exit)
+          | Error (`Msg m) -> Error (`Msg m, cmds_on_exit))
+        (Ok []) routes
+    with
+    | Ok cmds -> Ok cmds
+    | Error (`Msg m, on_exit) ->
+        List.iter (fun cmd -> Bos.OS.Cmd.run cmd |> ignore) on_exit;
+        Error (`Msg m)
+  in
+  at_exit (fun () ->
+      List.iter (fun cmd -> Bos.OS.Cmd.run cmd |> ignore) on_exit);
+  (* TODO use tuntap API once it does the right thing Tuntap.set_ipv4 ~netmask dev ip ;*)
+  Logs.debug (fun m -> m "allocated TUN interface %s" dev);
+  Ok (config, Lwt_unix.of_unix_file_descr fd)
 
 let write_multiple_to_fd fd bufs =
   Lwt_list.fold_left_s
@@ -182,7 +209,11 @@ type conn = {
     [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
   data_mvar : Cstruct.t list Lwt_mvar.t;
-  est_mvar : (Miragevpn.ip_config * int, unit) result Lwt_mvar.t;
+  est_mvar :
+    ( Miragevpn.ip_config * int * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list,
+      unit )
+    result
+    Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
 
@@ -223,9 +254,9 @@ let handle_action conn = function
   | (`Cc_exit | `Cc_halt _ | `Cc_restart _) as exit_msg ->
       (* FIXME *)
       Format.kasprintf failwith "%a received" Miragevpn.pp_action exit_msg
-  | `Established (ip, mtu) ->
+  | `Established (ip, mtu, routes) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
-      Lwt_mvar.put conn.est_mvar (Ok (ip, mtu))
+      Lwt_mvar.put conn.est_mvar (Ok (ip, mtu, routes))
 
 let rec event conn =
   Lwt_mvar.take conn.event_mvar >>= fun ev ->
@@ -254,8 +285,8 @@ let rec event conn =
       | _ -> Lwt_mvar.put conn.data_mvar payloads)
       >>= fun () -> event conn
 
-let send_recv conn config ip_config _mtu =
-  open_tun config ip_config (* TODO mtu *) >>= function
+let send_recv conn config ip_config _mtu routes =
+  match open_tun config ip_config (* TODO mtu *) routes with
   | Error (`Msg msg) -> failwith ("error opening tun " ^ msg)
   | Ok (_, tun_fd) ->
       let rec process_incoming () =
@@ -313,11 +344,11 @@ let establish_tunnel config pkcs12_password =
       Logs.info (fun m -> m "waiting for established");
       Lwt_mvar.take est_mvar >>= function
       | Error () -> Lwt.return_error (`Msg "Impossible to establish a channel")
-      | Ok (ip_config, mtu) ->
+      | Ok (ip_config, mtu, routes) ->
           Logs.info (fun m ->
               m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config
                 mtu);
-          send_recv conn config ip_config mtu)
+          send_recv conn config ip_config mtu routes)
 
 let parse_config filename =
   Lwt.return

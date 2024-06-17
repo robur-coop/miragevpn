@@ -164,7 +164,7 @@ struct
 
   let handle_action dst add rm ip action =
     match action with
-    | `Established ({ Miragevpn.cidr; _ }, _) ->
+    | `Established ({ Miragevpn.cidr; _ }, _, _) ->
         Log.info (fun m ->
             m "%a insert ip %a, registering flow" pp_dst dst Ipaddr.V4.Prefix.pp
               cidr);
@@ -330,7 +330,7 @@ struct
         server
 end
 
-module Make
+module Client_router
     (R : Mirage_random.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
@@ -348,7 +348,11 @@ struct
       [ `Udp of UDP.t * (int * Ipaddr.t * int) | `Tcp of TCP.flow ] option;
     mutable est_switch : Lwt_switch.t;
     data_mvar : Cstruct.t list Lwt_mvar.t;
-    est_mvar : (Miragevpn.ip_config * int) Lwt_mvar.t;
+    est_mvar :
+      (Miragevpn.ip_config
+      * int
+      * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list)
+      Lwt_mvar.t;
     event_mvar : Miragevpn.event Lwt_mvar.t;
   }
 
@@ -519,9 +523,9 @@ struct
     | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as exit_msg ->
         (* FIXME *)
         Format.kasprintf failwith "%a received" Miragevpn.pp_action exit_msg
-    | `Established (ip, mtu) ->
+    | `Established (ip, mtu, routes) ->
         Log.debug (fun m -> m "action = established");
-        Lwt_mvar.put conn.est_mvar (ip, mtu)
+        Lwt_mvar.put conn.est_mvar (ip, mtu, routes)
 
   let rec event s conn =
     Lwt_mvar.take conn.event_mvar >>= fun ev ->
@@ -579,13 +583,14 @@ struct
         Lwt.async tick;
         Lwt.async (fun () -> handle_action s conn action);
         Log.debug (fun m -> m "waiting for established");
-        Lwt_mvar.take est_mvar >|= fun (ip_config, mtu) ->
+        Lwt_mvar.take est_mvar >|= fun (ip_config, mtu, _routes) ->
+        (* TODO: routes *)
         Log.debug (fun m ->
             m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config mtu);
         let t = { conn; ip_config; mtu } in
         let rec established () =
           (* TODO: signal to upper layer!? *)
-          Lwt_mvar.take est_mvar >>= fun (ip_config', mtu') ->
+          Lwt_mvar.take est_mvar >>= fun (ip_config', mtu', _routes) ->
           let ip_changed =
             let i c = Ipaddr.V4.Prefix.address c.Miragevpn.cidr in
             Ipaddr.V4.compare (i ip_config) (i ip_config') <> 0
@@ -603,14 +608,14 @@ struct
         Ok t
 end
 
-module Make_stack
+module Client_stack
     (R : Mirage_random.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)
     (S : Tcpip.Stack.V4V6) =
 struct
-  module O = Make (R) (M) (P) (T) (S)
+  module O = Client_router (R) (M) (P) (T) (S)
 
   type t = { ovpn : O.t; mutable frags : Fragments.Cache.t }
 

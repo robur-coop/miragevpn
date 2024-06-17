@@ -266,7 +266,11 @@ type cc_message =
   [ `Cc_exit | `Cc_restart of string option | `Cc_halt of string option ]
 
 type action =
-  [ initial_action | `Exit | `Established of ip_config * int | cc_message ]
+  [ initial_action
+  | `Exit
+  | `Established of
+    ip_config * int * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list
+  | cc_message ]
 
 val pp_action : action Fmt.t
 
