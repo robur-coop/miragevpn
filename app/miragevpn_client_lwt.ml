@@ -39,7 +39,7 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
     Logs.debug (fun m -> m "opened TUN interface %s" dev);
     Tuntap.set_up_and_running dev;
     Logs.debug (fun m -> m "set TUN interface up and running");
-    let local = Ipaddr.V4.to_string (Ipaddr.V4.Prefix.address cidr)
+    let local = Ipaddr.V4.Prefix.to_string cidr
     and remote = Ipaddr.V4.to_string gateway in
     let cmd =
       match Lazy.force platform with
