@@ -21,19 +21,21 @@ let read_config_file fn =
   | Ok str -> parse_client ~string_of_file str
   | Error _ as e -> e
 
-let alignment_header =
-  {|#############
+let alignment_header block_size =
+  Printf.sprintf
+    {|#############
 # IMPORTANT:
 #  This OpenVPN configuration file has been padded with the comment below to
-#  ensure alignment on 512-byte boundaries for block device compatibility.
+#  ensure alignment on %u-byte boundaries for block device compatibility.
 #  That is a requirement for the MirageOS unikernels.
 #  If you modify it, please verify that the output of
 #       wc -c THIS.FILE
-#  is divisible by 512.
+#  is divisible by %u.
 #############
 |}
+    block_size block_size
 
-let pad_output output =
+let pad_output block_size output =
   let rec pad acc = function
     | 0 -> acc
     | n ->
@@ -46,44 +48,90 @@ let pad_output output =
         pad next (n - chunk)
   in
   let initial_padding = "\n\n" in
+  let alignment_header = alignment_header block_size in
   let ideal_size =
     String.length alignment_header (* at beginning, before padding *)
     + String.length initial_padding (* between padding and config contents *)
     + String.length output
   in
-  let padding_size = 512 - (ideal_size mod 512) in
+  let padding_size = block_size - (ideal_size mod block_size) in
   alignment_header ^ pad initial_padding padding_size ^ output
 
-let () =
-  (* Testing code for pad_output: *)
-  (*for i = 0 to 5000 do
-    assert (let res = pad_output (String.make i 'a') in
-            0 = String.length res mod 512)
-    done ; ignore (exit 0) ;
-  *)
-  if not !Sys.interactive then (
-    Fmt_tty.setup_std_outputs ();
-    Logs.set_reporter (Logs_fmt.reporter ());
-    Logs.set_level (Some Logs.Debug);
-    let fn = Sys.argv.(1) in
-    match read_config_file fn with
-    | Ok rules -> (
-        let outbuf = Buffer.create 2048 in
-        Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n%!" pp rules;
-        Fmt.pr "%s%!" (pad_output (Buffer.contents outbuf));
-        Logs.info (fun m -> m "Read %d entries!" (cardinal rules));
-        (* The output was printed, now we generate a warning on stderr
-         * if our self-testing fails: *)
-        match
-          parse_client
-            ~string_of_file:(fun _fn -> assert false)
-            (Buffer.contents outbuf)
-        with
-        | Error (`Msg s) ->
-            Logs.err (fun m -> m "self-test failed to parse: %s" s);
-            exit 2
-        | Ok dogfood when equal eq rules dogfood -> ()
-        | Ok _ ->
-            Logs.err (fun m -> m "self-test failed");
-            exit 1)
-    | Error (`Msg s) -> Logs.err (fun m -> m "%s" s))
+let jump () file mode block_size =
+  match read_config_file file with
+  | Ok rules -> (
+      let outbuf = Buffer.create 2048 in
+      Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n%!" pp rules;
+      Fmt.pr "%s%!" (pad_output block_size (Buffer.contents outbuf));
+      Logs.info (fun m -> m "Read %d entries!" (cardinal rules));
+      (* The output was printed, now we generate a warning on stderr
+       * if our self-testing fails: *)
+      let parse =
+        match mode with `Client -> parse_client | `Server -> parse_server
+      in
+      match
+        parse ~string_of_file:(fun _fn -> assert false) (Buffer.contents outbuf)
+      with
+      | Error (`Msg s) ->
+          Logs.err (fun m -> m "self-test failed to parse: %s" s);
+          exit 2
+      | Ok dogfood when equal eq rules dogfood -> ()
+      | Ok _ ->
+          Logs.err (fun m -> m "self-test failed");
+          exit 1)
+  | Error (`Msg s) -> Logs.err (fun m -> m "%s" s)
+
+let setup_log style_renderer level =
+  (* have to duplicate this because we need err_formatter *)
+  Fmt_tty.setup_std_outputs ?style_renderer ();
+  Logs.set_level level;
+  Logs.set_reporter (Common.reporter_with_ts ~dst:Format.err_formatter ())
+
+open Cmdliner
+
+let setup_log =
+  Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
+
+let config =
+  let doc = "Configuration file to parse" in
+  Arg.(required & pos 0 (some file) None & info [] ~doc ~docv:"CONFIG")
+
+let server =
+  let doc = "The configuration is for a server" in
+  Arg.(value & flag & info [ "server" ] ~doc)
+
+let client =
+  let doc =
+    "The configuration is for a client - this is the default unless --server \
+     is passed"
+  in
+  Arg.(value & flag & info [ "client" ] ~doc)
+
+let mode =
+  let open Term.Syntax in
+  let+ client = client and+ server = server in
+  match (client, server) with
+  | true, true ->
+      Printf.eprintf "Can't check both --server and --client\n%!";
+      exit Cmd.Exit.cli_error
+  | false, true -> `Server
+  | (false | true), false -> `Client
+
+let block_size =
+  let pos_int =
+    let ( let* ) = Result.bind in
+    let parse s =
+      let* v = Arg.(conv_parser int) s in
+      if v <= 0 then Error (`Msg "Non-positive integer") else Ok v
+    and print = Arg.(conv_printer int) in
+    Arg.conv (parse, print) ~docv:"POSINT"
+  in
+  let doc = "The block size to align against" in
+  Arg.(value & opt pos_int 512 & info [ "block-size" ] ~doc ~docv:"BLOCKSIZE")
+
+let cmd =
+  let term = Term.(const jump $ setup_log $ config $ mode $ block_size)
+  and info = Cmd.info "openvpn-config-parser" ~version:"%%VERSION_NUM" in
+  Cmd.v info term
+
+let () = if not !Sys.interactive then exit (Cmd.eval cmd)
