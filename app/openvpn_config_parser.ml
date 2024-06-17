@@ -101,7 +101,10 @@ let server =
   Arg.(value & flag & info [ "server" ] ~doc)
 
 let client =
-  let doc = "The configuration is for a client - this is the default unless --server is passed" in
+  let doc =
+    "The configuration is for a client - this is the default unless --server \
+     is passed"
+  in
   Arg.(value & flag & info [ "client" ] ~doc)
 
 let mode =
