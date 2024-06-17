@@ -57,7 +57,7 @@ module Main
     (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t)
     (B : Mirage_block.S) =
 struct
-  module O = Miragevpn_mirage.Make (R) (M) (P) (T) (S)
+  module O = Miragevpn_mirage.Client_router (R) (M) (P) (T) (S)
 
   let strip_0_suffix cfg =
     let rec find0 idx =

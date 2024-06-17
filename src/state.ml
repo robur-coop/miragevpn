@@ -139,7 +139,8 @@ type cc_message = Cc_message.cc_message
 type action =
   [ initial_action
   | `Exit
-  | `Established of Config_ext.ip_config * int
+  | `Established of
+    Config_ext.ip_config * int * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list
   | cc_message ]
 
 let pp_ip_version ppf = function
@@ -157,8 +158,15 @@ let pp_action ppf = function
   | `Connect (ip, port, proto) ->
       Fmt.pf ppf "connect %a %a:%d" pp_proto proto Ipaddr.pp ip port
   | `Exit -> Fmt.string ppf "exit"
-  | `Established (ip, mtu) ->
-      Fmt.pf ppf "established %a, mtu %d" Config_ext.pp_ip_config ip mtu
+  | `Established (ip, mtu, routes) ->
+      let pp_route ppf (net, gw, metric) =
+        Fmt.pf ppf "%a via %a metric %u" Ipaddr.V4.Prefix.pp net Ipaddr.V4.pp gw
+          metric
+      in
+      Fmt.pf ppf "established %a, mtu %d, routes %a" Config_ext.pp_ip_config ip
+        mtu
+        Fmt.(list ~sep:(any ", ") pp_route)
+        routes
   | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as msg ->
       Fmt.pf ppf "control channel message %a" Cc_message.pp msg
 

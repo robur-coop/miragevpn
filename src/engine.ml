@@ -658,7 +658,7 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
             Ok
               (`State
                 (Push_request_sent (tls', my_key_material, their_tls_data), None))
-      | Some (Ipaddr.V4 address, Ipaddr.V4 netmask) ->
+      | Some (address, netmask) ->
           let ip_config =
             let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
             { Config_ext.cidr; gateway = fst (Config_ext.server_ip config) }
@@ -673,9 +673,6 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
           Ok
             (`State
               (Established (tls', keys_ctx), Some (`Established ip_config)))
-      | _ ->
-          Error
-            (`Msg "found Ifconfig without IPv4 addresses, not yet supported")
     in
     (state, config, [ payload ])
 
@@ -955,9 +952,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   let channel_st = Established (tls', keys) in
   let ip_config = { Config_ext.cidr; gateway = server_ip } in
   let config' =
-    Config.add Ifconfig
-      (Ipaddr.V4 ip, Ipaddr.V4 (Ipaddr.V4.Prefix.netmask cidr))
-      config
+    Config.add Ifconfig (ip, Ipaddr.V4.Prefix.netmask cidr) config
   in
   Ok (Some (`Established ip_config), config', channel_st, [ (`Control, out) ])
 
@@ -1937,9 +1932,10 @@ let incoming state control_crypto buf =
                       | Some (`Established ip_config) ->
                           let state = { state with channel = ch } in
                           let+ state, mtu = transition_to_established state in
+                          let routes = Config_ext.routes config in
                           let est =
                             Option.map
-                              (fun mtu -> `Established (ip_config, mtu))
+                              (fun mtu -> `Established (ip_config, mtu, routes))
                               mtu
                           in
                           let act =
@@ -2283,29 +2279,28 @@ let handle_static_client t s keys ev =
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
-      | Connecting (idx, _, _), `Connected -> (
-          match Config.get Ifconfig t.config with
-          | V4 my_ip, V4 their_ip ->
-              let mtu = data_mtu t.config t.session in
-              let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
-              let est =
-                `Established ({ Config_ext.cidr; gateway = their_ip }, mtu)
-              in
-              let protocol = match remote idx with _, _, proto -> proto in
-              let session = { t.session with protocol } in
-              let hmac_algorithm = Config.get Auth t.config in
-              let keys, out =
-                let add_timestamp = ptime_to_ts_exn (t.now ()) in
-                static_out ~add_timestamp keys hmac_algorithm t.session.compress
-                  protocol t.rng ping
-              in
-              let state = Client Ready and control_crypto = `Static keys in
-              Ok
-                ( { t with state; control_crypto; session; last_sent = ts },
-                  [ out ],
-                  [],
-                  Some est )
-          | _ -> Error (`Msg "expected IPv4 addresses"))
+      | Connecting (idx, _, _), `Connected ->
+          let my_ip, their_ip = Config.get Ifconfig t.config in
+          let mtu = data_mtu t.config t.session in
+          let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
+          let routes = Config_ext.routes t.config in
+          let est =
+            `Established ({ Config_ext.cidr; gateway = their_ip }, mtu, routes)
+          in
+          let protocol = match remote idx with _, _, proto -> proto in
+          let session = { t.session with protocol } in
+          let hmac_algorithm = Config.get Auth t.config in
+          let keys, out =
+            let add_timestamp = ptime_to_ts_exn (t.now ()) in
+            static_out ~add_timestamp keys hmac_algorithm t.session.compress
+              protocol t.rng ping
+          in
+          let state = Client Ready and control_crypto = `Static keys in
+          Ok
+            ( { t with state; control_crypto; session; last_sent = ts },
+              [ out ],
+              [],
+              Some est )
       | _, `Tick -> (
           match maybe_ping_timeout t with
           | Some `Exit -> Ok (t, [], [], Some `Exit)

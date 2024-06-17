@@ -22,7 +22,7 @@ module Server
   val write : t -> Ipaddr.V4.t -> Cstruct.t -> unit Lwt.t
 end
 
-module Make
+module Client_router
     (R : Mirage_random.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
@@ -42,7 +42,7 @@ module Make
   val write : t -> Cstruct.t -> bool Lwt.t
 end
 
-module Make_stack
+module Client_stack
     (R : Mirage_random.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)

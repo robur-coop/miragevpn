@@ -153,6 +153,16 @@ module Protocol_flag = struct
   let compare : t -> t -> _ = compare
 end
 
+type redirect_gateway_flag =
+  [ `Def1
+  | `Local
+  | `Auto_local
+  | `Bypass_dhcp
+  | `Bypass_dns
+  | `Block_local
+  | `Ipv6
+  | `Not_ipv4 ]
+
 module Conf_map = struct
   type flag = unit
 
@@ -192,7 +202,7 @@ module Conf_map = struct
     | Dhcp_domain : [ `host ] Domain_name.t k
     | Float : flag k
     | Handshake_window : int k
-    | Ifconfig : (Ipaddr.t * Ipaddr.t) k
+    | Ifconfig : (Ipaddr.V4.t * Ipaddr.V4.t) k
     | Ifconfig_nowarn : flag k
     | Key_derivation : [ `Tls_ekm ] k
     | Link_mtu : int k
@@ -217,6 +227,7 @@ module Conf_map = struct
       (* see socket.c:static const struct proto_names proto_names[] *)
     | Proto_force : [ `Udp | `Tcp ] k
     | Protocol_flags : Protocol_flag.t list k
+    | Redirect_gateway : redirect_gateway_flag list k
     | Remote
         : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
            | `Ip of Ipaddr.t ]
@@ -232,16 +243,16 @@ module Conf_map = struct
     | Replay_window : (int * int) k
     | Resolv_retry : [ `Infinite | `Seconds of int ] k
     | Route
-        : ([ `Ip of Ipaddr.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
-          * Ipaddr.Prefix.t option
-          * [ `Ip of Ipaddr.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
+        : ([ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
+          * Ipaddr.V4.t option
+          * [ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
             option
-          * [ `Default | `Metric of int ])
+          * int option)
           list
           k
     | Route_delay : (int * int) k
-    | Route_gateway : [ `Ip of Ipaddr.t | `Default | `Dhcp ] k
-    | Route_metric : [ `Default | `Metric of int ] k
+    | Route_gateway : [ `Ip of Ipaddr.V4.t | `Dhcp ] k
+    | Route_metric : int k
     | Route_nopull : flag k
     | Rport : int k
     | Script_security : int k
@@ -615,7 +626,7 @@ module Conf_map = struct
     | Float, () -> p () "float"
     | Handshake_window, seconds -> p () "hand-window %d" seconds
     | Ifconfig, (local, remote) ->
-        p () "ifconfig %a %a" Ipaddr.pp local Ipaddr.pp remote
+        p () "ifconfig %a %a" Ipaddr.V4.pp local Ipaddr.V4.pp remote
     | Ifconfig_nowarn, () -> p () "ifconfig-nowarn"
     | Key_derivation, `Tls_ekm -> p () "key-derivation tls-ekm"
     | Link_mtu, i -> p () "link-mtu %d" i
@@ -662,6 +673,18 @@ module Conf_map = struct
         p () "%a"
           Fmt.(list ~sep (fun ppf -> pf ppf "push %a" pp_param))
           push_options
+    | Redirect_gateway, flags ->
+        let pp_flag ppf = function
+          | `Def1 -> Fmt.string ppf " def1"
+          | `Ipv6 -> Fmt.string ppf " ipv6"
+          | `Bypass_dns -> Fmt.string ppf " bypass-dns"
+          | `Bypass_dhcp -> Fmt.string ppf " bypass-dhcp"
+          | `Not_ipv4 -> Fmt.string ppf " !ipv4"
+          | `Local -> Fmt.string ppf " local"
+          | `Auto_local -> Fmt.string ppf " autolocal"
+          | `Block_local -> Fmt.string ppf " block-local"
+        in
+        p () "redirect-gateway%a" Fmt.(list ~sep:nop pp_flag) flags
     | Remote, lst ->
         p () "%a"
           Fmt.(
@@ -698,23 +721,21 @@ module Conf_map = struct
                let pp_addr ppf v =
                  Fmt.pf ppf "%s"
                    (match v with
-                   | `Ip ip -> Ipaddr.to_string ip
+                   | `Ip ip -> Ipaddr.V4.to_string ip
                    | `Net_gateway -> "net_gateway"
                    | `Remote_host -> "remote_host"
                    | `Vpn_gateway -> "vpn_gateway")
                in
-               p () "route %a %a %a %s" pp_addr network
-                 Fmt.(option ~none:(any "default") Ipaddr.Prefix.pp)
+               p () "route %a%a%a%a" pp_addr network
+                 Fmt.(option (append (any " ") Ipaddr.V4.pp))
                  netmask
-                 Fmt.(option ~none:(any "default") pp_addr)
+                 Fmt.(option (append (any " ") pp_addr))
                  gateway
-                 (match metric with
-                 | `Default -> "default"
-                 | `Metric i -> string_of_int i))
+                 Fmt.(option (append (any " ") int))
+                 metric)
     | Route_delay, (n, w) -> p () "route-delay %d %d" n w
-    | Route_gateway, `Default -> p () "route-gateway default"
     | Route_gateway, `Dhcp -> p () "route-gateway dhcp"
-    | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.pp ip
+    | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.V4.pp ip
     | Route_nopull, () -> p () "route-nopull"
     | Rport, port -> p () "rport %d" port
     | Script_security, d -> p () "script-security %u" d
@@ -729,8 +750,7 @@ module Conf_map = struct
     | Tls_auth, (direction, a, b, c, d) ->
         p () "tls-auth [inline]%a\n<tls-auth>\n%a\n</tls-auth>" pp_opt_direction
           direction pp_key (a, b, c, d)
-    | Route_metric, `Metric i -> p () "route-metric %d" i
-    | Route_metric, `Default -> p () "route-metric default"
+    | Route_metric, i -> p () "route-metric %d" i
     | Tls_cert, cert -> pp_cert cert
     | Tls_key, key -> pp_x509_private_key key
     | Tls_version_min, (ver, or_highest) ->
@@ -1588,8 +1608,27 @@ let a_replay_window =
     (option 15 (a_whitespace *> a_number))
 
 let a_ifconfig =
-  string "ifconfig" *> a_whitespace *> a_ip >>= fun local ->
-  a_whitespace *> a_ip >>| fun remote -> `Entry (B (Ifconfig, (local, remote)))
+  string "ifconfig" *> a_whitespace *> a_ipv4_dotted_quad >>= fun local ->
+  a_whitespace *> a_ipv4_dotted_quad >>| fun remote ->
+  `Entry (B (Ifconfig, (local, remote)))
+
+let a_redirect_gateway =
+  let parse_flag =
+    choice
+      [
+        string "def1" *> return `Def1;
+        string "ipv6" *> return `Ipv6;
+        string "local" *> return `Local;
+        string "autolocal" *> return `Auto_local;
+        string "bypass-dns" *> return `Bypass_dns;
+        string "bypass-dhcp" *> return `Bypass_dhcp;
+        string "block-local" *> return `Block_local;
+        string "!ipv4" *> return `Not_ipv4;
+      ]
+  in
+  string "redirect-gateway"
+  *> option [] (a_whitespace *> commit *> sep_by a_whitespace parse_flag)
+  >>| fun flags -> `Entry (B (Redirect_gateway, flags))
 
 let a_remote =
   string "remote" *> a_whitespace *> a_domain_or_ip >>= fun host_or_ip ->
@@ -1641,10 +1680,10 @@ let a_connection =
   skip_many (a_whitespace_or_comment <|> a_newline) *> a_remote_entry
   <* skip_many (a_whitespace_or_comment <|> a_newline)
 
-let a_network_or_gateway =
+let a_network_or_gateway4 =
   choice
     [
-      (a_ip >>| fun ip -> `Ip ip);
+      (a_ipv4_dotted_quad >>| fun ip -> `Ip ip);
       string "vpn_gateway" *> return `Vpn_gateway;
       string "net_gateway" *> return `Net_gateway;
       string "remote_host" *> return `Remote_host;
@@ -1652,43 +1691,19 @@ let a_network_or_gateway =
 
 let a_route =
   (* --route network/IP [netmask] [gateway] [metric] *)
-  string "route" *> a_whitespace *> a_network_or_gateway >>= fun network ->
-  let some x = Some x in
-
-  option
-    (some @@ Ipaddr.Prefix.of_string_exn "255.255.255.255/32", None, `Default)
-    ( a_whitespace
-    *> (a_ip
-       >>= (fun ip ->
-             char '/' *> a_number_range 0 32 >>= fun mask ->
-             match
-               Ipaddr.Prefix.of_string (Fmt.str "%a/%d" Ipaddr.pp ip mask)
-             with
-             | Error (`Msg err) -> fail err
-             | Ok n -> return n)
-       <|> (choice
-              [
-                string "default"
-                *> return (Ipaddr.of_string_exn "255.255.255.255");
-                a_ip;
-              ]
-           >>| Ipaddr.Prefix.of_addr)
-       >>| some)
-    >>= fun netmask ->
-      option (None, `Default)
-        ( a_whitespace
-        *> (string "default" *> return None <|> (a_network_or_gateway >>| some))
-        >>= fun gateway ->
-          (* read metric: *)
-          option `Default
-            (a_whitespace
-            *> (string "default" *> return `Default
-               <|> (a_number_range 0 255 >>| fun i -> `Metric i)))
-          >>| fun metric -> (gateway, metric) )
-      >>| fun (gateway, metric) -> (netmask, gateway, metric)
-      (* <* end_of_input*) )
-  >>| fun (netmask, gateway, metric) ->
-  `Entry (B (Route, [ (network, netmask, gateway, metric) ]))
+  let route ?netmask ?gateway ?metric network =
+    `Entry (B (Route, [ (network, netmask, gateway, metric) ]))
+  in
+  string "route" *> a_whitespace *> a_network_or_gateway4 >>= fun network ->
+  option (route network)
+    ( a_whitespace *> commit *> a_ipv4_dotted_quad >>= fun netmask ->
+      option (route network ~netmask)
+        ( a_whitespace *> a_network_or_gateway4 >>= fun gateway ->
+          option
+            (route network ~netmask ~gateway)
+            ( a_whitespace *> a_entry_one_number "route" >>= fun metric ->
+              if metric < 0 then fail "negative metric"
+              else return (route network ~netmask ~gateway ~metric) ) ) )
 
 let a_route_gateway =
   string "route-gateway" *> a_whitespace
@@ -1696,11 +1711,15 @@ let a_route_gateway =
        [
          (a_single_param >>= function
           | "dhcp" -> return `Dhcp
-          | "default" -> return `Default
-          | _ -> fail "not dhcp|default|ip");
-         (a_ip >>| fun x -> `Ip x);
+          | _ -> fail "not dhcp|ip");
+         (a_ipv4_dotted_quad >>| fun x -> `Ip x);
        ]
   >>| fun x -> `Entry (B (Route_gateway, x))
+
+let a_route_metric =
+  string "route-metric" *> a_whitespace *> commit
+  *> a_entry_one_number "route-metric"
+  >>| fun metric -> `Entry (B (Route_metric, metric))
 
 let a_inline =
   char '<'
@@ -1804,6 +1823,7 @@ let a_config_entry : line A.t =
          a_server;
          a_verify_client_cert;
          a_script_security;
+         a_redirect_gateway;
          a_replay_window;
          a_remote;
          a_reneg_bytes;
@@ -1825,6 +1845,7 @@ let a_config_entry : line A.t =
          a_topology;
          a_route;
          a_route_gateway;
+         a_route_metric;
          a_topology;
          a_tls_ciphersuite;
          a_tls_cipher;
@@ -2297,6 +2318,7 @@ let merge_push_reply client (push_config : string) =
     | Ifconfig, _ -> true
     | Key_derivation, _ -> true
     | Protocol_flags, _ -> true
+    | Redirect_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | Route, _ -> not (Conf_map.mem Route_nopull client)
     | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | _ -> false

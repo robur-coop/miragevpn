@@ -3,12 +3,28 @@ type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
 let pp_ip_config ppf { cidr; gateway } =
   Fmt.pf ppf "ip %a gateway %a" Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
 
+let ifconfig config =
+  let address, netmask = Config.get Ifconfig config in
+  Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address
+
+let vpn_gateway config =
+  match Config.find Dev config with
+  | None | Some (`Tap, _) ->
+      (* Must be tun *)
+      assert false
+  | Some (`Tun, _) ->
+      let cidr = ifconfig config in
+      Ipaddr.V4.Prefix.first cidr
+
+let route_gateway config =
+  match Config.find Route_gateway config with
+  | Some `Dhcp -> assert false (* we don't support this *)
+  | Some (`Ip ip) -> ip
+  | None -> vpn_gateway config
+
 let ip_from_config config =
-  match Config.(get Ifconfig config, get Route_gateway config) with
-  | (V4 address, V4 netmask), `Ip (V4 gateway) ->
-      let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-      { cidr; gateway }
-  | _ -> assert false
+  let cidr = ifconfig config and gateway = route_gateway config in
+  { cidr; gateway }
 
 let server_ip config =
   let cidr = Config.get Server config in
@@ -65,3 +81,48 @@ let remotes config =
           let remote = (ip_or_dom, port, proto) in
           if f remote then Some remote else None)
         remotes
+
+let route_metric config =
+  Config.find Route_metric config |> Option.value ~default:0
+
+(** Returns (cidr, gateway, metric) list *)
+let routes config : (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
+  let default_gateway = route_gateway config
+  and default_metric = route_metric config in
+  let resolve_network_or_gateway = function
+    | `Ip ip -> ip
+    | `Net_gateway -> assert false
+    | `Vpn_gateway -> vpn_gateway config
+    | `Remote_host -> assert false
+  in
+  let default_route =
+    match Config.find Redirect_gateway config with
+    | None -> []
+    | Some xs when List.mem `Def1 xs ->
+        [
+          ( Ipaddr.V4.Prefix.of_string_exn "0.0.0.0/1",
+            default_gateway,
+            default_metric );
+          ( Ipaddr.V4.Prefix.of_string_exn "128.0.0.0/1",
+            default_gateway,
+            default_metric );
+        ]
+    | Some _ -> [ (Ipaddr.V4.Prefix.global, default_gateway, default_metric) ]
+  in
+  let routes =
+    Config.find Route config |> Option.value ~default:[]
+    |> List.map (fun (network, netmask, gateway, metric) ->
+           let network = resolve_network_or_gateway network in
+           let netmask = Option.value netmask ~default:Ipaddr.V4.broadcast in
+           let gateway =
+             match gateway with
+             | Some gateway -> resolve_network_or_gateway gateway
+             | None -> default_gateway
+           in
+           let metric = Option.value ~default:0 metric in
+           let prefix =
+             Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address:network
+           in
+           (prefix, gateway, metric))
+  in
+  routes @ default_route

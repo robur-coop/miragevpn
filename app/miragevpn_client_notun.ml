@@ -63,7 +63,7 @@ let event k (tick : [ `Tick ] Lwt.t) client actions ev =
       in
       k tick client (actions @ new_actions)
 
-let mk_ifconfig (ip_config, mtu) =
+let mk_ifconfig (ip_config, mtu, _routes) =
   { ip_config; mtu; ping = pinger (); seq_no = 0 }
 
 let ping_payload =
@@ -238,9 +238,9 @@ and connected_action proto fd incoming tick client actions =
         | _ -> connected_action proto fd incoming
       in
       event k tick client actions (ev :> Miragevpn.event)
-  | `Established ifconfig ->
+  | `Established ((ip, _, _) as ifconfig) ->
       Logs.info (fun m ->
-          m "Connection established! %a" Miragevpn.pp_ip_config (fst ifconfig));
+          m "Connection established! %a" Miragevpn.pp_ip_config ip);
       let ifconfig = mk_ifconfig ifconfig in
       established_action proto fd incoming ifconfig tick client actions
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
