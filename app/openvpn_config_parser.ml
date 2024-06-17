@@ -131,7 +131,7 @@ let block_size =
 
 let cmd =
   let term = Term.(const jump $ setup_log $ config $ mode $ block_size)
-  and info = Cmd.info "openvpn_config_parser" ~version:"%%VERSION_NUM" in
+  and info = Cmd.info "openvpn-config-parser" ~version:"%%VERSION_NUM" in
   Cmd.v info term
 
 let () = if not !Sys.interactive then exit (Cmd.eval cmd)
