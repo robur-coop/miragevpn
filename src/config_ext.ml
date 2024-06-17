@@ -3,12 +3,28 @@ type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
 let pp_ip_config ppf { cidr; gateway } =
   Fmt.pf ppf "ip %a gateway %a" Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
 
+let ifconfig config =
+  let address, netmask = Config.get Ifconfig config in
+  Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address
+
+let vpn_gateway config =
+  match Config.find Dev config with
+  | None | Some (`Tap, _) ->
+      (* Must be tun *)
+      assert false
+  | Some (`Tun, _) ->
+      let cidr = ifconfig config in
+      Ipaddr.V4.Prefix.first cidr
+
+let route_gateway config =
+  match Config.find Route_gateway config with
+  | Some `Dhcp -> assert false (* we don't support this *)
+  | Some (`Ip ip) -> ip
+  | None -> vpn_gateway config
+
 let ip_from_config config =
-  match Config.(get Ifconfig config, get Route_gateway config) with
-  | (address, netmask), `Ip gateway ->
-      let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-      { cidr; gateway }
-  | _ -> assert false
+  let cidr = ifconfig config and gateway = route_gateway config in
+  { cidr; gateway }
 
 let server_ip config =
   let cidr = Config.get Server config in
@@ -66,23 +82,6 @@ let remotes config =
           if f remote then Some remote else None)
         remotes
 
-let vpn_gateway config =
-  match (Config.find Dev config, Config.find Ifconfig config) with
-  | (None | Some (`Tap, _)), _ ->
-      (* Must be tun *)
-      None
-  | Some (`Tun, _), None -> None
-  | Some (`Tun, _), Some (address, netmask) ->
-      (* XXX: when can this raise?! *)
-      let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-      Some (Ipaddr.V4.Prefix.first cidr)
-
-let route_gateway config =
-  match Config.find Route_gateway config with
-  | Some `Dhcp -> assert false (* we don't support this *)
-  | Some (`Ip ip) -> Some ip
-  | None -> vpn_gateway config
-
 let route_metric config =
   Config.find Route_metric config |> Option.value ~default:0
 
@@ -94,16 +93,14 @@ let routes ~net_gateway ~remote_host config :
   let resolve_network_or_gateway = function
     | `Ip ip -> ip
     | `Net_gateway -> net_gateway
-    | `Vpn_gateway -> (* XXX *) Option.get (vpn_gateway config)
+    | `Vpn_gateway -> vpn_gateway config
     | `Remote_host -> remote_host
   in
   let default_route =
-    match (Config.find Redirect_gateway config, default_gateway) with
-    | None, _ -> []
-    | Some _, None -> assert false (* !?! *)
-    | Some [], Some default_gateway ->
-        [ (Ipaddr.V4.Prefix.global, default_gateway, default_metric) ]
-    | Some (`Def1 :: (_ : [ `Def1 ] list)), Some default_gateway ->
+    match Config.find Redirect_gateway config with
+    | None -> []
+    | Some [] -> [ (Ipaddr.V4.Prefix.global, default_gateway, default_metric) ]
+    | Some (`Def1 :: (_ : [ `Def1 ] list)) ->
         [
           ( Ipaddr.V4.Prefix.of_string_exn "0.0.0.0/1",
             default_gateway,
@@ -121,7 +118,7 @@ let routes ~net_gateway ~remote_host config :
            let gateway =
              match gateway with
              | Some gateway -> resolve_network_or_gateway gateway
-             | None -> (* XXX *) Option.get default_gateway
+             | None -> default_gateway
            in
            let metric = Option.value ~default:0 metric in
            let prefix =
