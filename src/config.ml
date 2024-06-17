@@ -2318,6 +2318,7 @@ let merge_push_reply client (push_config : string) =
     | Ifconfig, _ -> true
     | Key_derivation, _ -> true
     | Protocol_flags, _ -> true
+    | Redirect_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | Route, _ -> not (Conf_map.mem Route_nopull client)
     | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | _ -> false
