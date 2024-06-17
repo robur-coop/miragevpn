@@ -18,6 +18,7 @@ let miragevpn_handler =
     runtime_arg ~pos:__POS__ "Unikernel.K.ipv4_only";
     runtime_arg ~pos:__POS__ "Unikernel.K.ipv6_only";
     runtime_arg ~pos:__POS__ "Unikernel.K.nat_table_size";
+    runtime_arg ~pos:__POS__ "Unikernel.K.really_no_authentication";
   ] in
   main ~runtime_args ~packages "Unikernel.Main"
     (random @-> mclock @-> pclock @-> time @-> network @-> ethernet @-> arpv4 @-> ipv6 @-> block @-> job)

@@ -126,8 +126,8 @@ let established cipher =
   let initial_server =
     let is_not_taken _ = true in
     match
-      Miragevpn.server minimal_server_config ~is_not_taken ts now
-        Mirage_crypto_rng.generate
+      Miragevpn.server ~really_no_authentication:true minimal_server_config
+        ~is_not_taken ts now Mirage_crypto_rng.generate
     with
     | Ok (s, _, _) -> s
     | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e

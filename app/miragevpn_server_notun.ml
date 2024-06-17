@@ -271,7 +271,10 @@ let connect config =
   let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
   and now = Ptime_clock.now
   and rng = Mirage_crypto_rng.generate in
-  match Miragevpn.server config ~is_not_taken ts now rng with
+  match
+    Miragevpn.server ~really_no_authentication:true config ~is_not_taken ts now
+      rng
+  with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "server construction failed %s" msg);
       assert false
