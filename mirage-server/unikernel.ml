@@ -324,7 +324,7 @@ begin
         TCP.connect ip >>= fun tcp ->
         S.connect net eth arp ip icmp udp tcp >>= fun stack ->
         let payloadv4_from_tunnel = payloadv4_from_tunnel config table stack in
-        let t = O.connect ?really_no_authentication ~payloadv4_from_tunnel config stack in
+        let t = O.connect ~really_no_authentication ~payloadv4_from_tunnel config stack in
         Ipv4.inject_write (O.write t);
         let task, _u = Lwt.task () in
         task
