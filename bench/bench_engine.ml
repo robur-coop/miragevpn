@@ -83,6 +83,7 @@ let established cipher =
     |> add Auth_user_pass ("testuser", "testpass")
     |> add Remote [ (`Ip (Ipaddr.of_string_exn "10.0.0.1"), None, Some `Tcp) ]
     |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Cipher cipher
+    |> add Dev (`Tun, None)
   in
   let minimal_server_config =
     let open Miragevpn.Config in
@@ -105,6 +106,7 @@ let established cipher =
     |> add Tls_auth tls_auth |> add Ca [ ca ] |> add Tls_cert cert
     |> add Tls_key key |> add Cipher cipher
     |> add Verify_client_cert `None
+    |> add Dev (`Tun, None)
   in
 
   let[@ocaml.warning "-8"] ( initial_client,
