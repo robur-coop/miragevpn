@@ -43,9 +43,7 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
     and remote = Ipaddr.V4.to_string gateway in
     let cmd =
       match Lazy.force platform with
-      | Linux ->
-          Bos.Cmd.(
-            v "ip" % "addr" % "add" % "dev" % dev % local % "remote" % remote)
+      | Linux -> Bos.Cmd.(v "ip" % "addr" % "add" % "dev" % dev % local)
       | FreeBSD -> Bos.Cmd.(v "ifconfig" % dev % local % remote)
     in
     Bos.OS.Cmd.run cmd
