@@ -302,10 +302,13 @@ struct
     List.iter (Hashtbl.remove server.connections) to_remove;
     T.sleep_ns (Duration.of_sec 1) >>= fun () -> timer server ()
 
-  let connect ?payloadv4_from_tunnel config stack =
+  let connect ?really_no_authentication ?payloadv4_from_tunnel config stack =
     let connections = Hashtbl.create 7 in
     let is_not_taken ip = not (Hashtbl.mem connections ip) in
-    match Miragevpn.server config ~is_not_taken M.elapsed_ns now R.generate with
+    match
+      Miragevpn.server ?really_no_authentication config ~is_not_taken
+        M.elapsed_ns now R.generate
+    with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "server construction failed %s" msg);
         exit 64

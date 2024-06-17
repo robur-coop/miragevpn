@@ -16,6 +16,12 @@ module K = struct
   let nat_table_size =
     let doc = Arg.info ~doc:"The size of the NAT table (n/100 -> ICMP, n/2 -> TCP, n/2 -> UDP)." ["nat-table-size"] in
     Arg.(value & opt int 2048 doc)
+
+  let really_no_authentication =
+    let doc = Arg.info ~doc:"Allow to not do any authentication. This will allow any client to connect."
+        ["really-no-authentication"]
+    in
+    Arg.(value & flag doc)
 end
 
 module Main
@@ -298,7 +304,7 @@ begin
     | Error e -> Logs.warn (fun m -> m "error %a when sending data received over tunnel"
                                S.IP.pp_error e)
 
-  let start _ _ _ _ net eth arp ipv6 block ipv4 ipv4_gateway ipv4_only ipv6_only nat_table_size =
+  let start _ _ _ _ net eth arp ipv6 block ipv4 ipv4_gateway ipv4_only ipv6_only nat_table_size really_no_authentication =
     read_config block >>= function
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "error while reading config %s" msg);
@@ -318,7 +324,7 @@ begin
         TCP.connect ip >>= fun tcp ->
         S.connect net eth arp ip icmp udp tcp >>= fun stack ->
         let payloadv4_from_tunnel = payloadv4_from_tunnel config table stack in
-        let t = O.connect ~payloadv4_from_tunnel config stack in
+        let t = O.connect ~really_no_authentication ~payloadv4_from_tunnel config stack in
         Ipv4.inject_write (O.write t);
         let task, _u = Lwt.task () in
         task

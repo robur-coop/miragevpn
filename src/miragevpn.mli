@@ -296,6 +296,7 @@ val client :
     if the configuration does not contain a tls-auth element. *)
 
 val server :
+  ?really_no_authentication:bool ->
   Config.t ->
   is_not_taken:(Ipaddr.V4.t -> bool) ->
   ?auth_user_pass:(user:string -> pass:string -> bool) ->

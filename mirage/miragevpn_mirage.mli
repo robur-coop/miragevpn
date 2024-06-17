@@ -14,6 +14,7 @@ module Server
   type t
 
   val connect :
+    ?really_no_authentication:bool ->
     ?payloadv4_from_tunnel:(Ipv4_packet.t -> Cstruct.t -> unit Lwt.t) ->
     Miragevpn.Config.t ->
     S.t ->
