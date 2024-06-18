@@ -444,4 +444,8 @@ let cmd =
   and info = Cmd.info "miragevpn_client" ~version:"%%VERSION_NUM%%" in
   Cmd.v info term
 
-let () = exit (Cmd.eval cmd)
+let () =
+  try
+    Sys.catch_break true;
+    exit (Cmd.eval cmd)
+  with Sys.Break -> exit 1
