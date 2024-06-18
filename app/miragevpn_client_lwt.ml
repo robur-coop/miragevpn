@@ -403,6 +403,30 @@ let establish_tunnel config pkcs12_password =
       Lwt_mvar.take est_mvar >>= function
       | Error () -> Lwt.return_error (`Msg "Impossible to establish a channel")
       | Ok (ip_config, mtu, routes) ->
+          Lwt.async (fun () ->
+              let rec take_mvar () =
+                Lwt_mvar.take est_mvar >>= function
+                | Error () ->
+                    Logs.err (fun m -> m "est_mvar errored");
+                    exit 2
+                | Ok (ip_config', _, _) ->
+                    if
+                      Ipaddr.V4.Prefix.compare ip_config.cidr ip_config'.cidr
+                      = 0
+                      && Ipaddr.V4.compare ip_config.gateway ip_config'.gateway
+                         = 0
+                    then take_mvar ()
+                    else (
+                      Logs.warn (fun m ->
+                          m
+                            "IP changed: was %a (gateway %a), now %a (gateway \
+                             %a)"
+                            Ipaddr.V4.Prefix.pp ip_config.cidr Ipaddr.V4.pp
+                            ip_config.gateway Ipaddr.V4.Prefix.pp
+                            ip_config'.cidr Ipaddr.V4.pp ip_config'.gateway);
+                      exit 2)
+              in
+              take_mvar ());
           Logs.info (fun m ->
               m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config
                 mtu);
