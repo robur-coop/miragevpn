@@ -292,14 +292,31 @@ let send_recv conn config ip_config _mtu routes =
         (* not using write_to_fd here because partial writes to a tun
            interface are semantically different from single write()s: *)
         Lwt_list.iter_p
-          (fun pkt -> Lwt_cstruct.write tun_fd pkt >|= ignore)
+          (fun pkt ->
+            (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
+            let pkt =
+              match Lazy.force platform with
+              | FreeBSD ->
+                  let pre = Cstruct.create 4 in
+                  Cstruct.set_uint8 pre 3 2;
+                  Cstruct.append pre pkt
+              | Linux -> pkt
+            in
+            Lwt_cstruct.write tun_fd pkt >|= ignore)
           pkts
         >>= fun () -> process_incoming ()
       in
       let rec process_outgoing tun_fd =
         let open Lwt_result.Infix in
         let buf = Cstruct.create 1500 in
-        Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= Cstruct.sub buf 0
+        (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
+        ( Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= fun len ->
+          let start, len =
+            match Lazy.force platform with
+            | Linux -> (0, len)
+            | FreeBSD -> (4, len - 4)
+          in
+          Cstruct.sub buf start len )
         >>= fun buf ->
         match Miragevpn.outgoing conn.o_client buf with
         | Error `Not_ready -> failwith "tunnel not ready, dropping data"
