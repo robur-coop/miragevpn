@@ -2,7 +2,7 @@ open Miragevpn.Config
 
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
-let read_config_file fn =
+let read_config_file fn parse =
   let string_of_file ~dir filename =
     let file =
       if Filename.is_relative filename then Filename.concat dir filename
@@ -18,7 +18,7 @@ let read_config_file fn =
   let dir, filename = Filename.(dirname fn, basename fn) in
   let string_of_file = string_of_file ~dir in
   match string_of_file filename with
-  | Ok str -> parse_client ~string_of_file str
+  | Ok str -> parse ~string_of_file str
   | Error _ as e -> e
 
 let alignment_header block_size =
@@ -58,7 +58,10 @@ let pad_output block_size output =
   alignment_header ^ pad initial_padding padding_size ^ output
 
 let jump () file mode block_size =
-  match read_config_file file with
+  let parse =
+    match mode with `Client -> parse_client | `Server -> parse_server
+  in
+  match read_config_file file parse with
   | Ok rules -> (
       let outbuf = Buffer.create 2048 in
       Fmt.pf (Format.formatter_of_buffer outbuf) "@[<v>%a@]\n%!" pp rules;
@@ -66,9 +69,6 @@ let jump () file mode block_size =
       Logs.info (fun m -> m "Read %d entries!" (cardinal rules));
       (* The output was printed, now we generate a warning on stderr
        * if our self-testing fails: *)
-      let parse =
-        match mode with `Client -> parse_client | `Server -> parse_server
-      in
       match
         parse ~string_of_file:(fun _fn -> assert false) (Buffer.contents outbuf)
       with
