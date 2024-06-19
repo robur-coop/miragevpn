@@ -15,7 +15,7 @@ let platform =
 
 let connected_ip = ref Ipaddr.V4.any
 
-let default_route dst =
+let remote_host_route dst =
   let dst = Ipaddr.V4.to_string dst in
   match Lazy.force platform with
   | Linux -> (
@@ -84,7 +84,7 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
   let host_route =
     (* TODO: only if config includes redirect-gateway *)
     (* NOTE: this implements redirect-gateway autolocal *)
-    match default_route !connected_ip with
+    match remote_host_route !connected_ip with
     | None -> []
     | Some ip ->
         [
