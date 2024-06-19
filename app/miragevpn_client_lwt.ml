@@ -13,6 +13,33 @@ let platform =
     | Ok s -> invalid_arg (Printf.sprintf "OS %s not supported" s)
     | Error (`Msg m) -> invalid_arg m)
 
+let connected_ip = ref Ipaddr.V4.any
+
+let remote_host_route dst =
+  let dst = Ipaddr.V4.to_string dst in
+  match Lazy.force platform with
+  | Linux -> (
+      let cmd = Bos.Cmd.(v "ip" % "route" % "get" % dst) in
+      match Bos.OS.Cmd.(run_out cmd |> out_string |> success) with
+      | Ok routes -> (
+          match String.split_on_char ' ' routes with
+          | _ :: "via" :: ip :: _ -> Some ip
+          | _ -> None)
+      | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
+  | FreeBSD -> (
+      let cmd = Bos.Cmd.(v "route" % "-n" % "show" % dst) in
+      match Bos.OS.Cmd.(run_out cmd |> out_lines |> success) with
+      | Ok lines -> (
+          match
+            List.find_opt
+              (fun l -> String.starts_with ~prefix:"gateway:" (String.trim l))
+              lines
+          with
+          | Some gw ->
+              Some (String.trim (List.nth (String.split_on_char ':' gw) 1))
+          | None -> None)
+      | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
+
 let open_tun config { Miragevpn.cidr; gateway } routes :
     (Miragevpn.Config.t * Lwt_unix.file_descr, [> `Msg of string ]) result =
   (* This returns a Config with updated MTU, and a file descriptor for
@@ -54,6 +81,16 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
     | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
     | None -> Miragevpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config
   in
+  let host_route =
+    (* TODO: only if config includes redirect-gateway *)
+    (* NOTE: this implements redirect-gateway autolocal *)
+    match remote_host_route !connected_ip with
+    | None -> []
+    | Some ip ->
+        [
+          (Ipaddr.V4.Prefix.make 32 !connected_ip, Ipaddr.V4.of_string_exn ip, 0);
+        ]
+  in
   let* on_exit =
     match
       List.fold_left
@@ -73,7 +110,7 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
           match Bos.OS.Cmd.run cmd_add with
           | Ok () -> Ok (cmd_del :: cmds_on_exit)
           | Error (`Msg m) -> Error (`Msg m, cmds_on_exit))
-        (Ok []) routes
+        (Ok []) (routes @ host_route)
     with
     | Ok cmds -> Ok cmds
     | Error (`Msg m, on_exit) ->
@@ -228,6 +265,9 @@ let handle_action conn = function
       connect_udp ip port >>= fun fd ->
       conn.peer <- Some (`Udp fd);
       Lwt.async (fun () -> reader_udp conn.event_mvar fd);
+      (match ip with
+      | Ipaddr.V4 ip -> connected_ip := ip
+      | Ipaddr.V6 _ -> Logs.warn (fun m -> m "ahhhh, v6"));
       Lwt_mvar.put conn.event_mvar `Connected
   | `Connect (ip, port, `Tcp) ->
       Lwt_switch.turn_off conn.est_switch >>= fun () ->
@@ -242,6 +282,9 @@ let handle_action conn = function
           | Some fd ->
               conn.peer <- Some (`Tcp fd);
               Lwt.async (fun () -> reader_tcp conn.event_mvar fd);
+              (match ip with
+              | Ipaddr.V4 ip -> connected_ip := ip
+              | Ipaddr.V6 _ -> Logs.warn (fun m -> m "aaaah"));
               `Connected
         in
         Lwt_mvar.put conn.event_mvar ev
@@ -292,14 +335,31 @@ let send_recv conn config ip_config _mtu routes =
         (* not using write_to_fd here because partial writes to a tun
            interface are semantically different from single write()s: *)
         Lwt_list.iter_p
-          (fun pkt -> Lwt_cstruct.write tun_fd pkt >|= ignore)
+          (fun pkt ->
+            (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
+            let pkt =
+              match Lazy.force platform with
+              | FreeBSD ->
+                  let pre = Cstruct.create 4 in
+                  Cstruct.set_uint8 pre 3 2;
+                  Cstruct.append pre pkt
+              | Linux -> pkt
+            in
+            Lwt_cstruct.write tun_fd pkt >|= ignore)
           pkts
         >>= fun () -> process_incoming ()
       in
       let rec process_outgoing tun_fd =
         let open Lwt_result.Infix in
         let buf = Cstruct.create 1500 in
-        Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= Cstruct.sub buf 0
+        (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
+        ( Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= fun len ->
+          let start, len =
+            match Lazy.force platform with
+            | Linux -> (0, len)
+            | FreeBSD -> (4, len - 4)
+          in
+          Cstruct.sub buf start len )
         >>= fun buf ->
         match Miragevpn.outgoing conn.o_client buf with
         | Error `Not_ready -> failwith "tunnel not ready, dropping data"
@@ -343,6 +403,30 @@ let establish_tunnel config pkcs12_password =
       Lwt_mvar.take est_mvar >>= function
       | Error () -> Lwt.return_error (`Msg "Impossible to establish a channel")
       | Ok (ip_config, mtu, routes) ->
+          Lwt.async (fun () ->
+              let rec take_mvar () =
+                Lwt_mvar.take est_mvar >>= function
+                | Error () ->
+                    Logs.err (fun m -> m "est_mvar errored");
+                    exit 2
+                | Ok (ip_config', _, _) ->
+                    if
+                      Ipaddr.V4.Prefix.compare ip_config.cidr ip_config'.cidr
+                      = 0
+                      && Ipaddr.V4.compare ip_config.gateway ip_config'.gateway
+                         = 0
+                    then take_mvar ()
+                    else (
+                      Logs.warn (fun m ->
+                          m
+                            "IP changed: was %a (gateway %a), now %a (gateway \
+                             %a)"
+                            Ipaddr.V4.Prefix.pp ip_config.cidr Ipaddr.V4.pp
+                            ip_config.gateway Ipaddr.V4.Prefix.pp
+                            ip_config'.cidr Ipaddr.V4.pp ip_config'.gateway);
+                      exit 2)
+              in
+              take_mvar ());
           Logs.info (fun m ->
               m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config
                 mtu);
@@ -384,4 +468,8 @@ let cmd =
   and info = Cmd.info "miragevpn_client" ~version:"%%VERSION_NUM%%" in
   Cmd.v info term
 
-let () = exit (Cmd.eval cmd)
+let () =
+  try
+    Sys.catch_break true;
+    exit (Cmd.eval cmd)
+  with Sys.Break -> exit 1
