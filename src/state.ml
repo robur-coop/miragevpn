@@ -137,11 +137,12 @@ type initial_action =
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
 type cc_message = Cc_message.cc_message
+type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
 
 type action =
   [ initial_action
   | `Exit
-  | `Established of Config_ext.ip_config * int * route_info
+  | `Established of ip_config * int * route_info
   | cc_message ]
 
 let pp_ip_version ppf = function
@@ -153,6 +154,9 @@ let pp_proto ppf = function
   | `Tcp -> Fmt.string ppf "tcp"
   | `Udp -> Fmt.string ppf "udp"
 
+let pp_ip_config ppf { cidr; gateway } =
+  Fmt.pf ppf "ip %a gateway %a" Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
+
 let pp_action ppf = function
   | `Resolve (host, ip_version) ->
       Fmt.pf ppf "resolve %a (%a)" Domain_name.pp host pp_ip_version ip_version
@@ -160,29 +164,9 @@ let pp_action ppf = function
       Fmt.pf ppf "connect %a %a:%d" pp_proto proto Ipaddr.pp ip port
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu, _route_info) ->
-      Fmt.pf ppf "established %a, mtu %d" Config_ext.pp_ip_config ip mtu
+      Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
   | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as msg ->
       Fmt.pf ppf "control channel message %a" Cc_message.pp msg
-
-let next_free_ip config is_not_taken =
-  let cidr = Config.get Server config in
-  let network = Ipaddr.V4.Prefix.network cidr in
-  let server_ip = fst (Config_ext.server_ip config) in
-  (* could be smarter than a linear search *)
-  let rec isit ip =
-    if Ipaddr.V4.Prefix.mem ip cidr then
-      if
-        (not (Ipaddr.V4.compare ip server_ip = 0))
-        && (not (Ipaddr.V4.compare ip network = 0))
-        && is_not_taken ip
-      then
-        let cidr' = Ipaddr.V4.Prefix.make (Ipaddr.V4.Prefix.bits cidr) ip in
-        Ok (ip, cidr')
-      else
-        match Ipaddr.V4.succ ip with Ok ip' -> isit ip' | Error e -> Error e
-    else Error (`Msg "all ips are taken")
-  in
-  isit (Ipaddr.V4.Prefix.first cidr)
 
 type session = {
   my_session_id : int64;
