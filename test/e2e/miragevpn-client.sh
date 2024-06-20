@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -ex
+set -e
 
 usage () {
 	echo "$1 <tun-interface> <configuration-dir>"
@@ -18,7 +18,7 @@ client_config="${config_dir}/client.conf"
 
 # run openvpn server
 pidfile="/tmp/miragevpn-e2e.pid"
-openvpn --cd "$config_dir" --config "server.conf" --dev-type tun --dev "$tun_interface" --writepid "$pidfile" &
+openvpn --cd "$config_dir" --config "server.conf" --dev-type tun --dev "$tun_interface" --writepid "$pidfile" >/dev/null &
 
 # kill openvpn server and report test status
 cleanup () {
