@@ -13,8 +13,10 @@ let vpn_gateway config =
       (* Must be tun *)
       assert false
   | Some (`Tun, _) ->
-      let cidr = ifconfig config in
-      Ipaddr.V4.Prefix.first cidr
+      if Config.mem Secret config then snd (Config.get Ifconfig config)
+      else
+        let cidr = ifconfig config in
+        Ipaddr.V4.Prefix.first cidr
 
 let route_gateway config =
   match Config.find Route_gateway config with
