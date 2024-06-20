@@ -244,6 +244,7 @@ type t
 
 type server
 type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
+type route_info
 
 val pp_ip_config : ip_config Fmt.t
 val server_bind_port : Config.t -> int
@@ -257,6 +258,13 @@ val remotes :
   list
 
 val proto : Config.t -> [ `Any | `Ipv4 | `Ipv6 ] * [ `Udp | `Tcp ]
+
+val routes :
+  shares_subnet:bool ->
+  net_gateway:Ipaddr.V4.t option ->
+  remote_host:Ipaddr.V4.t option ->
+  route_info ->
+  (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list
 
 type event =
   [ `Resolved of Ipaddr.t
@@ -278,8 +286,7 @@ type cc_message =
 type action =
   [ initial_action
   | `Exit
-  | `Established of
-    ip_config * int * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list
+  | `Established of ip_config * int * route_info
   | cc_message ]
 
 val pp_action : action Fmt.t

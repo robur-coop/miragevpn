@@ -86,43 +86,76 @@ let route_metric config =
   Config.find Route_metric config |> Option.value ~default:0
 
 (** Returns (cidr, gateway, metric) list *)
-let routes config : (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
-  let default_gateway = route_gateway config
+let routes ~shares_subnet ~net_gateway ~remote_host config :
+    (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
+  let route_gateway = route_gateway config
   and default_metric = route_metric config in
-  let resolve_network_or_gateway = function
-    | `Ip ip -> ip
-    | `Net_gateway -> assert false
-    | `Vpn_gateway -> vpn_gateway config
-    | `Remote_host -> assert false
+  let pp_network_or_gateway ppf = function
+    | `Ip ip -> Ipaddr.V4.pp ppf ip
+    | `Net_gateway -> Fmt.string ppf "net_gateway"
+    | `Vpn_gateway -> Fmt.string ppf "vpn_gateway"
+    | `Remote_host -> Fmt.string ppf "remote_host"
   in
-  let default_route =
+  let resolve_network_or_gateway = function
+    | `Ip ip -> Some ip
+    | `Net_gateway -> net_gateway
+    | `Vpn_gateway -> Some (vpn_gateway config)
+    | `Remote_host -> remote_host
+  in
+  let default_and_remote_routes =
     match Config.find Redirect_gateway config with
     | None -> []
-    | Some xs when List.mem `Def1 xs ->
-        [
+    | Some flags ->
+        let remote_route =
+          if
+            List.mem `Local flags
+            || (shares_subnet && List.mem `Auto_local flags)
+          then []
+          else
+            match (remote_host, net_gateway) with
+            | Some remote_host, Some net_gateway ->
+                let remote_network = Ipaddr.V4.Prefix.of_addr remote_host in
+                [ (remote_network, net_gateway, default_metric) ]
+            | _ -> []
+        in
+        if List.mem `Def1 flags then
           ( Ipaddr.V4.Prefix.of_string_exn "0.0.0.0/1",
-            default_gateway,
-            default_metric );
-          ( Ipaddr.V4.Prefix.of_string_exn "128.0.0.0/1",
-            default_gateway,
-            default_metric );
-        ]
-    | Some _ -> [ (Ipaddr.V4.Prefix.global, default_gateway, default_metric) ]
+            route_gateway,
+            default_metric )
+          :: ( Ipaddr.V4.Prefix.of_string_exn "128.0.0.0/1",
+               route_gateway,
+               default_metric )
+          :: remote_route
+        else
+          (Ipaddr.V4.Prefix.global, route_gateway, default_metric)
+          :: remote_route
   in
   let routes =
     Config.find Route config |> Option.value ~default:[]
-    |> List.map (fun (network, netmask, gateway, metric) ->
-           let network = resolve_network_or_gateway network in
-           let netmask = Option.value netmask ~default:Ipaddr.V4.broadcast in
-           let gateway =
-             match gateway with
-             | Some gateway -> resolve_network_or_gateway gateway
-             | None -> default_gateway
-           in
-           let metric = Option.value ~default:0 metric in
-           let prefix =
-             Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address:network
-           in
-           (prefix, gateway, metric))
+    |> List.filter_map (fun (network, netmask, gateway, metric) ->
+           let gateway = Option.value ~default:(`Ip route_gateway) gateway in
+           match
+             ( resolve_network_or_gateway network,
+               resolve_network_or_gateway gateway )
+           with
+           | Some network, Some gateway ->
+               let netmask =
+                 Option.value netmask ~default:Ipaddr.V4.broadcast
+               in
+               let metric = Option.value ~default:0 metric in
+               let prefix =
+                 Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address:network
+               in
+               Some (prefix, gateway, metric)
+           | None, _ ->
+               Config.Log.warn (fun m ->
+                   m "Unable to resolve network %a; omitting route"
+                     pp_network_or_gateway network);
+               None
+           | _, None ->
+               Config.Log.warn (fun m ->
+                   m "Unable to resolve gateway %a; omitting route"
+                     pp_network_or_gateway gateway);
+               None)
   in
-  routes @ default_route
+  routes @ default_and_remote_routes

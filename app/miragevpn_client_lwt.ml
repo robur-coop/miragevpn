@@ -2,6 +2,10 @@ open Lwt.Infix
 
 let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 
+let pp_route ppf (net, gw, metric) =
+  Fmt.pf ppf "%a via %a metric %u" Ipaddr.V4.Prefix.pp net Ipaddr.V4.pp gw
+    metric
+
 type supported = FreeBSD | Linux
 
 let platform =
@@ -15,7 +19,7 @@ let platform =
 
 let connected_ip = ref Ipaddr.V4.any
 
-let remote_host_route dst =
+let shares_subnet dst =
   let dst = Ipaddr.V4.to_string dst in
   match Lazy.force platform with
   | Linux -> (
@@ -23,21 +27,35 @@ let remote_host_route dst =
       match Bos.OS.Cmd.(run_out cmd |> out_string |> success) with
       | Ok routes -> (
           match String.split_on_char ' ' routes with
-          | _ :: "via" :: ip :: _ -> Some ip
-          | _ -> None)
+          | _ :: "via" :: _ip :: _ -> false
+          | _ -> true)
       | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
   | FreeBSD -> (
       let cmd = Bos.Cmd.(v "route" % "-n" % "show" % dst) in
       match Bos.OS.Cmd.(run_out cmd |> out_lines |> success) with
-      | Ok lines -> (
-          match
-            List.find_opt
-              (fun l -> String.starts_with ~prefix:"gateway:" (String.trim l))
-              lines
-          with
-          | Some gw ->
-              Some (String.trim (List.nth (String.split_on_char ':' gw) 1))
-          | None -> None)
+      | Ok lines ->
+          not
+            (List.exists
+               (fun l -> String.starts_with ~prefix:"gateway:" (String.trim l))
+               lines)
+      | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
+
+let default_route () =
+  match Lazy.force platform with
+  | Linux -> (
+      let cmd = Bos.Cmd.(v "ip" % "route" % "show" % "default") in
+      match Bos.OS.Cmd.(run_out cmd |> out_string |> success) with
+      | Ok ip -> (
+          match String.split_on_char ' ' ip with
+          | "default" :: "via" :: ip :: _ -> Some ip
+          | _ -> None)
+      | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
+  | FreeBSD -> (
+      let cmd = Bos.Cmd.(v "route" % "-n" % "show" % "default") in
+      match Bos.OS.Cmd.(run_out cmd |> out_lines |> success) with
+      | Ok (_ :: _ :: _ :: gw :: _) ->
+          Option.map String.trim (List.nth_opt (String.split_on_char ':' gw) 1)
+      | Ok _ -> None
       | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
 
 let open_tun config { Miragevpn.cidr; gateway } routes :
@@ -81,16 +99,8 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
     | Some _mtu -> (*Tuntap.set_mtu dev mtu TODO ; *) config
     | None -> Miragevpn.Config.add Tun_mtu (Tuntap.get_mtu dev) config
   in
-  let host_route =
-    (* TODO: only if config includes redirect-gateway *)
-    (* NOTE: this implements redirect-gateway autolocal *)
-    match remote_host_route !connected_ip with
-    | None -> []
-    | Some ip ->
-        [
-          (Ipaddr.V4.Prefix.make 32 !connected_ip, Ipaddr.V4.of_string_exn ip, 0);
-        ]
-  in
+  Logs.info (fun m ->
+      m "Setting up routes: @[<v>%a@]" Fmt.(list pp_route) routes);
   let* on_exit =
     match
       List.fold_left
@@ -110,7 +120,7 @@ let open_tun config { Miragevpn.cidr; gateway } routes :
           match Bos.OS.Cmd.run cmd_add with
           | Ok () -> Ok (cmd_del :: cmds_on_exit)
           | Error (`Msg m) -> Error (`Msg m, cmds_on_exit))
-        (Ok []) (routes @ host_route)
+        (Ok []) routes
     with
     | Ok cmds -> Ok cmds
     | Error (`Msg m, on_exit) ->
@@ -245,10 +255,7 @@ type conn = {
   mutable est_switch : Lwt_switch.t;
   data_mvar : Cstruct.t list Lwt_mvar.t;
   est_mvar :
-    ( Miragevpn.ip_config * int * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list,
-      unit )
-    result
-    Lwt_mvar.t;
+    (Miragevpn.ip_config * int * Miragevpn.route_info, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
 }
 
@@ -295,9 +302,9 @@ let handle_action conn = function
   | (`Cc_exit | `Cc_halt _ | `Cc_restart _) as exit_msg ->
       (* FIXME *)
       Format.kasprintf failwith "%a received" Miragevpn.pp_action exit_msg
-  | `Established (ip, mtu, routes) ->
+  | `Established (ip, mtu, route_info) ->
       Logs.app (fun m -> m "established %a" Miragevpn.pp_ip_config ip);
-      Lwt_mvar.put conn.est_mvar (Ok (ip, mtu, routes))
+      Lwt_mvar.put conn.est_mvar (Ok (ip, mtu, route_info))
 
 let rec event conn =
   Lwt_mvar.take conn.event_mvar >>= fun ev ->
@@ -402,7 +409,7 @@ let establish_tunnel config pkcs12_password =
       Logs.info (fun m -> m "waiting for established");
       Lwt_mvar.take est_mvar >>= function
       | Error () -> Lwt.return_error (`Msg "Impossible to establish a channel")
-      | Ok (ip_config, mtu, routes) ->
+      | Ok (ip_config, mtu, route_info) ->
           Lwt.async (fun () ->
               let rec take_mvar () =
                 Lwt_mvar.take est_mvar >>= function
@@ -430,6 +437,14 @@ let establish_tunnel config pkcs12_password =
           Logs.info (fun m ->
               m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config
                 mtu);
+          let routes =
+            let remote_host = Some !connected_ip
+            and net_gateway =
+              Option.bind (default_route ()) (fun gw ->
+                  Result.to_option (Ipaddr.V4.of_string gw))
+            and shares_subnet = shares_subnet !connected_ip in
+            Miragevpn.routes ~shares_subnet ~remote_host ~net_gateway route_info
+          in
           send_recv conn config ip_config mtu routes)
 
 let parse_config filename =
