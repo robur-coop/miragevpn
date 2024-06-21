@@ -351,11 +351,7 @@ struct
       [ `Udp of UDP.t * (int * Ipaddr.t * int) | `Tcp of TCP.flow ] option;
     mutable est_switch : Lwt_switch.t;
     data_mvar : Cstruct.t list Lwt_mvar.t;
-    est_mvar :
-      (Miragevpn.ip_config
-      * int
-      * (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list)
-      Lwt_mvar.t;
+    est_mvar : (Miragevpn.ip_config * int * Miragevpn.route_info) Lwt_mvar.t;
     event_mvar : Miragevpn.event Lwt_mvar.t;
   }
 
@@ -526,9 +522,9 @@ struct
     | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as exit_msg ->
         (* FIXME *)
         Format.kasprintf failwith "%a received" Miragevpn.pp_action exit_msg
-    | `Established (ip, mtu, routes) ->
+    | `Established (ip, mtu, route_info) ->
         Log.debug (fun m -> m "action = established");
-        Lwt_mvar.put conn.est_mvar (ip, mtu, routes)
+        Lwt_mvar.put conn.est_mvar (ip, mtu, route_info)
 
   let rec event s conn =
     Lwt_mvar.take conn.event_mvar >>= fun ev ->
@@ -586,14 +582,14 @@ struct
         Lwt.async tick;
         Lwt.async (fun () -> handle_action s conn action);
         Log.debug (fun m -> m "waiting for established");
-        Lwt_mvar.take est_mvar >|= fun (ip_config, mtu, _routes) ->
+        Lwt_mvar.take est_mvar >|= fun (ip_config, mtu, _route_info) ->
         (* TODO: routes *)
         Log.debug (fun m ->
             m "now established %a (mtu %d)" Miragevpn.pp_ip_config ip_config mtu);
         let t = { conn; ip_config; mtu } in
         let rec established () =
           (* TODO: signal to upper layer!? *)
-          Lwt_mvar.take est_mvar >>= fun (ip_config', mtu', _routes) ->
+          Lwt_mvar.take est_mvar >>= fun (ip_config', mtu', _route_info) ->
           let ip_changed =
             let i c = Ipaddr.V4.Prefix.address c.Miragevpn.cidr in
             Ipaddr.V4.compare (i ip_config) (i ip_config') <> 0

@@ -1936,10 +1936,9 @@ let incoming state control_crypto buf =
                       | Some (`Established ip_config) ->
                           let state = { state with channel = ch } in
                           let+ state, mtu = transition_to_established state in
-                          let routes = Config_ext.routes config in
                           let est =
                             Option.map
-                              (fun mtu -> `Established (ip_config, mtu, routes))
+                              (fun mtu -> `Established (ip_config, mtu, config))
                               mtu
                           in
                           let act =
@@ -2287,9 +2286,8 @@ let handle_static_client t s keys ev =
           let my_ip, their_ip = Config.get Ifconfig t.config in
           let mtu = data_mtu t.config t.session in
           let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
-          let routes = Config_ext.routes t.config in
           let est =
-            `Established ({ Config_ext.cidr; gateway = their_ip }, mtu, routes)
+            `Established ({ Config_ext.cidr; gateway = their_ip }, mtu, t.config)
           in
           let protocol = match remote idx with _, _, proto -> proto in
           let session = { t.session with protocol } in
