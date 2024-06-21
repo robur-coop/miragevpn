@@ -11,10 +11,6 @@ let ticker () =
   let+ () = Lwt_unix.sleep 1. in
   `Tick
 
-let pinger () =
-  let+ () = Lwt_unix.sleep 1. in
-  `Ping
-
 let resolve (name, ip_version) =
   let happy_eyeballs = Happy_eyeballs_lwt.create () in
   let res = Dns_client_lwt.create happy_eyeballs in
@@ -64,12 +60,12 @@ let event k (tick : [ `Tick ] Lwt.t) client actions ev =
       k tick client (actions @ new_actions)
 
 let mk_ifconfig (ip_config, mtu, _routes) =
-  { ip_config; mtu; ping = pinger (); seq_no = 0 }
+  { ip_config; mtu; ping = Lwt.return `Ping; seq_no = 0 }
 
 let ping_payload =
   Cstruct.of_string "never gonna give you up\nnever gonna let you down\nlalala!"
 
-let ping ({ ip_config; seq_no; mtu = _; ping = _ } as ifconfig) =
+let send_ping ({ ip_config; seq_no; mtu = _; ping = _ } as ifconfig) =
   let ping =
     {
       Icmpv4_packet.code = 0;
@@ -176,8 +172,12 @@ let rec established_action test proto fd incoming ifconfig tick client actions =
             tick client actions ev
       | `Ping -> (
           Logs.app (fun m -> m "Sending ping icmp_seq=%d..." ifconfig.seq_no);
-          let ifconfig = { ifconfig with ping = pinger () } in
-          let ifconfig, data = ping ifconfig in
+          let ping =
+            let+ () = Lwt_unix.sleep 1. in
+            `Ping
+          in
+          let ifconfig = { ifconfig with ping } in
+          let ifconfig, data = send_ping ifconfig in
           match Miragevpn.outgoing client data with
           | Ok (client, data) ->
               established_action test proto fd incoming ifconfig tick client
