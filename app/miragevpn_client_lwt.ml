@@ -53,9 +53,16 @@ let default_route () =
   | FreeBSD -> (
       let cmd = Bos.Cmd.(v "route" % "-n" % "show" % "default") in
       match Bos.OS.Cmd.(run_out cmd |> out_lines |> success) with
-      | Ok (_ :: _ :: _ :: gw :: _) ->
-          Option.map String.trim (List.nth_opt (String.split_on_char ':' gw) 1)
-      | Ok _ -> None
+      | Ok lines -> (
+          match
+            List.find_opt
+              (fun l -> String.starts_with ~prefix:"gateway:" (String.trim l))
+              lines
+          with
+          | Some gw ->
+              Option.map String.trim
+                (List.nth_opt (String.split_on_char ':' gw) 1)
+          | None -> None)
       | Error (`Msg m) -> invalid_arg ("couldn't find default route " ^ m))
 
 let open_tun config { Miragevpn.cidr; gateway } routes :
