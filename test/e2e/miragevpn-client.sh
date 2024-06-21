@@ -23,7 +23,7 @@ openvpn --cd "$config_dir" --config "server.conf" --dev-type tun --dev "$tun_int
 # kill openvpn server and report test status
 cleanup () {
 	cat "$pidfile" | xargs kill
-	rm "$pidfile"
+	rm -f "$pidfile"
 }
 trap cleanup EXIT
 
