@@ -6,52 +6,6 @@ module Log =
          @@ Src.create ~doc:"Miragevpn library's engine module" "ovpn.engine")
       : Logs.LOG)
 
-let tls_ciphers config =
-  (* update when ocaml-tls changes default ciphers *)
-  let tls_default_ciphers13 =
-    [
-      `AES_128_GCM_SHA256;
-      `AES_256_GCM_SHA384;
-      `CHACHA20_POLY1305_SHA256;
-      `AES_128_CCM_SHA256;
-    ]
-  and tls_default_ciphers =
-    [
-      `DHE_RSA_WITH_AES_256_GCM_SHA384;
-      `DHE_RSA_WITH_AES_128_GCM_SHA256;
-      `DHE_RSA_WITH_AES_256_CCM;
-      `DHE_RSA_WITH_AES_128_CCM;
-      `DHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
-      `ECDHE_RSA_WITH_AES_128_GCM_SHA256;
-      `ECDHE_RSA_WITH_AES_256_GCM_SHA384;
-      `ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
-      `ECDHE_ECDSA_WITH_AES_128_GCM_SHA256;
-      `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384;
-      `ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256;
-    ]
-  in
-  match (Config.find Tls_cipher config, Config.find Tls_ciphersuite config) with
-  | Some c, None -> Some (c @ tls_default_ciphers13)
-  | None, Some c ->
-      Some (tls_default_ciphers @ (c :> Tls.Ciphersuite.ciphersuite list))
-  | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
-  | None, None -> None
-
-let tls_version config =
-  (* update when ocaml-tls supports new versions *)
-  let tls_lowest_version = `TLS_1_0 and tls_highest_version = `TLS_1_3 in
-  let lower_bound =
-    match Config.find Tls_version_min config with
-    | None -> None
-    | Some (v, or_highest) ->
-        if or_highest then Some tls_highest_version else Some v
-  and upper_bound = Config.find Tls_version_max config in
-  match (lower_bound, upper_bound) with
-  | None, None -> None
-  | Some a, Some b -> Some (a, b)
-  | Some a, None -> Some (a, tls_highest_version)
-  | None, Some b -> Some (tls_lowest_version, b)
-
 let guard p e = if p then Ok () else Error e
 
 let opt_guard p x e =
@@ -690,8 +644,8 @@ let incoming_control_client config rng session channel now op data =
           match (Config.find Tls_cert config, Config.find Tls_key config) with
           | Some cert, Some key -> `Single ([ cert ], key)
           | _ -> `None
-        and ciphers = tls_ciphers config
-        and version = tls_version config
+        and ciphers = Config_ext.tls_ciphers config
+        and version = Config_ext.tls_version config
         and peer_name = Config.find Verify_x509_name config in
         Tls.(
           Engine.client
@@ -914,7 +868,8 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let server, key =
         (Config.get Tls_cert config, Config.get Tls_key config)
       in
-      let ciphers = tls_ciphers config and version = tls_version config in
+      let ciphers = Config_ext.tls_ciphers config
+      and version = Config_ext.tls_version config in
       let* authenticator =
         match
           ( Config.find Verify_client_cert config,
