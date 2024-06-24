@@ -485,7 +485,7 @@ module Conf_map = struct
        ensure_not Tls_crypt_v2_server
          "server tls-crypt-v2 key passed in tls-crypt-v2")
 
-  let pp_param ppf s =
+  let[@coverage off] pp_param ppf s =
     (* XXX(reynir): a_single_param backslash escaping is not correct. Spaces
        (as considered by isspace()) are not correctly unescaped, and all other
        escape sequences should be illegal but are accepted. Thus we only escape
@@ -499,12 +499,12 @@ module Conf_map = struct
       escape ppf s
     else Fmt.string ppf s
 
-  let pp_opt_direction ppf = function
+  let[@coverage off] pp_opt_direction ppf = function
     | None -> ()
     | Some `Incoming -> Fmt.pf ppf " 1"
     | Some `Outgoing -> Fmt.pf ppf " 0"
 
-  let pp_key ppf (a, b, c, d) =
+  let[@coverage off] pp_key ppf (a, b, c, d) =
     Fmt.pf ppf
       "-----BEGIN OpenVPN Static key V1-----\n\
        %a\n\
@@ -513,22 +513,22 @@ module Conf_map = struct
       (match Cstruct.concat [ a; b; c; d ] |> Hex.of_cstruct with
       | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
 
-  let pp_tls_crypt_client ppf key =
+  let[@coverage off] pp_tls_crypt_client ppf key =
     let lines = Tls_crypt.save_v1 key in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
-  let pp_tls_crypt_v2_client ppf (key, wkc) =
+  let[@coverage off] pp_tls_crypt_v2_client ppf (key, wkc) =
     let lines = Tls_crypt.save_tls_crypt_v2_client key wkc in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
-  let pp_tls_crypt_v2_server ppf key =
+  let[@coverage off] pp_tls_crypt_v2_server ppf key =
     let lines = Tls_crypt.V2_server.save key in
     Seq.iter (Fmt.pf ppf "%s\n") lines
 
-  let pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
+  let[@coverage off] pp_b ?(sep = Fmt.any "@.") ppf (b : b) =
     let p () = Fmt.pf ppf in
     let (B (k, v)) = b in
-    let pp_x509 ppf cert =
+    let[@coverage off] pp_x509 ppf cert =
       Fmt.pf ppf
         "# CN: %S\n\
          # Expiry: %a\n\
@@ -553,15 +553,17 @@ module Conf_map = struct
               (X509.Certificate.public_key cert)))
         (X509.Certificate.encode_pem cert |> Cstruct.to_string)
     in
-    let pp_cert cert = p () "cert [inline]\n<cert>\n%a</cert>" pp_x509 cert in
-    let pp_ca certs =
+    let[@coverage off] pp_cert cert =
+      p () "cert [inline]\n<cert>\n%a</cert>" pp_x509 cert
+    in
+    let[@coverage off] pp_ca certs =
       p () "ca [inline]\n<ca>\n%a</ca>" Fmt.(list ~sep:(any "\n") pp_x509) certs
     in
-    let pp_x509_private_key key =
+    let[@coverage off] pp_x509_private_key key =
       p () "key [inline]\n<key>\n%s</key>"
         (X509.Private_key.encode_pem key |> Cstruct.to_string)
     in
-    let pp_tls_version ppf v =
+    let[@coverage off] pp_tls_version ppf v =
       Fmt.string ppf
         (match v with
         | `TLS_1_3 -> "1.3"
@@ -569,7 +571,7 @@ module Conf_map = struct
         | `TLS_1_1 -> "1.1"
         | `TLS_1_0 -> "1.0")
     in
-    let pp_digest_algorithm ppf h =
+    let[@coverage off] pp_digest_algorithm ppf h =
       Fmt.string ppf
         (match h with
         | `MD5 -> "MD5"
@@ -579,8 +581,10 @@ module Conf_map = struct
         | `SHA384 -> "SHA384"
         | `SHA512 -> "SHA512")
     in
-    let pp_cipher ppf v = Fmt.string ppf (cipher_to_string (v :> cipher)) in
-    let pp_fingerprint ppf fp =
+    let[@coverage off] pp_cipher ppf v =
+      Fmt.string ppf (cipher_to_string (v :> cipher))
+    in
+    let[@coverage off] pp_fingerprint ppf fp =
       for i = 0 to Cstruct.length fp - 1 do
         let a, b = Hex.of_char (Cstruct.get fp i) in
         Fmt.pf ppf "%c%c" a b;
@@ -674,7 +678,7 @@ module Conf_map = struct
           Fmt.(list ~sep (fun ppf -> pf ppf "push %a" pp_param))
           push_options
     | Redirect_gateway, flags ->
-        let pp_flag ppf = function
+        let[@coverage off] pp_flag ppf = function
           | `Def1 -> Fmt.string ppf " def1"
           | `Ipv6 -> Fmt.string ppf " ipv6"
           | `Bypass_dns -> Fmt.string ppf " bypass-dns"
@@ -689,7 +693,7 @@ module Conf_map = struct
         p () "%a"
           Fmt.(
             list ~sep @@ fun ppf (endp, port, proto) ->
-            let pp_endpoint, ip_proto =
+            let[@coverage off] pp_endpoint, ip_proto =
               match endp with
               | `Domain (name, prot) ->
                   ( (fun ppf () -> Domain_name.pp ppf name),
@@ -718,7 +722,7 @@ module Conf_map = struct
     | Route, routes ->
         routes
         |> List.iter (fun (network, netmask, gateway, metric) ->
-               let pp_addr ppf v =
+               let[@coverage off] pp_addr ppf v =
                  Fmt.pf ppf "%s"
                    (match v with
                    | `Ip ip -> Ipaddr.V4.to_string ip
@@ -792,7 +796,7 @@ module Conf_map = struct
     | Verify_x509_name, host ->
         p () "verify-x509-name %a name" Domain_name.pp host
 
-  let pp_with_sep ?(sep = Fmt.any "@.") ppf t =
+  let[@coverage off] pp_with_sep ?(sep = Fmt.any "@.") ppf t =
     let minimized_t =
       if find Tls_mode t = Some `Client && mem Pull t then (
         Fmt.pf ppf "client%a" sep ();
@@ -803,7 +807,7 @@ module Conf_map = struct
     in
     Fmt.(pf ppf "%a" (list ~sep pp_b) (bindings minimized_t))
 
-  let pp ppf t = pp_with_sep ppf t
+  let[@coverage off] pp ppf t = pp_with_sep ppf t
 
   let add_protocol_flag flag t =
     let flags = Option.value ~default:[] (find Protocol_flags t) in
@@ -848,7 +852,7 @@ type non_block =
 
 type line = [ block | non_block ]
 
-let pp_line ppf (x : [< line ]) =
+let[@coverage off] pp_line ppf (x : [< line ]) =
   let v = Fmt.pf in
   match x with
   | `Entries bs -> v ppf "entries: @[<v>%a@]" Fmt.(list ~sep:(any "@,") pp_b) bs

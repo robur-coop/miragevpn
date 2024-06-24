@@ -167,7 +167,7 @@ module Metadata = struct
     | _ -> error_msgf "Invalid metadata"
     | exception _ -> error_msgf "Invalid metadata"
 
-  let pp_hum ppf = function
+  let[@coverage off] pp_hum ppf = function
     | User str -> Fmt.pf ppf "User:       %S\n%!" str
     | Timestamp ptime ->
         Fmt.pf ppf "Timestamp:  %a\n%!" (Ptime.pp_rfc3339 ()) ptime
@@ -200,7 +200,7 @@ end = struct
     in
     List.to_seq lines
 
-  let pp = Fmt.(using Key.to_base64 string)
+  let[@coverage off] pp = Fmt.(using Key.to_base64 string)
   let equal = Key.equal
 end
 

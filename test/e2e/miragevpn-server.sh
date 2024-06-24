@@ -33,4 +33,4 @@ trap cleanup EXIT
 
 # run miragevpn server
 # NOTE: timeout as in FreeBSD 14 & GNU coreutils
-timeout -k 30 10 ../../_build/default/app/miragevpn_server_notun.exe --test "${server_config}"
+timeout -k 30 10 ../../_build/default/app/miragevpn_server_notun.exe --test "${server_config}" -v -v >/dev/null

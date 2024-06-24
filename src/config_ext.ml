@@ -227,7 +227,7 @@ let routes ~shares_subnet ~net_gateway ~remote_host config :
     (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
   let route_gateway = route_gateway config
   and default_metric = route_metric config in
-  let pp_network_or_gateway ppf = function
+  let[@coverage off] pp_network_or_gateway ppf = function
     | `Ip ip -> Ipaddr.V4.pp ppf ip
     | `Net_gateway -> Fmt.string ppf "net_gateway"
     | `Vpn_gateway -> Fmt.string ppf "vpn_gateway"

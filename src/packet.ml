@@ -11,7 +11,7 @@ module Log =
 type error =
   [ `Tcp_partial | `Partial | `Unknown_operation of int | `Malformed of string ]
 
-let pp_error ppf = function
+let[@coverage off] pp_error ppf = function
   | `Tcp_partial -> Fmt.string ppf "pending data"
   | `Partial -> Fmt.string ppf "partial"
   | `Unknown_operation op -> Fmt.pf ppf "unknown operation %d" op
@@ -48,7 +48,7 @@ let int_to_operation = function
   | 11 -> Ok Control_wkc
   | i -> Error (`Unknown_operation i)
 
-let pp_operation ppf op =
+let[@coverage off] pp_operation ppf op =
   Fmt.string ppf
     (match op with
     | Soft_reset_v2 -> "soft reset v2"
@@ -78,7 +78,7 @@ type header = {
   remote_session : int64 option; (* if above is non-empty *)
 }
 
-let pp_header ppf hdr =
+let[@coverage off] pp_header ppf hdr =
   Fmt.pf ppf "local %Lu replay_id %ld timestamp %ld ack %a remote %a"
     hdr.local_session hdr.replay_id hdr.timestamp
     Fmt.(list ~sep:(any ", ") uint32)
@@ -441,7 +441,7 @@ let sequence_number = function
   | `Ack _ -> None
   | `Control (_, (_, sn, _)) -> Some sn
 
-let pp ppf (key, p) =
+let[@coverage off] pp ppf (key, p) =
   match p with
   | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
   | `Control (op, (hdr, id, payload)) ->
@@ -463,7 +463,7 @@ type tls_data = {
   peer_info : string list option;
 }
 
-let pp_tls_data ppf t =
+let[@coverage off] pp_tls_data ppf t =
   Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a %a"
     (Cstruct.length t.pre_master)
     (Cstruct.length t.random1) (Cstruct.length t.random2) t.options

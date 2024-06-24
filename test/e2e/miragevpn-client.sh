@@ -31,4 +31,4 @@ sleep 0.5
 
 # run miragevpn-client-notun
 # NOTE: timeout as in FreeBSD 14 & GNU coreutils
-timeout -k 30 10 ../../_build/default/app/miragevpn_client_notun.exe --test "$client_config" > /dev/null
+timeout -k 30 10 ../../_build/default/app/miragevpn_client_notun.exe --test "$client_config" -v -v > /dev/null

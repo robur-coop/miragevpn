@@ -224,7 +224,7 @@ let server ?(really_no_authentication = false) server_config ~is_not_taken
     Config_ext.server_ip server_config,
     port )
 
-let pp_tls_error ppf = function
+let[@coverage off] pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"
   | `Alert typ ->
       Fmt.pf ppf "alert from other side %s"
@@ -1071,7 +1071,7 @@ type error =
   | `Payload_too_short of int * int
   | `Msg of string ]
 
-let pp_error ppf = function
+let[@coverage off] pp_error ppf = function
   | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
   | #Lzo.error as e -> Fmt.pf ppf "lzo %a" Lzo.pp_error e
   | `Non_monotonic_replay_id (expected, received) ->
