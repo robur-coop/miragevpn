@@ -138,7 +138,8 @@ let decode_ack buf =
   if off <> Cstruct.length buf then
     Log.debug (fun m ->
         m "decode_ack: %d extra bytes at end of message"
-          (Cstruct.length buf - off));
+          (Cstruct.length buf - off))
+    [@coverage off];
   hdr
 
 let decode_control buf =
@@ -386,7 +387,8 @@ module Tls_crypt = struct
     if off <> Cstruct.length buf then
       Log.debug (fun m ->
           m "decode_decrypted_ack: %d extra bytes at end of message"
-            (Cstruct.length buf - off));
+            (Cstruct.length buf - off))
+      [@coverage off];
     hdr
 
   let decode_decrypted_control clear_hdr buf =
@@ -574,7 +576,8 @@ let decode_tls_data ?(with_premaster = false) buf =
             Log.warn (fun m ->
                 m "slack at end of tls_data %S @.%a"
                   (Cstruct.to_string ~len data)
-                  Cstruct.hexdump_pp data);
+                  Cstruct.hexdump_pp data)
+            [@coverage off];
           Ok (if len = 0 then None else Some (Cstruct.to_string ~len data))
       in
       (user_pass, Option.map (String.split_on_char '\n') peer_info)
