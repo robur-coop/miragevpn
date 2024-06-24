@@ -427,8 +427,8 @@ let tls_ekm tls config =
   | None, Some flags -> if List.mem `Tls_ekm flags then Some tls else None
   | None, None -> None
 
-let kex_server config auth_user_pass session (my_key_material : my_key_material)
-    tls data =
+let kex_server config auth_user_pass (my_key_material : my_key_material) tls
+    data =
   let open Result.Syntax in
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
   let authenticated =
@@ -525,38 +525,19 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
         peer_info = None;
       }
     in
-    let* tls', payload =
+    let+ tls', payload =
       Option.to_result ~none:(`Msg "not yet established")
         (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
     in
-    let+ state =
-      match Config.find Ifconfig config with
-      | None ->
-          let requested_push =
-            Option.fold iv_proto ~none:false
-              ~some:Packet.Iv_proto.(contains Request_push)
-          in
-          if requested_push then
-            Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
-          else
-            Ok
-              (`State
-                (Push_request_sent (tls', my_key_material, their_tls_data), None))
-      | Some (address, netmask) ->
-          let ip_config =
-            let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-            { cidr; gateway = fst (Config_ext.server_ip config) }
-          in
-          let cipher = Config.get Cipher config
-          and hmac_algorithm = Config.get Auth config
-          and tls_ekm = tls_ekm tls' config in
-          let keys_ctx =
-            kdf ~tls_ekm session cipher hmac_algorithm my_key_material
-              their_tls_data
-          in
-          Ok
-            (`State
-              (Established (tls', keys_ctx), Some (`Established ip_config)))
+    let state =
+      let requested_push =
+        Option.fold iv_proto ~none:false
+          ~some:Packet.Iv_proto.(contains Request_push)
+      in
+      if requested_push then
+        `Send_push_reply (tls', my_key_material, their_tls_data)
+      else
+        `State (Push_request_sent (tls', my_key_material, their_tls_data), None)
     in
     (state, config, [ payload ])
 
@@ -843,9 +824,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
 let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
     =
   let open Result.Syntax in
-  let* next, config, out =
-    kex_server config auth_user_pass session keys tls d
-  in
+  let* next, config, out = kex_server config auth_user_pass keys tls d in
   let out = List.map (fun out -> (`Control, out)) out in
   match next with
   | `Send_push_reply (tls', key, tls_data) ->
