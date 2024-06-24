@@ -60,25 +60,7 @@ let handle_payload t dst source_ip data =
       match Icmpv4_packet.Unmarshal.of_cstruct payload with
       | Ok (({ ty = Icmpv4_wire.Echo_request; _ } as icmp), payload) ->
           (* XXX(reynir): also check code = 0?! *)
-          if t.test then (
-            Logs.app (fun m ->
-                m "Received echo request from %a" Ipaddr.V4.pp source_ip);
-            let client_fd, client = Hashtbl.find t.connections source_ip in
-            match Miragevpn.send_control_message !client "HALT" with
-            | Error `Not_ready ->
-                Logs.warn (fun m -> m "Failed to send HALT to client");
-                exit 0
-            | Ok (client', datas) ->
-                client := client';
-                let* () =
-                  Lwt_list.iter_s
-                    (fun data ->
-                      let+ _ = Common.write_to_fd client_fd data in
-                      ())
-                    datas
-                in
-                exit 0)
-          else
+          let* () =
             let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
             and ip' = { ip with src = ip.dst; dst = ip.src } in
             let data =
@@ -91,6 +73,27 @@ let handle_payload t dst source_ip data =
                 ~payload_len:(Cstruct.length data) ip'
             in
             write t ip.src (Cstruct.append hdr data)
+          in
+          if t.test then (
+            Logs.app (fun m ->
+                m "Received echo request from %a" Ipaddr.V4.pp source_ip);
+            let client_fd, client = Hashtbl.find t.connections source_ip in
+            match Miragevpn.send_control_message !client "HALT" with
+            | Error `Not_ready ->
+                Logs.warn (fun m -> m "Failed to send HALT to client");
+                exit 0
+            | Ok (client', datas) ->
+                Logs.app (fun m -> m "Sending HALT to client");
+                client := client';
+                let* () =
+                  Lwt_list.iter_s
+                    (fun data ->
+                      let+ _ = Common.write_to_fd client_fd data in
+                      ())
+                    datas
+                in
+                exit 0)
+          else Lwt.return_unit
       | Ok (icmp, _payload) ->
           Logs.warn (fun m ->
               m "ignoring icmp frame from %a: %a" Ipaddr.V4.pp ip.src
