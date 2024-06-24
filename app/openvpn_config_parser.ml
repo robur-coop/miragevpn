@@ -108,14 +108,15 @@ let client =
   Arg.(value & flag & info [ "client" ] ~doc)
 
 let mode =
-  let open Term.Syntax in
-  let+ client = client and+ server = server in
-  match (client, server) with
-  | true, true ->
-      Printf.eprintf "Can't check both --server and --client\n%!";
-      exit Cmd.Exit.cli_error
-  | false, true -> `Server
-  | (false | true), false -> `Client
+  let f client server =
+    match (client, server) with
+    | true, true ->
+        Printf.eprintf "Can't check both --server and --client\n%!";
+        exit Cmd.Exit.cli_error
+    | false, true -> `Server
+    | (false | true), false -> `Client
+  in
+  Term.(const f $ client $ server)
 
 let block_size =
   let pos_int =
