@@ -1123,7 +1123,6 @@ let a_tls_auth =
     a_option_with_single_path "tls-auth" () >>= fun source ->
     a_key_direction_option >>| fun direction -> (source, direction)
   in
-
   with_tls_auth <|> with_key_direction >>| fun (source, direction) ->
   match source with
   | `Need_inline () -> `Need_inline (`Tls_auth direction)
