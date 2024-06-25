@@ -41,4 +41,16 @@ jobs:
           sudo ip tuntap add mode tun e2e-test
           ( cd test/e2e && sudo ./test-client.sh e2e-test; )
           ( cd test/e2e && sudo ./test-server.sh e2e-test; )
-          opam exec -- ./coverage.sh
+          echo '```' > code-coverage-results.md
+          opam exec -- ./coverage.sh >> code-coverage-results.md
+          echo '```' >> code-coverage-results.md
+
+      - name: Add Coverage PR Comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request'
+        with:
+          recreate: true
+          path: code-coverage-results.md
+
+      - name: Write to Job Summary
+        run: cat code-coverage-results.md >> $GITHUB_STEP_SUMMARY
