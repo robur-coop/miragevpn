@@ -1091,13 +1091,14 @@ let a_multi_fingerprint =
   >>| fun fps -> B (Peer_fingerprint, fps)
 
 let a_peer_fingerprint =
-  string "peer-fingerprint" *> a_whitespace
+  string "peer-fingerprint" *> a_whitespace *> commit
   *> choice
        [
          string "[inline]" *> return (`Need_inline `Peer_fingerprint);
-         ( choice [ a_fingerprint; fail "Bad fingerprint" ] >>| fun fp ->
+         ( a_fingerprint <?> "fingerprint" >>| fun fp ->
            `Entry (B (Peer_fingerprint, [ fp ])) );
        ]
+       ~failure_msg:"bad fingerprint"
 
 let a_key_direction_option =
   choice
