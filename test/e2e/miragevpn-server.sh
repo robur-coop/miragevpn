@@ -21,16 +21,16 @@ pidfile="/tmp/miragevpn-e2e.pid"
 
 # kill openvpn client
 cleanup () {
-	cat "$pidfile" | xargs kill
+	cat "$pidfile" 2>/dev/null | xargs -r kill || true
 	rm -f "$pidfile"
 }
 trap cleanup EXIT
 
 (
 	sleep 1
-	openvpn --cd "$config_dir" --config "client.conf" --dev-type tun --dev "$tun_interface" --writepid "$pidfile" --script-security 2 --up ../client-up.sh  > /dev/null
+	openvpn --cd "$config_dir" --config "client.conf" --dev-type tun --dev "$tun_interface" --writepid "$pidfile" --script-security 2 --up ../client-up.sh > /dev/null
 ) &
 
 # run miragevpn server
 # NOTE: timeout as in FreeBSD 14 & GNU coreutils
-timeout -k 30 10 ../../_build/default/app/miragevpn_server_notun.exe --test "${server_config}" -v -v >/dev/null
+timeout -k 30 10 ../../_build/default/app/miragevpn_server_notun.exe --test "${server_config}" -v -v > /dev/null

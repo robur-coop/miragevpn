@@ -18,11 +18,11 @@ client_config="${config_dir}/client.conf"
 
 # run openvpn server
 pidfile="/tmp/miragevpn-e2e.pid"
-openvpn --cd "$config_dir" --config "server.conf" --dev-type tun --dev "$tun_interface" --writepid "$pidfile" >/dev/null &
+openvpn --cd "$config_dir" --config "server.conf" --dev-type tun --dev "$tun_interface" --writepid "$pidfile" > /dev/null &
 
 # kill openvpn server and report test status
 cleanup () {
-	cat "$pidfile" | xargs kill
+	cat "$pidfile" 2>/dev/null | xargs -r kill || true
 	rm -f "$pidfile"
 }
 trap cleanup EXIT
