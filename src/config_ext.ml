@@ -1,7 +1,122 @@
-type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
+let tls_ciphers config =
+  (* update when ocaml-tls changes default ciphers *)
+  let tls_default_ciphers13 =
+    [
+      `AES_128_GCM_SHA256;
+      `AES_256_GCM_SHA384;
+      `CHACHA20_POLY1305_SHA256;
+      `AES_128_CCM_SHA256;
+    ]
+  and tls_default_ciphers =
+    [
+      `DHE_RSA_WITH_AES_256_GCM_SHA384;
+      `DHE_RSA_WITH_AES_128_GCM_SHA256;
+      `DHE_RSA_WITH_AES_256_CCM;
+      `DHE_RSA_WITH_AES_128_CCM;
+      `DHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
+      `ECDHE_RSA_WITH_AES_128_GCM_SHA256;
+      `ECDHE_RSA_WITH_AES_256_GCM_SHA384;
+      `ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
+      `ECDHE_ECDSA_WITH_AES_128_GCM_SHA256;
+      `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384;
+      `ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256;
+    ]
+  in
+  match (Config.find Tls_cipher config, Config.find Tls_ciphersuite config) with
+  | Some c, None -> Some (c @ tls_default_ciphers13)
+  | None, Some c ->
+      Some (tls_default_ciphers @ (c :> Tls.Ciphersuite.ciphersuite list))
+  | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
+  | None, None -> None
 
-let pp_ip_config ppf { cidr; gateway } =
-  Fmt.pf ppf "ip %a gateway %a" Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
+let tls_version config =
+  (* update when ocaml-tls supports new versions *)
+  let tls_lowest_version = `TLS_1_0 and tls_highest_version = `TLS_1_3 in
+  let lower_bound =
+    match Config.find Tls_version_min config with
+    | None -> None
+    | Some (v, or_highest) ->
+        if or_highest then Some tls_highest_version else Some v
+  and upper_bound = Config.find Tls_version_max config in
+  match (lower_bound, upper_bound) with
+  | None, None -> None
+  | Some a, Some b -> Some (a, b)
+  | Some a, None -> Some (a, tls_highest_version)
+  | None, Some b -> Some (tls_lowest_version, b)
+
+let tls_auth config =
+  match Config.find Tls_auth config with
+  | None -> Error (`Msg "no tls auth payload in config")
+  | Some (direction, _, hmac1, _, hmac2) ->
+      let hmac_algorithm = Config.get Auth config in
+      let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+      let a, b =
+        match direction with
+        | None -> (hmac1, hmac1)
+        | Some `Incoming -> (hmac2, hmac1)
+        | Some `Outgoing -> (hmac1, hmac2)
+      in
+      let s cs = Cstruct.sub cs 0 hmac_len in
+      Ok { State.hmac_algorithm; my_hmac = s a; their_hmac = s b }
+
+let secret config =
+  match Config.find Secret config with
+  | None -> Error (`Msg "no pre-shared secret found")
+  | Some (dir, key1, hmac1, key2, hmac2) -> (
+      let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
+      let hm cs = Cstruct.sub cs 0 hmac_len
+      and cipher cs = Cstruct.sub cs 0 32 in
+      match dir with
+      | None -> Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
+      | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)
+      | Some `Outgoing -> Ok (cipher key1, hm hmac1, cipher key2, hm hmac2))
+
+let tls_crypt config =
+  match (Config.find Tls_mode config, Config.find Tls_crypt config) with
+  | None, Some _ -> assert false
+  | _, None -> Error (`Msg "no tls-crypt payload in config")
+  | Some `Client, Some kc ->
+      Ok { State.my = Tls_crypt.client_key kc; their = Tls_crypt.server_key kc }
+  | Some `Server, Some kc ->
+      Ok { State.my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc }
+
+let tls_crypt_v2_client config =
+  match Config.find Tls_crypt_v2_client config with
+  | None -> Error (`Msg "no tls-crypt-v2 payload in config")
+  | Some (kc, wkc, force_cookie) ->
+      Ok
+        ( { State.my = Tls_crypt.client_key kc; their = Tls_crypt.server_key kc },
+          wkc,
+          force_cookie )
+
+let control_crypto config =
+  match
+    ( tls_auth config,
+      tls_crypt config,
+      tls_crypt_v2_client config,
+      secret config )
+  with
+  | Error e, Error _, Error _, Error _ -> Error e
+  | Error _, Error _, Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
+      (* in static key mode, only CBC is allowed *)
+      assert (Config.get Cipher config = `AES_256_CBC);
+      let keys =
+        let keys =
+          State.AES_CBC
+            {
+              my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+              my_hmac;
+              their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+              their_hmac;
+            }
+        in
+        { State.my_replay_id = 1l; their_replay_id = 1l; keys }
+      in
+      Ok (`Static keys)
+  | Error _, Ok tls_crypt, _, _ -> Ok (`Tls_crypt (tls_crypt, None))
+  | Error _, Error _, Ok (tls_crypt, wkc, _force_cookie), _ ->
+      Ok (`Tls_crypt (tls_crypt, Some wkc))
+  | Ok tls_auth, _, _, _ -> Ok (`Tls_auth tls_auth)
 
 let ifconfig config =
   let address, netmask = Config.get Ifconfig config in
@@ -13,8 +128,10 @@ let vpn_gateway config =
       (* Must be tun *)
       assert false
   | Some (`Tun, _) ->
-      let cidr = ifconfig config in
-      Ipaddr.V4.Prefix.first cidr
+      if Config.mem Secret config then snd (Config.get Ifconfig config)
+      else
+        let cidr = ifconfig config in
+        Ipaddr.V4.Prefix.first cidr
 
 let route_gateway config =
   match Config.find Route_gateway config with
@@ -24,7 +141,7 @@ let route_gateway config =
 
 let ip_from_config config =
   let cidr = ifconfig config and gateway = route_gateway config in
-  { cidr; gateway }
+  { State.cidr; gateway }
 
 let server_ip config =
   let cidr = Config.get Server config in
@@ -35,6 +152,26 @@ let server_ip config =
     (* take first IP in subnet (unless server a.b.c.d/netmask) with a.b.c.d not being the network address *)
     let ip' = Ipaddr.V4.Prefix.first cidr in
     (ip', cidr)
+
+let next_free_ip config is_not_taken =
+  let cidr = Config.get Server config in
+  let network = Ipaddr.V4.Prefix.network cidr in
+  let server_ip = fst (server_ip config) in
+  (* could be smarter than a linear search *)
+  let rec isit ip =
+    if Ipaddr.V4.Prefix.mem ip cidr then
+      if
+        (not (Ipaddr.V4.compare ip server_ip = 0))
+        && (not (Ipaddr.V4.compare ip network = 0))
+        && is_not_taken ip
+      then
+        let cidr' = Ipaddr.V4.Prefix.make (Ipaddr.V4.Prefix.bits cidr) ip in
+        Ok (ip, cidr')
+      else
+        match Ipaddr.V4.succ ip with Ok ip' -> isit ip' | Error e -> Error e
+    else Error (`Msg "all ips are taken")
+  in
+  isit (Ipaddr.V4.Prefix.first cidr)
 
 let default_port = 1194
 let default_proto = `Udp
@@ -90,7 +227,7 @@ let routes ~shares_subnet ~net_gateway ~remote_host config :
     (Ipaddr.V4.Prefix.t * Ipaddr.V4.t * int) list =
   let route_gateway = route_gateway config
   and default_metric = route_metric config in
-  let pp_network_or_gateway ppf = function
+  let[@coverage off] pp_network_or_gateway ppf = function
     | `Ip ip -> Ipaddr.V4.pp ppf ip
     | `Net_gateway -> Fmt.string ppf "net_gateway"
     | `Vpn_gateway -> Fmt.string ppf "vpn_gateway"

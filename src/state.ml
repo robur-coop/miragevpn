@@ -15,7 +15,7 @@ type transport = {
   out_packets : (int64 * (int * Packet.control)) IM.t;
 }
 
-let pp_transport ppf t =
+let[@coverage off] pp_transport ppf t =
   Fmt.pf ppf "my packet %lu@ their packet %lu@ (acked %lu)@ out %d"
     t.my_sequence_number t.their_sequence_number t.last_acked_sequence_number
     (IM.cardinal t.out_packets)
@@ -54,7 +54,7 @@ type keys = {
   keys : key_variant;
 }
 
-let pp_keys ppf t =
+let[@coverage off] pp_keys ppf t =
   Fmt.pf ppf "%s keys: my id %lu, their id %lu"
     (match t.keys with
     | AES_CBC _ -> "AES-CBC"
@@ -69,7 +69,7 @@ type channel_state =
   | Push_request_sent of Tls.Engine.state * my_key_material * Packet.tls_data
   | Established of Tls.Engine.state * keys
 
-let pp_channel_state ppf = function
+let[@coverage off] pp_channel_state ppf = function
   | Expect_reset -> Fmt.string ppf "expecting reset"
   | TLS_handshake _ -> Fmt.string ppf "TLS handshake in process"
   | TLS_established _ -> Fmt.string ppf "TLS handshake established"
@@ -88,7 +88,7 @@ type channel = {
 let received_packet ch data =
   { ch with packets = succ ch.packets; bytes = Cstruct.length data + ch.bytes }
 
-let pp_channel ppf c =
+let[@coverage off] pp_channel ppf c =
   Fmt.pf ppf "channel %d %a@ started %Lu bytes %d packets %d@ transport %a"
     c.keyid pp_channel_state c.channel_st c.started c.bytes c.packets
     pp_transport c.transport
@@ -124,7 +124,7 @@ type event =
   | `Tick
   | `Data of Cstruct.t ]
 
-let pp_event ppf = function
+let[@coverage off] pp_event ppf = function
   | `Resolved r -> Fmt.pf ppf "resolved %a" Ipaddr.pp r
   | `Resolve_failed -> Fmt.string ppf "resolve failed"
   | `Connected -> Fmt.string ppf "connected"
@@ -137,52 +137,36 @@ type initial_action =
   | `Connect of Ipaddr.t * int * [ `Tcp | `Udp ] ]
 
 type cc_message = Cc_message.cc_message
+type ip_config = { cidr : Ipaddr.V4.Prefix.t; gateway : Ipaddr.V4.t }
 
 type action =
   [ initial_action
   | `Exit
-  | `Established of Config_ext.ip_config * int * route_info
+  | `Established of ip_config * int * route_info
   | cc_message ]
 
-let pp_ip_version ppf = function
+let[@coverage off] pp_ip_version ppf = function
   | `Ipv4 -> Fmt.string ppf "ipv4"
   | `Ipv6 -> Fmt.string ppf "ipv6"
   | `Any -> Fmt.string ppf "any"
 
-let pp_proto ppf = function
+let[@coverage off] pp_proto ppf = function
   | `Tcp -> Fmt.string ppf "tcp"
   | `Udp -> Fmt.string ppf "udp"
 
-let pp_action ppf = function
+let[@coverage off] pp_ip_config ppf { cidr; gateway } =
+  Fmt.pf ppf "ip %a gateway %a" Ipaddr.V4.Prefix.pp cidr Ipaddr.V4.pp gateway
+
+let[@coverage off] pp_action ppf = function
   | `Resolve (host, ip_version) ->
       Fmt.pf ppf "resolve %a (%a)" Domain_name.pp host pp_ip_version ip_version
   | `Connect (ip, port, proto) ->
       Fmt.pf ppf "connect %a %a:%d" pp_proto proto Ipaddr.pp ip port
   | `Exit -> Fmt.string ppf "exit"
   | `Established (ip, mtu, _route_info) ->
-      Fmt.pf ppf "established %a, mtu %d" Config_ext.pp_ip_config ip mtu
+      Fmt.pf ppf "established %a, mtu %d" pp_ip_config ip mtu
   | (`Cc_exit | `Cc_restart _ | `Cc_halt _) as msg ->
       Fmt.pf ppf "control channel message %a" Cc_message.pp msg
-
-let next_free_ip config is_not_taken =
-  let cidr = Config.get Server config in
-  let network = Ipaddr.V4.Prefix.network cidr in
-  let server_ip = fst (Config_ext.server_ip config) in
-  (* could be smarter than a linear search *)
-  let rec isit ip =
-    if Ipaddr.V4.Prefix.mem ip cidr then
-      if
-        (not (Ipaddr.V4.compare ip server_ip = 0))
-        && (not (Ipaddr.V4.compare ip network = 0))
-        && is_not_taken ip
-      then
-        let cidr' = Ipaddr.V4.Prefix.make (Ipaddr.V4.Prefix.bits cidr) ip in
-        Ok (ip, cidr')
-      else
-        match Ipaddr.V4.succ ip with Ok ip' -> isit ip' | Error e -> Error e
-    else Error (`Msg "all ips are taken")
-  in
-  isit (Ipaddr.V4.Prefix.first cidr)
 
 type session = {
   my_session_id : int64;
@@ -205,7 +189,7 @@ let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
     protocol;
   }
 
-let pp_session ppf t =
+let[@coverage off] pp_session ppf t =
   Fmt.pf ppf
     "compression %B@ protocol %a@ my session %016LX@ replay %lu@ their session \
      %016LX@ replay %lu"
@@ -220,7 +204,7 @@ type client_state =
   | Ready
   | Rekeying of channel
 
-let pp_client_state ppf = function
+let[@coverage off] pp_client_state ppf = function
   | Resolving (_idx, _ts, _) -> Fmt.string ppf "resolving"
   | Connecting (_idx, _ts, retry) -> Fmt.pf ppf "connecting (retry %d)" retry
   | Handshaking (_idx, _ts) -> Fmt.string ppf "handshaking"
@@ -232,7 +216,7 @@ type server_state =
   | Server_ready
   | Server_rekeying of channel
 
-let pp_server_state ppf = function
+let[@coverage off] pp_server_state ppf = function
   | Server_handshaking -> Fmt.string ppf "server handshaking"
   | Server_ready -> Fmt.string ppf "server ready"
   | Server_rekeying c -> Fmt.pf ppf "server rekeying %a" pp_channel c
@@ -251,7 +235,7 @@ type control_tls =
 
 type control_crypto = [ control_tls | `Static of keys ]
 
-let pp_control_crypto ppf = function
+let[@coverage off] pp_control_crypto ppf = function
   | `Tls_auth _ -> Fmt.string ppf "tls-auth"
   | `Tls_crypt (_, None) -> Fmt.string ppf "tls-crypt"
   | `Tls_crypt (_, Some _) -> Fmt.string ppf "tls-crypt-v2"
@@ -259,7 +243,7 @@ let pp_control_crypto ppf = function
 
 type state = Client of client_state | Server of server_state
 
-let pp_state ppf = function
+let[@coverage off] pp_state ppf = function
   | Client state -> Fmt.pf ppf "client %a" pp_client_state state
   | Server state -> Fmt.pf ppf "server %a" pp_server_state state
 
@@ -286,7 +270,7 @@ type t = {
     list;
 }
 
-let pp ppf t =
+let[@coverage off] pp ppf t =
   let lame_duck =
     match t.lame_duck with None -> None | Some (ch, _) -> Some ch
   in
@@ -420,4 +404,4 @@ type server = {
   server_now : unit -> Ptime.t;
 }
 
-let pp_server ppf _s = Fmt.pf ppf "server"
+let[@coverage off] pp_server ppf _s = Fmt.pf ppf "server"

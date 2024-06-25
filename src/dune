@@ -1,6 +1,8 @@
 (library
  (name miragevpn)
  (public_name miragevpn)
+ (instrumentation
+  (backend bisect_ppx))
  (libraries
   fmt
   logs

@@ -65,4 +65,7 @@ depends: [
   "notty" {with-test}
   "bechamel" {with-test}
   "bechamel-notty" {with-test}
+
+  # coverage
+  "bisect_ppx" {dev}
 ]

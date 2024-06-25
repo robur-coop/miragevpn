@@ -6,52 +6,6 @@ module Log =
          @@ Src.create ~doc:"Miragevpn library's engine module" "ovpn.engine")
       : Logs.LOG)
 
-let tls_ciphers config =
-  (* update when ocaml-tls changes default ciphers *)
-  let tls_default_ciphers13 =
-    [
-      `AES_128_GCM_SHA256;
-      `AES_256_GCM_SHA384;
-      `CHACHA20_POLY1305_SHA256;
-      `AES_128_CCM_SHA256;
-    ]
-  and tls_default_ciphers =
-    [
-      `DHE_RSA_WITH_AES_256_GCM_SHA384;
-      `DHE_RSA_WITH_AES_128_GCM_SHA256;
-      `DHE_RSA_WITH_AES_256_CCM;
-      `DHE_RSA_WITH_AES_128_CCM;
-      `DHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
-      `ECDHE_RSA_WITH_AES_128_GCM_SHA256;
-      `ECDHE_RSA_WITH_AES_256_GCM_SHA384;
-      `ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256;
-      `ECDHE_ECDSA_WITH_AES_128_GCM_SHA256;
-      `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384;
-      `ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256;
-    ]
-  in
-  match (Config.find Tls_cipher config, Config.find Tls_ciphersuite config) with
-  | Some c, None -> Some (c @ tls_default_ciphers13)
-  | None, Some c ->
-      Some (tls_default_ciphers @ (c :> Tls.Ciphersuite.ciphersuite list))
-  | Some c, Some c' -> Some (c @ (c' :> Tls.Ciphersuite.ciphersuite list))
-  | None, None -> None
-
-let tls_version config =
-  (* update when ocaml-tls supports new versions *)
-  let tls_lowest_version = `TLS_1_0 and tls_highest_version = `TLS_1_3 in
-  let lower_bound =
-    match Config.find Tls_version_min config with
-    | None -> None
-    | Some (v, or_highest) ->
-        if or_highest then Some tls_highest_version else Some v
-  and upper_bound = Config.find Tls_version_max config in
-  match (lower_bound, upper_bound) with
-  | None, None -> None
-  | Some a, Some b -> Some (a, b)
-  | Some a, None -> Some (a, tls_highest_version)
-  | None, Some b -> Some (tls_lowest_version, b)
-
 let guard p e = if p then Ok () else Error e
 
 let opt_guard p x e =
@@ -127,51 +81,6 @@ let wrap_and_out protocol control_crypto key p =
   match control_crypto with
   | `Tls_auth tls_auth -> hmac_and_out protocol tls_auth key p
   | `Tls_crypt (tls_crypt, _wkc_opt) -> encrypt_and_out protocol tls_crypt key p
-
-let tls_auth config =
-  match Config.find Tls_auth config with
-  | None -> Error (`Msg "no tls auth payload in config")
-  | Some (direction, _, hmac1, _, hmac2) ->
-      let hmac_algorithm = Config.get Auth config in
-      let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
-      let a, b =
-        match direction with
-        | None -> (hmac1, hmac1)
-        | Some `Incoming -> (hmac2, hmac1)
-        | Some `Outgoing -> (hmac1, hmac2)
-      in
-      let s cs = Cstruct.sub cs 0 hmac_len in
-      Ok { hmac_algorithm; my_hmac = s a; their_hmac = s b }
-
-let secret config =
-  match Config.find Secret config with
-  | None -> Error (`Msg "no pre-shared secret found")
-  | Some (dir, key1, hmac1, key2, hmac2) -> (
-      let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
-      let hm cs = Cstruct.sub cs 0 hmac_len
-      and cipher cs = Cstruct.sub cs 0 32 in
-      match dir with
-      | None -> Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
-      | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)
-      | Some `Outgoing -> Ok (cipher key1, hm hmac1, cipher key2, hm hmac2))
-
-let tls_crypt config =
-  match (Config.find Tls_mode config, Config.find Tls_crypt config) with
-  | None, Some _ -> assert false
-  | _, None -> Error (`Msg "no tls-crypt payload in config")
-  | Some `Client, Some kc ->
-      Ok { my = Tls_crypt.client_key kc; their = Tls_crypt.server_key kc }
-  | Some `Server, Some kc ->
-      Ok { my = Tls_crypt.server_key kc; their = Tls_crypt.client_key kc }
-
-let tls_crypt_v2_client config =
-  match Config.find Tls_crypt_v2_client config with
-  | None -> Error (`Msg "no tls-crypt-v2 payload in config")
-  | Some (kc, wkc, force_cookie) ->
-      Ok
-        ( { my = Tls_crypt.client_key kc; their = Tls_crypt.server_key kc },
-          wkc,
-          force_cookie )
 
 let client ?pkcs12_password config ts now rng =
   let open Result.Syntax in
@@ -258,36 +167,7 @@ let client ?pkcs12_password config ts now rng =
         Ok (`Connect (ip, port, dp), Connecting (0, current_ts, 0))
     | [] -> Error (`Msg "couldn't find remote in configuration")
   in
-  let* control_crypto =
-    match
-      ( tls_auth config,
-        tls_crypt config,
-        tls_crypt_v2_client config,
-        secret config )
-    with
-    | Error e, Error _, Error _, Error _ -> Error e
-    | Error _, Error _, Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
-        (* in static key mode, only CBC is allowed *)
-        assert (Config.get Cipher config = `AES_256_CBC);
-        let keys =
-          let keys =
-            AES_CBC
-              {
-                my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
-                my_hmac;
-                their_key =
-                  Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
-                their_hmac;
-              }
-          in
-          { my_replay_id = 1l; their_replay_id = 1l; keys }
-        in
-        Ok (`Static keys)
-    | Error _, Ok tls_crypt, _, _ -> Ok (`Tls_crypt (tls_crypt, None))
-    | Error _, Error _, Ok (tls_crypt, wkc, _force_cookie), _ ->
-        Ok (`Tls_crypt (tls_crypt, Some wkc))
-    | Ok tls_auth, _, _, _ -> Ok (`Tls_auth tls_auth)
-  in
+  let* control_crypto = Config_ext.control_crypto config in
   let state =
     let compress =
       match Config.find Comp_lzo config with None -> false | Some () -> true
@@ -344,7 +224,7 @@ let server ?(really_no_authentication = false) server_config ~is_not_taken
     Config_ext.server_ip server_config,
     port )
 
-let pp_tls_error ppf = function
+let[@coverage off] pp_tls_error ppf = function
   | `Eof -> Fmt.string ppf "EOF from other side"
   | `Alert typ ->
       Fmt.pf ppf "alert from other side %s"
@@ -547,8 +427,8 @@ let tls_ekm tls config =
   | None, Some flags -> if List.mem `Tls_ekm flags then Some tls else None
   | None, None -> None
 
-let kex_server config auth_user_pass session (my_key_material : my_key_material)
-    tls data =
+let kex_server config auth_user_pass (my_key_material : my_key_material) tls
+    data =
   let open Result.Syntax in
   let* their_tls_data = Packet.decode_tls_data ~with_premaster:true data in
   let authenticated =
@@ -645,38 +525,19 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
         peer_info = None;
       }
     in
-    let* tls', payload =
+    let+ tls', payload =
       Option.to_result ~none:(`Msg "not yet established")
         (Tls.Engine.send_application_data tls [ Packet.encode_tls_data td ])
     in
-    let+ state =
-      match Config.find Ifconfig config with
-      | None ->
-          let requested_push =
-            Option.fold iv_proto ~none:false
-              ~some:Packet.Iv_proto.(contains Request_push)
-          in
-          if requested_push then
-            Ok (`Send_push_reply (tls', my_key_material, their_tls_data))
-          else
-            Ok
-              (`State
-                (Push_request_sent (tls', my_key_material, their_tls_data), None))
-      | Some (address, netmask) ->
-          let ip_config =
-            let cidr = Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address in
-            { Config_ext.cidr; gateway = fst (Config_ext.server_ip config) }
-          in
-          let cipher = Config.get Cipher config
-          and hmac_algorithm = Config.get Auth config
-          and tls_ekm = tls_ekm tls' config in
-          let keys_ctx =
-            kdf ~tls_ekm session cipher hmac_algorithm my_key_material
-              their_tls_data
-          in
-          Ok
-            (`State
-              (Established (tls', keys_ctx), Some (`Established ip_config)))
+    let state =
+      let requested_push =
+        Option.fold iv_proto ~none:false
+          ~some:Packet.Iv_proto.(contains Request_push)
+      in
+      if requested_push then
+        `Send_push_reply (tls', my_key_material, their_tls_data)
+      else
+        `State (Push_request_sent (tls', my_key_material, their_tls_data), None)
     in
     (state, config, [ payload ])
 
@@ -764,8 +625,8 @@ let incoming_control_client config rng session channel now op data =
           match (Config.find Tls_cert config, Config.find Tls_key config) with
           | Some cert, Some key -> `Single ([ cert ], key)
           | _ -> `None
-        and ciphers = tls_ciphers config
-        and version = tls_version config
+        and ciphers = Config_ext.tls_ciphers config
+        and version = Config_ext.tls_version config
         and peer_name = Config.find Verify_x509_name config in
         Tls.(
           Engine.client
@@ -908,7 +769,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   let open Result.Syntax in
   (* send push reply, register IP etc. *)
   let server_ip = fst (Config_ext.server_ip config) in
-  let* ip, cidr = next_free_ip config is_not_taken in
+  let* ip, cidr = Config_ext.next_free_ip config is_not_taken in
   let ping =
     match Config.get Ping_interval config with
     | `Not_configured -> 10
@@ -954,7 +815,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   and tls_ekm = tls_ekm tls' config in
   let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
   let channel_st = Established (tls', keys) in
-  let ip_config = { Config_ext.cidr; gateway = server_ip } in
+  let ip_config = { cidr; gateway = server_ip } in
   let config' =
     Config.add Ifconfig (ip, Ipaddr.V4.Prefix.netmask cidr) config
   in
@@ -963,9 +824,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
 let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
     =
   let open Result.Syntax in
-  let* next, config, out =
-    kex_server config auth_user_pass session keys tls d
-  in
+  let* next, config, out = kex_server config auth_user_pass keys tls d in
   let out = List.map (fun out -> (`Control, out)) out in
   match next with
   | `Send_push_reply (tls', key, tls_data) ->
@@ -988,7 +847,8 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let server, key =
         (Config.get Tls_cert config, Config.get Tls_key config)
       in
-      let ciphers = tls_ciphers config and version = tls_version config in
+      let ciphers = Config_ext.tls_ciphers config
+      and version = Config_ext.tls_version config in
       let* authenticator =
         match
           ( Config.find Verify_client_cert config,
@@ -1190,7 +1050,7 @@ type error =
   | `Payload_too_short of int * int
   | `Msg of string ]
 
-let pp_error ppf = function
+let[@coverage off] pp_error ppf = function
   | #Packet.error as e -> Fmt.pf ppf "decode %a" Packet.pp_error e
   | #Lzo.error as e -> Fmt.pf ppf "lzo %a" Lzo.pp_error e
   | `Non_monotonic_replay_id (expected, received) ->
@@ -1984,7 +1844,8 @@ let new_connection server data =
     let tls_auth_or_tls_crypt error =
       let+ (control_crypto : control_tls) =
         match
-          (tls_auth server.server_config, tls_crypt server.server_config)
+          ( Config_ext.tls_auth server.server_config,
+            Config_ext.tls_crypt server.server_config )
         with
         | Ok auth, Error _ -> Ok (`Tls_auth auth)
         | Error _, Ok crypt -> Ok (`Tls_crypt (crypt, None))
@@ -2287,7 +2148,7 @@ let handle_static_client t s keys ev =
           let mtu = data_mtu t.config t.session in
           let cidr = Ipaddr.V4.Prefix.make 32 my_ip in
           let est =
-            `Established ({ Config_ext.cidr; gateway = their_ip }, mtu, t.config)
+            `Established ({ cidr; gateway = their_ip }, mtu, t.config)
           in
           let protocol = match remote idx with _, _, proto -> proto in
           let session = { t.session with protocol } in

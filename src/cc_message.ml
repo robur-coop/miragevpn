@@ -33,7 +33,7 @@ let to_string = function
   | `Cc_halt (Some msg) -> "HALT," ^ msg ^ "\000"
   | `Cc_exit -> "EXIT\000"
 
-let pp ppf = function
+let[@coverage off] pp ppf = function
   | `Cc_restart None -> Fmt.string ppf "restart"
   | `Cc_halt None -> Fmt.string ppf "halt"
   | `Cc_restart (Some msg) -> Fmt.pf ppf "restart(%S)" msg

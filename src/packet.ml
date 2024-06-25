@@ -11,7 +11,7 @@ module Log =
 type error =
   [ `Tcp_partial | `Partial | `Unknown_operation of int | `Malformed of string ]
 
-let pp_error ppf = function
+let[@coverage off] pp_error ppf = function
   | `Tcp_partial -> Fmt.string ppf "pending data"
   | `Partial -> Fmt.string ppf "partial"
   | `Unknown_operation op -> Fmt.pf ppf "unknown operation %d" op
@@ -48,7 +48,7 @@ let int_to_operation = function
   | 11 -> Ok Control_wkc
   | i -> Error (`Unknown_operation i)
 
-let pp_operation ppf op =
+let[@coverage off] pp_operation ppf op =
   Fmt.string ppf
     (match op with
     | Soft_reset_v2 -> "soft reset v2"
@@ -78,7 +78,7 @@ type header = {
   remote_session : int64 option; (* if above is non-empty *)
 }
 
-let pp_header ppf hdr =
+let[@coverage off] pp_header ppf hdr =
   Fmt.pf ppf "local %Lu replay_id %ld timestamp %ld ack %a remote %a"
     hdr.local_session hdr.replay_id hdr.timestamp
     Fmt.(list ~sep:(any ", ") uint32)
@@ -138,7 +138,8 @@ let decode_ack buf =
   if off <> Cstruct.length buf then
     Log.debug (fun m ->
         m "decode_ack: %d extra bytes at end of message"
-          (Cstruct.length buf - off));
+          (Cstruct.length buf - off))
+    [@coverage off];
   hdr
 
 let decode_control buf =
@@ -203,14 +204,6 @@ let set_hmac buf proto hmac =
   (* protocol header, op_key, local session *)
   let off = protocol_len proto + 1 + 8 in
   Cstruct.blit hmac 0 buf off (Cstruct.length hmac)
-
-let encode_protocol proto len =
-  match proto with
-  | `Tcp ->
-      let buf = Cstruct.create 2 in
-      Cstruct.BE.set_uint16 buf 0 len;
-      buf
-  | `Udp -> Cstruct.empty
 
 let split_hmac hmac_len op key buf =
   (* local_session_id ++ hmac, replay_id ++ ts ++ payload
@@ -394,7 +387,8 @@ module Tls_crypt = struct
     if off <> Cstruct.length buf then
       Log.debug (fun m ->
           m "decode_decrypted_ack: %d extra bytes at end of message"
-            (Cstruct.length buf - off));
+            (Cstruct.length buf - off))
+      [@coverage off];
     hdr
 
   let decode_decrypted_control clear_hdr buf =
@@ -433,15 +427,11 @@ type ack = [ `Ack of header ]
 type control = [ `Control of operation * (header * int32 * Cstruct.t) ]
 type t = int * [ ack | control | `Data of Cstruct.t ]
 
-let with_header hdr = function
-  | `Ack _ -> `Ack hdr
-  | `Control (op, (_, id, data)) -> `Control (op, (hdr, id, data))
-
 let sequence_number = function
   | `Ack _ -> None
   | `Control (_, (_, sn, _)) -> Some sn
 
-let pp ppf (key, p) =
+let[@coverage off] pp ppf (key, p) =
   match p with
   | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
   | `Control (op, (hdr, id, payload)) ->
@@ -463,7 +453,7 @@ type tls_data = {
   peer_info : string list option;
 }
 
-let pp_tls_data ppf t =
+let[@coverage off] pp_tls_data ppf t =
   Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a %a"
     (Cstruct.length t.pre_master)
     (Cstruct.length t.random1) (Cstruct.length t.random2) t.options
@@ -586,7 +576,8 @@ let decode_tls_data ?(with_premaster = false) buf =
             Log.warn (fun m ->
                 m "slack at end of tls_data %S @.%a"
                   (Cstruct.to_string ~len data)
-                  Cstruct.hexdump_pp data);
+                  Cstruct.hexdump_pp data)
+            [@coverage off];
           Ok (if len = 0 then None else Some (Cstruct.to_string ~len data))
       in
       (user_pass, Option.map (String.split_on_char '\n') peer_info)

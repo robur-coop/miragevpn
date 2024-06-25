@@ -7,6 +7,7 @@ type t = {
   server : Miragevpn.server;
   ip : Ipaddr.V4.t * Ipaddr.V4.Prefix.t;
   connections : (Ipaddr.V4.t, Lwt_unix.file_descr * Miragevpn.t ref) Hashtbl.t;
+  test : bool;
 }
 
 let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
@@ -59,18 +60,40 @@ let handle_payload t dst source_ip data =
       match Icmpv4_packet.Unmarshal.of_cstruct payload with
       | Ok (({ ty = Icmpv4_wire.Echo_request; _ } as icmp), payload) ->
           (* XXX(reynir): also check code = 0?! *)
-          let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
-          and ip' = { ip with src = ip.dst; dst = ip.src } in
-          let data =
-            Cstruct.append
-              (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
-              payload
+          let* () =
+            let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
+            and ip' = { ip with src = ip.dst; dst = ip.src } in
+            let data =
+              Cstruct.append
+                (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
+                payload
+            in
+            let hdr =
+              Ipv4_packet.Marshal.make_cstruct
+                ~payload_len:(Cstruct.length data) ip'
+            in
+            write t ip.src (Cstruct.append hdr data)
           in
-          let hdr =
-            Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.length data)
-              ip'
-          in
-          write t ip.src (Cstruct.append hdr data)
+          if t.test then (
+            Logs.app (fun m ->
+                m "Received echo request from %a" Ipaddr.V4.pp source_ip);
+            let client_fd, client = Hashtbl.find t.connections source_ip in
+            match Miragevpn.send_control_message !client "HALT" with
+            | Error `Not_ready ->
+                Logs.warn (fun m -> m "Failed to send HALT to client");
+                exit 0
+            | Ok (client', datas) ->
+                Logs.app (fun m -> m "Sending HALT to client");
+                client := client';
+                let* () =
+                  Lwt_list.iter_s
+                    (fun data ->
+                      let+ _ = Common.write_to_fd client_fd data in
+                      ())
+                    datas
+                in
+                exit 0)
+          else Lwt.return_unit
       | Ok (icmp, _payload) ->
           Logs.warn (fun m ->
               m "ignoring icmp frame from %a: %a" Ipaddr.V4.pp ip.src
@@ -264,7 +287,7 @@ let callback t fd =
           let client_state = ref t in
           handle client_state out payloads action)
 
-let connect config =
+let connect config test =
   let open Lwt.Infix in
   let connections = Hashtbl.create 7 in
   let is_not_taken ip = not (Hashtbl.mem connections ip) in
@@ -283,7 +306,7 @@ let connect config =
           m "miragevpn server listening on port %d, using %a/%d" port
             Ipaddr.V4.pp (fst ip)
             (Ipaddr.V4.Prefix.bits (snd ip)));
-      let server = { config; server; ip; connections } in
+      let server = { config; server; ip; connections; test } in
       let fd = Lwt_unix.(socket PF_INET6 SOCK_STREAM 0) in
       Lwt_unix.(setsockopt fd SO_REUSEADDR true);
       Lwt_unix.(setsockopt fd IPV6_ONLY false);
@@ -310,13 +333,13 @@ let parse_config filename =
   | Ok str -> Miragevpn.Config.parse_server ~string_of_file str
   | Error _ as e -> e
 
-let jump _ filename =
+let jump _ filename test =
   Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
   Lwt_main.run
     (let* config = parse_config filename in
      match config with
      | Error (`Msg s) -> Lwt.return (Error (`Msg ("config parser: " ^ s)))
-     | Ok config -> connect config)
+     | Ok config -> connect config test)
 
 open Cmdliner
 
@@ -324,8 +347,12 @@ let config =
   let doc = "Configuration file to use" in
   Arg.(required & pos 0 (some file) None & info [] ~doc ~docv:"CONFIG")
 
+let test =
+  let doc = "Testing mode: exit with exit code 0 upon receiving echo request" in
+  Arg.(value & flag & info [ "test" ] ~doc)
+
 let cmd =
-  let term = Term.(term_result (const jump $ Common.setup_log $ config))
+  let term = Term.(term_result (const jump $ Common.setup_log $ config $ test))
   and info = Cmd.info "miragevpn_server_notun" ~version:"%%VERSION_NUM%%" in
   Cmd.v info term
 
