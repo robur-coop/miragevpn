@@ -282,8 +282,6 @@ let[@coverage off] pp ppf t =
     Fmt.(option ~none:(any "no") pp_channel)
     lame_duck t.last_received t.last_sent
 
-let compress s = s.session.compress
-
 let data_mtu config session =
   (* we assume to have a tun interface and the server send us a tun-mtu *)
   let tun_mtu =

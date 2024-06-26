@@ -769,7 +769,7 @@ module Conf_map = struct
           Fmt.(list ~sep:(any ":") string)
           (List.map cs_to_cipher ciphers)
     | Tls_ciphersuite, ciphers ->
-        p () "tls-ciphersuite %a"
+        p () "tls-ciphersuites %a"
           Fmt.(list ~sep:(any ":") string)
           (List.map cs13_to_cipher13 ciphers)
     | Tls_crypt, key ->
@@ -1215,7 +1215,7 @@ let a_tls_cipher =
   `Entry (B (Tls_cipher, List.map cipher_to_cs (split_colon ciphers)))
 
 let a_tls_ciphersuite =
-  string "tls-ciphersuite" *> a_whitespace *> a_line not_control_char
+  string "tls-ciphersuites" *> a_whitespace *> a_line not_control_char
   >>| fun ciphers ->
   `Entry (B (Tls_ciphersuite, List.map cipher13_to_cs13 (split_colon ciphers)))
 
