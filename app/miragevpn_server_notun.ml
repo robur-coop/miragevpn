@@ -33,6 +33,8 @@ let write t dst cs =
               Hashtbl.remove t.connections dst
           | Ok () -> ()))
 
+let _received_ping = ref 0
+
 let handle_payload t dst source_ip data =
   match Ipv4_packet.Unmarshal.of_cstruct data with
   | Error e ->
@@ -60,6 +62,7 @@ let handle_payload t dst source_ip data =
       match Icmpv4_packet.Unmarshal.of_cstruct payload with
       | Ok (({ ty = Icmpv4_wire.Echo_request; _ } as icmp), payload) ->
           (* XXX(reynir): also check code = 0?! *)
+          incr _received_ping;
           let* () =
             let reply = { icmp with Icmpv4_packet.ty = Icmpv4_wire.Echo_reply }
             and ip' = { ip with src = ip.dst; dst = ip.src } in
@@ -74,7 +77,7 @@ let handle_payload t dst source_ip data =
             in
             write t ip.src (Cstruct.append hdr data)
           in
-          if t.test then (
+          if t.test && !_received_ping > 2 then (
             Logs.app (fun m ->
                 m "Received echo request from %a" Ipaddr.V4.pp source_ip);
             let client_fd, client = Hashtbl.find t.connections source_ip in

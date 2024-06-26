@@ -141,6 +141,8 @@ let pong { ip_config; _ } buf =
       m "Received ICMPv4 payload %d bytes" (Cstruct.length buf));
   (id, seq_no)
 
+let _received_pong = ref 0
+
 let rec established_action test proto fd incoming ifconfig tick client actions =
   let action, actions =
     match actions with
@@ -193,7 +195,8 @@ let rec established_action test proto fd incoming ifconfig tick client actions =
       (match pong ifconfig data with
       | Ok (_id, seq_no) ->
           Logs.app (fun m -> m "Received pong icmp_seq=%d" seq_no);
-          if test then exit 0
+          incr _received_pong;
+          if test && !_received_pong > 2 then exit 0
       | Error msg -> Logs.app (fun m -> m "Received unexpected data: %s" msg));
       established_action test proto fd incoming ifconfig tick client actions
   | `Exit -> Lwt_result.fail (`Msg "Exiting due to Miragevpn engine exit")
