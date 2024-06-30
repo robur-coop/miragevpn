@@ -1,29 +1,28 @@
-## OpenVPN-compatible library purely in OCaml
+## MirageVPN library purely in OCaml
 
 MirageVPN creates secure point-to-point or site-to-site connections in routed or bridged configurations and remote access facilities.
 It uses TLS to establish a (mutually) authenticated connection, over which material to derive the symmetric keys for packet encryption is exchanged.
+The protocol is compatible with OpenVPN™.
 
 The goal of this project is to provide:
-- A pure library implementing the protocol logic, and the OpenVPN config file format to enable interoperabilty and a smooth transition for existing deployments.
-- A [MirageOS](https://mirage.io) unikernel that acts as an OpenVPN-compatible client and server.
+- A pure library implementing the protocol logic, and the OpenVPN™ config file format to enable interoperabilty and a smooth transition for existing deployments.
+- [MirageOS](https://mirage.io) unikernels that act as OpenVPN™-compatible client and server.
 
 Our goal is not to implement the complete protocol, but rather a small useful subset with modern crypto and the latest key exchange methods, without deprecated or redundant features
 (embodying the philosophy of [nqsb-tls](https://nqsb.io)).  An initial draft of the network setup is depicted in the diagram below:
 
 ![diagram](/diagrams/multi-stack.svg)
 
-Since OpenVPN is not detailed in a protocol specificaton specified, apart from comments in the header files, we have written a specification document in Markdown, still work in progress:
+Since OpenVPN™ is not detailed in a protocol specificaton specified, apart from comments in the header files, we have written a [specification document](https://github.com/robur-coop/miragevpn-spec) in Markdown, still work in progress.
 
-  - [openvpn.md](https://git.robur.coop/robur/openvpn-spec/src/branch/main/openvpn.md)
-
-Our OpenVPN configuration parser can be tested with an OpenVPN configuration file:
+Our configuration parser can be tested with an OpenVPN™ configuration file:
 
   - `./_build/default/app/openvpn_config_parser.exe my.openvpn.conf`
 
 # Unix client `miragevpn_client_lwt`
 
 Included in this repository is a unix program that will connect to an
-OpenVPN server, open a `tun` interface, and tunnel packets between
+OpenVPN™ server, open a `tun` interface, and tunnel packets between
 the two.
 
 ## Unix client on Linux
@@ -51,7 +50,7 @@ sudo setcap cap_net_admin=ep ./_build/default/app/miragevpn_client_lwt.exe
 ./_build/default/app/miragevpn_client_lwt.exe -v MY-CONFIG-FILE.CONF
 ```
 
-# OpenVPN-compatible config parser
+# OpenVPN™-compatible config parser
 
 Our goal has been to implement a usable subset (as found in various
  real-world configuration files available to us during the implementation
@@ -66,9 +65,9 @@ This does not mean that conflicting options cannot be accepted from an on-disk
  configuration file, but rather that such conflicts are explicitly handled in
  the parser code (specifically in the `resolve_conflict` function).
 
-A notable difference from OpenVPN configuration parser is that we treat relative
+A notable difference from OpenVPN™ configuration parser is that we treat relative
  paths in a configuration file to be relative to the configuration file
- location, and not relative to the current working directory. OpenVPN supports
+ location, and not relative to the current working directory. OpenVPN™ supports
  a `--cd` argument, which we do not.
 
 You can check compatibility with your configuration file by executing
@@ -77,16 +76,16 @@ dune build
 ./_build/default/app/openvpn_config_parser.exe MY-CONFIG-FILE.CONF
 ```
 
-## Discrepancies between MirageVPN and OpenVPN
+## Discrepancies between MirageVPN and OpenVPN™
 
-The "verify-x509-name <host> name" in OpenVPN checks by default only the
+The "verify-x509-name <host> name" in OpenVPN™ checks by default only the
 commonName of the subject in the X.509 certificate. MirageVPN validates the
 provided host against the set of hostnames in the certificate, namely the union
 of the commonName and the DNS entries in the SubjectAlternativeName extension.
 
 When using a PKCS#12 file the certificates in it are not used to authenticate
-the remote.  OpenVPN will use the certificates if (and only if) no "ca" option
-is specified.  If it is desired to use the certificates from the PKCS#12 file
+the remote. OpenVPN™ will use the certificates if (and only if) no "ca" option
+is specified. If it is desired to use the certificates from the PKCS#12 file
 to authenticate the remote the certificates can be added with the "ca" option
 by extracting the certificates with e.g. `openssl pkcs12`.
 
@@ -107,9 +106,8 @@ remote 127.0.0.1
 ```
 We consider this as "remote 127.0.0.1 <port> udp4".
 
-
 ## Funding
 
 This project was funded in 2019 for six months by the [German federal ministry for education and research](https://www.bmbf.de) via the [Prototypefund](https://prototypefund.de) - the amount was 47500 EUR.
 
-In 2023, we received funding from European Union in the Next Generation Internet project ([NGI assure](https://www.assure.ngi.eu/), via [NLnet](https://nlnet.nl). The scope was updating to the current protocol version (tls-crypt-v2 etc.), a QubesOS client, a server implementation, and more documentation. The amount was 49500 EUR.
+In 2023, we received funding from European Union in the Next Generation Internet project ([NGI assure](https://www.assure.ngi.eu/), via [NLnet](https://nlnet.nl). The scope was updating to the current protocol version (tls-crypt-v2 etc.), a QubesOS client, a server implementation, and more documentation. The amount was 57000 EUR. Learn more at the [NLnet project page](https://nlnet.nl/project/MirageVPN).
