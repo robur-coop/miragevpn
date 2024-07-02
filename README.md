@@ -8,8 +8,10 @@ The goal of this project is to provide:
 - A pure library implementing the protocol logic, and the OpenVPN™ config file format to enable interoperabilty and a smooth transition for existing deployments.
 - [MirageOS](https://mirage.io) unikernels that act as OpenVPN™-compatible client and server.
 
+We provide a [handbook](https://robur-coop.github.io/miragevpn-handbook/) to guide you to install MirageVPN.
+
 Our goal is not to implement the complete protocol, but rather a small useful subset with modern crypto and the latest key exchange methods, without deprecated or redundant features
-(embodying the philosophy of [nqsb-tls](https://nqsb.io)).  An initial draft of the network setup is depicted in the diagram below:
+(embodying the philosophy of [OCaml-tls](https://github.com/mirleft/ocaml-tls)).  An initial draft of the network setup is depicted in the diagram below:
 
 ![diagram](/diagrams/multi-stack.svg)
 
