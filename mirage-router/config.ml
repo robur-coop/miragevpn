@@ -1,9 +1,9 @@
-(* mirage >= 4.5.1 & < 4.6.0 *)
+(* mirage >= 4.6.0 & < 4.7.0 *)
 
 open Mirage
 
 let private_netif = netif ~group:"private" "private"
-let private_ethernet = etif private_netif
+let private_ethernet = ethif private_netif
 let private_arp = arp private_ethernet
 (* this is temporary until we find a better way *)
 let ip = Runtime_arg.V4.network ~group:"private" (Ipaddr.V4.Prefix.of_string_exn "10.0.0.2/24")

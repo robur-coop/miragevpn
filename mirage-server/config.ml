@@ -1,3 +1,5 @@
+(* mirage >= 4.6.0 & < 4.7.0 *)
+
 open Mirage
 
 let miragevpn_handler =
@@ -26,7 +28,7 @@ let miragevpn_handler =
 let block =
   Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file "disk.img"))
 
-let eth = etif default_network
+let eth = ethif default_network
 let arp = arp eth
 let ipv6 = create_ipv6 default_network eth
 let () =
