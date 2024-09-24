@@ -260,7 +260,7 @@ type conn = {
   mutable peer :
     [ `Udp of Lwt_unix.file_descr | `Tcp of Lwt_unix.file_descr ] option;
   mutable est_switch : Lwt_switch.t;
-  data_mvar : Cstruct.t list Lwt_mvar.t;
+  data_mvar : string list Lwt_mvar.t;
   est_mvar :
     (Miragevpn.ip_config * int * Miragevpn.route_info, unit) result Lwt_mvar.t;
   event_mvar : Miragevpn.event Lwt_mvar.t;
@@ -354,26 +354,26 @@ let send_recv conn config ip_config _mtu routes =
             let pkt =
               match Lazy.force platform with
               | FreeBSD ->
-                  let pre = Cstruct.create 4 in
-                  Cstruct.set_uint8 pre 3 2;
-                  Cstruct.append pre pkt
+                  let pre = Bytes.create 4 in
+                  Bytes.set_uint8 pre 3 2;
+                  Bytes.unsafe_to_string pre ^ pkt
               | Linux -> pkt
             in
-            Lwt_cstruct.write tun_fd pkt >|= ignore)
+            Lwt_unix.write tun_fd (Bytes.unsafe_of_string pkt) 0 (String.length pkt) >|= ignore)
           pkts
         >>= fun () -> process_incoming ()
       in
       let rec process_outgoing tun_fd =
         let open Lwt_result.Infix in
-        let buf = Cstruct.create 1500 in
+        let buf = Bytes.create 1500 in
         (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
-        ( Lwt_cstruct.read tun_fd buf |> Lwt_result.ok >|= fun len ->
+        ( Lwt_unix.read tun_fd buf 0 (Bytes.length buf) |> Lwt_result.ok >|= fun len ->
           let start, len =
             match Lazy.force platform with
             | Linux -> (0, len)
             | FreeBSD -> (4, len - 4)
           in
-          Cstruct.sub buf start len )
+          Bytes.sub_string buf start len )
         >>= fun buf ->
         match Miragevpn.outgoing conn.o_client buf with
         | Error `Not_ready -> failwith "tunnel not ready, dropping data"

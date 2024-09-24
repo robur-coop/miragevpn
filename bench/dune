@@ -12,7 +12,6 @@
   miragevpn
   fmt
   logs
-  cstruct
   ptime
   decompress.lzo
   mirage-crypto
@@ -20,7 +19,6 @@
   x509
   duration
   angstrom
-  hex
   domain-name
   ipaddr
   gmap

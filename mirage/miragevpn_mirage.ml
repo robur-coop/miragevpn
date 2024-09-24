@@ -44,7 +44,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
    ethernet interface or similar, but only virtual (i.e. using 10.8.0.1,
    send/recv operations local only) *)
 module Server
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)
@@ -69,7 +69,7 @@ struct
         Log.err (fun m -> m "destination %a not found in map" Ipaddr.V4.pp dst);
         Lwt.return_unit
     | Some (flow, state) -> (
-        match Miragevpn.outgoing !state cs with
+        match Miragevpn.outgoing !state (Cstruct.to_string cs) with
         | Error `Not_ready ->
             Log.err (fun m ->
                 m "error not_ready while writing to %a" Ipaddr.V4.pp dst);
@@ -77,7 +77,7 @@ struct
         | Ok (state', enc) -> (
             (* TODO fragmentation!? *)
             state := state';
-            TCP.writev flow [ enc ] >|= function
+            TCP.writev flow [ Cstruct.of_string enc ] >|= function
             | Error e ->
                 Log.err (fun m ->
                     m "%a tcp write failed %a" Ipaddr.V4.pp dst
@@ -86,11 +86,12 @@ struct
             | Ok () -> ()))
 
   let handle_payload t dst source_ip data =
-    match Ipv4_packet.Unmarshal.of_cstruct data with
+    let data_cs = Cstruct.of_string data in
+    match Ipv4_packet.Unmarshal.of_cstruct data_cs with
     | Error e ->
         Log.warn (fun m ->
             m "%a received payload (error %s) %a" pp_dst dst e
-              Cstruct.hexdump_pp data);
+              (Ohex.pp_hexdump ()) data);
         Lwt.return_unit
     | Ok (ip, _) when Ipaddr.V4.compare ip.Ipv4_packet.src source_ip <> 0 ->
         Log.warn (fun m ->
@@ -139,7 +140,7 @@ struct
            && Ipaddr.V4.Prefix.mem ip.Ipv4_packet.dst (snd t.ip) ->
         (* local routing *)
         let dst = ip.Ipv4_packet.dst in
-        if Hashtbl.mem t.connections dst then write t dst data
+        if Hashtbl.mem t.connections dst then write t dst data_cs
         else
           let reply =
             Icmpv4_packet.
@@ -149,7 +150,7 @@ struct
                 subheader = Unused;
               }
           and ip' = { ip with src = fst t.ip; dst = ip.src } in
-          let payload = Cstruct.sub data 0 (min 28 (Cstruct.length data)) in
+          let payload = Cstruct.of_string data ~len:(min 28 (String.length data)) in
           let data =
             Cstruct.append
               (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
@@ -209,7 +210,7 @@ struct
           rm ip;
           TCP.close flow
       | Ok (`Data cs) -> (
-          match Miragevpn.handle !client_state (`Data cs) with
+          match Miragevpn.handle !client_state (`Data (Cstruct.to_string cs)) with
           | Error msg ->
               Log.err (fun m ->
                   m "%a internal miragevpn error %a" pp_dst dst
@@ -237,7 +238,7 @@ struct
           Lwt.return_unit
       | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
       >>= fun () ->
-      TCP.writev flow out >>= function
+      TCP.writev flow (List.map Cstruct.of_string out) >>= function
       | Error e ->
           Log.err (fun m ->
               m "%a tcp write failed %a" pp_dst dst TCP.pp_write_error e);
@@ -257,7 +258,7 @@ struct
         Log.warn (fun m -> m "%a eof" pp_dst dst);
         TCP.close flow
     | Ok (`Data data) -> (
-        match Miragevpn.new_connection t.server data with
+        match Miragevpn.new_connection t.server (Cstruct.to_string data) with
         | Error e ->
             Logs.warn (fun m ->
                 m "couldn't initiate the connection %a" Miragevpn.pp_error e);
@@ -290,7 +291,7 @@ struct
             t := t';
             Lwt_list.iter_p (handle_payload server (TCP.dst flow) k) payloads
             >>= fun () ->
-            TCP.writev flow out >|= function
+            TCP.writev flow (List.map Cstruct.of_string out) >|= function
             | Error e ->
                 Log.err (fun m ->
                     m "%a TCP write failed %a" Ipaddr.V4.pp k TCP.pp_write_error
@@ -334,7 +335,7 @@ struct
 end
 
 module Client_router
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)
@@ -391,6 +392,7 @@ struct
           true xs
 
   let transmit where data =
+    let data = List.map Cstruct.of_string data in
     match (data, where) with
     | [], _ -> Lwt.return true
     | _, Some (`Tcp flow) -> transmit_tcp flow data
@@ -400,7 +402,7 @@ struct
         Lwt.return false
 
   let write t data =
-    match Miragevpn.outgoing t.conn.o_client data with
+    match Miragevpn.outgoing t.conn.o_client (Cstruct.to_string data) with
     | Error `Not_ready ->
         Log.warn (fun m -> m "tunnel not ready, dropping data!");
         Lwt.return false
@@ -422,7 +424,7 @@ struct
   let read_flow flow =
     TCP.read flow >|= fun r ->
     match r with
-    | Ok (`Data b) -> `Data b
+    | Ok (`Data b) -> `Data (Cstruct.to_string b)
     | Ok `Eof ->
         Log.err (fun m -> m "eof while reading");
         `Connection_failed
@@ -437,7 +439,7 @@ struct
     let n =
       match r with
       | `Connection_failed -> 0
-      | `Data r -> Cstruct.length r
+      | `Data r -> String.length r
       | _ -> assert false
     in
     Log.debug (fun m -> m "read flow %a:%d (%d bytes)" Ipaddr.pp ip port n);
@@ -455,7 +457,7 @@ struct
     then (
       Log.debug (fun m ->
           m "read %a:%d (%d bytes)" Ipaddr.pp src src_port (Cstruct.length data));
-      Lwt_mvar.put c (`Data data))
+      Lwt_mvar.put c (`Data (Cstruct.to_string data)))
     else (
       Log.info (fun m ->
           m
@@ -538,7 +540,7 @@ struct
         conn.o_client <- t';
         (match payloads with
         | [] -> Lwt.return_unit
-        | _ -> Lwt_mvar.put conn.data_mvar payloads)
+        | _ -> Lwt_mvar.put conn.data_mvar (List.map Cstruct.of_string payloads))
         >>= fun () ->
         (match outs with
         | [] -> Lwt.return_unit
@@ -608,7 +610,7 @@ struct
 end
 
 module Client_stack
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)

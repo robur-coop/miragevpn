@@ -36,11 +36,11 @@ let write t dst cs =
 let _received_ping = ref 0
 
 let handle_payload t dst source_ip data =
-  match Ipv4_packet.Unmarshal.of_cstruct data with
+  match Ipv4_packet.Unmarshal.of_cstruct (Cstruct.of_string data) with
   | Error e ->
       Logs.warn (fun m ->
-          m "%a received payload (error %s) %a" pp_dst dst e Cstruct.hexdump_pp
-            data);
+          m "%a received payload (error %s) %a" pp_dst dst e
+            (Ohex.pp_hexdump ()) data);
       Lwt.return_unit
   | Ok (ip, _) when Ipaddr.V4.compare ip.Ipv4_packet.src source_ip <> 0 ->
       Logs.warn (fun m ->
@@ -75,7 +75,7 @@ let handle_payload t dst source_ip data =
               Ipv4_packet.Marshal.make_cstruct
                 ~payload_len:(Cstruct.length data) ip'
             in
-            write t ip.src (Cstruct.append hdr data)
+            write t ip.src (Cstruct.to_string (Cstruct.append hdr data))
           in
           if t.test && !_received_ping > 2 then (
             Logs.app (fun m ->
@@ -122,7 +122,7 @@ let handle_payload t dst source_ip data =
               subheader = Unused;
             }
         and ip' = { ip with src = fst t.ip; dst = ip.src } in
-        let payload = Cstruct.sub data 0 (min 28 (Cstruct.length data)) in
+        let payload = Cstruct.of_string data ~len:(min 28 (String.length data)) in
         let data =
           Cstruct.append
             (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
@@ -132,7 +132,7 @@ let handle_payload t dst source_ip data =
           Ipv4_packet.Marshal.make_cstruct ~payload_len:(Cstruct.length data)
             ip'
         in
-        write t ip.src (Cstruct.append hdr data)
+        write t ip.src (Cstruct.to_string (Cstruct.append hdr data))
   | Ok (ip, _) ->
       Logs.warn (fun m -> m "ignoring ipv4 frame %a" Ipv4_packet.pp ip);
       Lwt.return_unit

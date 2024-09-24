@@ -181,7 +181,7 @@ module Conf_map = struct
          key corresponds to, and its semantics if there can be any doubt.
   *)
   type 'a k =
-    | Auth : Mirage_crypto.Hash.hash k
+    | Auth : [< Digestif.hash' > `MD5 `SHA1 `SHA224 `SHA256 `SHA384 `SHA512 ] k
     | Auth_nocache : flag k
     | Auth_retry : [ `Interact | `Nointeract | `None ] k
     | Auth_user_pass : (string * string) k
@@ -211,7 +211,7 @@ module Conf_map = struct
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
-    | Peer_fingerprint : Cstruct.t list k
+    | Peer_fingerprint : string list k
     | Persist_key : flag k
     | Persist_tun : flag k
     | Ping_interval : [ `Not_configured | `Seconds of int ] k
@@ -258,18 +258,18 @@ module Conf_map = struct
     | Script_security : int k
     | Secret
         : ([ `Incoming | `Outgoing ] option
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t)
+          * string
+          * string
+          * string
+          * string)
           k
     | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth
         : ([ `Incoming | `Outgoing ] option
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t
-          * Cstruct.t)
+          * string
+          * string
+          * string
+          * string)
           k
     | Tls_cert : X509.Certificate.t k
     | Tls_mode : [ `Client | `Server ] k
@@ -353,7 +353,7 @@ module Conf_map = struct
         let cert_pubkey = X509.Certificate.public_key cert in
         let key_pubkey = X509.Private_key.public key in
         if
-          Cstruct.equal
+          String.equal
             (X509.Public_key.fingerprint cert_pubkey)
             (X509.Public_key.fingerprint key_pubkey)
         then Ok `Some
@@ -510,8 +510,8 @@ module Conf_map = struct
        %a\n\
        -----END OpenVPN Static key V1-----"
       Fmt.(array ~sep:(any "\n") string)
-      (match Cstruct.concat [ a; b; c; d ] |> Hex.of_cstruct with
-      | `Hex h -> Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
+      (let h = Ohex.encode (String.concat "" [ a; b; c; d ]) in
+       Array.init (256 / 16) (fun i -> String.sub h (i * 32) 32))
 
   let[@coverage off] pp_tls_crypt_client ppf key =
     let lines = Tls_crypt.save_v1 key in
@@ -545,13 +545,12 @@ module Conf_map = struct
         (X509.Certificate.validity cert)
         X509.Host.Set.pp
         (X509.Certificate.hostnames cert)
-        Hex.pp
-        (Hex.of_cstruct (X509.Certificate.fingerprint `SHA256 cert))
-        Hex.pp
-        (Hex.of_cstruct
-           (X509.Public_key.fingerprint ~hash:`SHA256
-              (X509.Certificate.public_key cert)))
-        (X509.Certificate.encode_pem cert |> Cstruct.to_string)
+        Ohex.pp
+        (X509.Certificate.fingerprint `SHA256 cert)
+        Ohex.pp
+        (X509.Public_key.fingerprint ~hash:`SHA256
+           (X509.Certificate.public_key cert))
+        (X509.Certificate.encode_pem cert)
     in
     let[@coverage off] pp_cert cert =
       p () "cert [inline]\n<cert>\n%a</cert>" pp_x509 cert
@@ -561,7 +560,7 @@ module Conf_map = struct
     in
     let[@coverage off] pp_x509_private_key key =
       p () "key [inline]\n<key>\n%s</key>"
-        (X509.Private_key.encode_pem key |> Cstruct.to_string)
+        (X509.Private_key.encode_pem key)
     in
     let[@coverage off] pp_tls_version ppf v =
       Fmt.string ppf
@@ -579,16 +578,17 @@ module Conf_map = struct
         | `SHA224 -> "SHA224"
         | `SHA256 -> "SHA256"
         | `SHA384 -> "SHA384"
-        | `SHA512 -> "SHA512")
+        | `SHA512 -> "SHA512"
+        | _ -> assert false)
     in
     let[@coverage off] pp_cipher ppf v =
       Fmt.string ppf (cipher_to_string (v :> cipher))
     in
     let[@coverage off] pp_fingerprint ppf fp =
-      for i = 0 to Cstruct.length fp - 1 do
-        let a, b = Hex.of_char (Cstruct.get fp i) in
-        Fmt.pf ppf "%c%c" a b;
-        if i < Cstruct.length fp - 1 then Fmt.pf ppf ":"
+      for i = 0 to String.length fp - 1 do
+        let a = Ohex.encode String.(make 1 (get fp i)) in
+        Fmt.pf ppf "%s" a;
+        if i < String.length fp - 1 then Fmt.pf ppf ":"
       done
     in
     match (k, v) with
@@ -654,7 +654,7 @@ module Conf_map = struct
     | Persist_tun, () -> p () "persist-tun"
     | Pkcs12, p12 ->
         p () "pkcs12 [inline]\n<pkcs12>\n%s\n</pkcs12>"
-          (Base64.encode_exn (Cstruct.to_string (X509.PKCS12.encode_der p12)))
+          (Base64.encode_exn (X509.PKCS12.encode_der p12))
     | Port, port -> p () "port %u" port
     | Proto, (ip_v, kind) ->
         p () "proto %s%s%s"
@@ -1033,26 +1033,26 @@ let a_option_with_single_path name kind =
 let a_ca = a_option_with_single_path "ca" `Ca
 
 let a_ca_payload str =
-  match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
+  match X509.Certificate.decode_pem_multiple str with
   | Ok certs -> Ok (B (Ca, certs))
   | Error (`Msg msg) -> Error (Fmt.str "ca: invalid certificate(s): %s" msg)
 
 let a_cert = a_option_with_single_path "cert" `Tls_cert
 
 let a_cert_payload str =
-  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  match X509.Certificate.decode_pem str with
   | Ok cert -> Ok (B (Tls_cert, cert))
   | Error (`Msg msg) -> Error (Fmt.str "cert: invalid certificate: %s" msg)
 
 let a_key = a_option_with_single_path "key" `Tls_key
 
 let a_key_payload str =
-  match X509.Private_key.decode_pem (Cstruct.of_string str) with
+  match X509.Private_key.decode_pem str with
   | Ok key -> Ok (B (Tls_key, key))
   | Error (`Msg msg) -> Error ("no key found in x509 tls-key: " ^ msg)
 
 let a_pkcs12_payload str =
-  match X509.PKCS12.decode_der (Cstruct.of_string str) with
+  match X509.PKCS12.decode_der str with
   | Error (`Msg msg) -> Error ("failed to decode PKCS12: " ^ msg)
   | Ok p12 -> Ok (B (Pkcs12, p12))
 
@@ -1077,10 +1077,10 @@ let a_fingerprint =
   in
   count 31 (byte <* char ':') >>= fun hd ->
   byte >>| fun tl ->
-  let buf = Cstruct.create 32 in
-  List.iteri (Cstruct.set_uint8 buf) hd;
-  Cstruct.set_uint8 buf 31 tl;
-  buf
+  let buf = Bytes.create 32 in
+  List.iteri (Bytes.set_uint8 buf) hd;
+  Bytes.set_uint8 buf 31 tl;
+  Bytes.unsafe_to_string buf
 
 let a_multi_fingerprint =
   skip_many (a_whitespace_or_comment *> end_of_line)
@@ -1163,7 +1163,7 @@ let inline_payload element =
            | _ -> false)
        <* (end_of_line <|> abort "Invalid hex character")
        >>= fun hex ->
-         try return (Cstruct.of_hex hex)
+         try return (Ohex.decode hex)
          with Invalid_argument msg -> abort msg )
        (string "-----END OpenVPN Static key V1-----" *> a_newline
        <|> abort "Missing END mark")
@@ -1172,14 +1172,14 @@ let inline_payload element =
      <|> ( pos >>= fun i ->
            abort (Fmt.str "Data after -----END mark at byte offset %d" i) ))
   >>= (fun lst ->
-        let sz = Cstruct.lenv lst in
+        let sz = List.fold_left ( + ) 0 (List.map String.length lst) in
         if 256 = sz then return lst
         else
           abort @@ "Wrong size (" ^ string_of_int sz
           ^ "); need exactly 256 bytes")
-  >>| Cstruct.concat
+  >>| String.concat ""
   >>| fun cs ->
-  Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
+  String.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
 
 let a_tls_crypt_v2_client_payload force_cookie =
   let line = a_line not_control_char in
@@ -1937,11 +1937,11 @@ let eq : eq =
       (fun (type x) (k : x k) (v : x) (v2 : x) ->
         match (k, v, v2) with
         | Secret, (dir, a, b, c, d), (dir', a', b', c', d') ->
-            dir = dir' && Cstruct.equal a a' && Cstruct.equal b b'
-            && Cstruct.equal c c' && Cstruct.equal d d'
+            dir = dir' && String.equal a a' && String.equal b b'
+            && String.equal c c' && String.equal d d'
         | Tls_auth, (dir, a, b, c, d), (dir', a', b', c', d') ->
-            dir = dir' && Cstruct.equal a a' && Cstruct.equal b b'
-            && Cstruct.equal c c' && Cstruct.equal d d'
+            dir = dir' && String.equal a a' && String.equal b b'
+            && String.equal c c' && String.equal d d'
         | Remote, remotes_lst, remotes_lst2 ->
             List.for_all2
               (fun (a, port1, proto1) (b, port2, proto2) ->

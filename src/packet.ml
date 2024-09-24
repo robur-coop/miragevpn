@@ -91,63 +91,63 @@ let header = function `Ack hdr | `Control (_, (hdr, _, _)) -> hdr
 let decode_header buf =
   let open Result.Syntax in
   (* our input is a buffer where the hmac has already been swapped away *)
-  let* () = guard (Cstruct.length buf >= hdr_len 1) `Partial in
-  let replay_id = Cstruct.BE.get_uint32 buf 0
-  and timestamp = Cstruct.BE.get_uint32 buf 4
-  and local_session = Cstruct.BE.get_uint64 buf 9
-  and arr_len = Cstruct.get_uint8 buf 17 in
+  let* () = guard (String.length buf >= hdr_len 1) `Partial in
+  let replay_id = String.get_int32_be buf 0
+  and timestamp = String.get_int32_be buf 4
+  and local_session = String.get_int64_be buf 9
+  and arr_len = String.get_uint8 buf 17 in
   let rs = if arr_len = 0 then 0 else 8 in
   let hdr_off = hdr_len 1 in
   let+ () =
-    guard (Cstruct.length buf >= hdr_off + (id_len * arr_len) + rs) `Partial
+    guard (String.length buf >= hdr_off + (id_len * arr_len) + rs) `Partial
   in
   let ack_sequence_number idx =
-    Cstruct.BE.get_uint32 buf (hdr_off + (id_len * idx))
+    String.get_int32_be buf (hdr_off + (id_len * idx))
   in
   let ack_sequence_numbers = List.init arr_len ack_sequence_number in
   let remote_session =
     if arr_len > 0 then
-      Some (Cstruct.BE.get_uint64 buf (hdr_off + (id_len * arr_len)))
+      Some (String.get_int64_be buf (hdr_off + (id_len * arr_len)))
     else None
   in
   ( { local_session; replay_id; timestamp; ack_sequence_numbers; remote_session },
     hdr_off + (id_len * arr_len) + rs )
 
-let encode_header hmac_len buf hdr =
+let encode_header hmac_len buf off hdr =
   let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
   let rsid = if id_arr_len = 0 then 0 else 8 in
-  Cstruct.BE.set_uint64 buf 0 hdr.local_session;
+  Bytes.set_int64_be buf off hdr.local_session;
   (* hmac is set later using [set_hmac] *)
   (* Cstruct.blit hdr.hmac 0 buf 8 hmac_len; *)
-  Cstruct.BE.set_uint32 buf (hmac_len + 8) hdr.replay_id;
-  Cstruct.BE.set_uint32 buf (hmac_len + 12) hdr.timestamp;
-  Cstruct.set_uint8 buf (hmac_len + 16) (List.length hdr.ack_sequence_numbers);
+  Bytes.set_int32_be buf (off + hmac_len + 8) hdr.replay_id;
+  Bytes.set_int32_be buf (off + hmac_len + 12) hdr.timestamp;
+  Bytes.set_uint8 buf (off + hmac_len + 16) (List.length hdr.ack_sequence_numbers);
   List.iteri
-    (fun i v -> Cstruct.BE.set_uint32 buf (hmac_len + 17 + (i * id_len)) v)
+    (fun i v -> Bytes.set_int32_be buf (off + hmac_len + 17 + (i * id_len)) v)
     hdr.ack_sequence_numbers;
   (match hdr.remote_session with
   | None -> ()
   | Some v ->
       assert (rsid <> 0);
-      Cstruct.BE.set_uint64 buf (hdr_len hmac_len + id_arr_len) v);
+      Bytes.set_int64_be buf (off + hdr_len hmac_len + id_arr_len) v);
   hdr_len hmac_len + rsid + id_arr_len
 
 let decode_ack buf =
   let open Result.Syntax in
   let+ hdr, off = decode_header buf in
-  if off <> Cstruct.length buf then
+  if off <> String.length buf then
     Log.debug (fun m ->
         m "decode_ack: %d extra bytes at end of message"
-          (Cstruct.length buf - off))
+          (String.length buf - off))
     [@coverage off];
   hdr
 
 let decode_control buf =
   let open Result.Syntax in
   let* header, off = decode_header buf in
-  let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
-  let sequence_number = Cstruct.BE.get_uint32 buf off
-  and payload = Cstruct_ext.shift buf (off + 4) in
+  let+ () = guard (String.length buf >= off + 4) `Partial in
+  let sequence_number = String.get_int32_be buf off
+  and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
   (header, sequence_number, payload)
 
 let decode_ack_or_control op buf =
@@ -160,29 +160,29 @@ let decode_ack_or_control op buf =
       let+ control = decode_control buf in
       `Control (op, control)
 
-let encode_control hmac_len buf (header, sequence_number, payload) =
-  let len = encode_header hmac_len buf header in
-  Cstruct.BE.set_uint32 buf len sequence_number;
-  Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload)
+let encode_control hmac_len buf off (header, sequence_number, payload) =
+  let len = encode_header hmac_len buf off header in
+  Bytes.set_int32_be buf (off + len) sequence_number;
+  Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
 let decode_protocol proto buf =
   let open Result.Syntax in
   match proto with
   | `Tcp ->
-      let* () = guard (Cstruct.length buf >= 2) `Tcp_partial in
-      let plen = Cstruct.BE.get_uint16 buf 0 in
-      let+ () = guard (Cstruct.length buf - 2 >= plen) `Tcp_partial in
-      (Cstruct.sub buf 2 plen, Cstruct_ext.shift buf (plen + 2))
-  | `Udp -> Ok (buf, Cstruct.empty)
+      let* () = guard (String.length buf >= 2) `Tcp_partial in
+      let plen = String.get_uint16_be buf 0 in
+      let+ () = guard (String.length buf - 2 >= plen) `Tcp_partial in
+      (String.sub buf 2 plen, String.sub buf (plen + 2) (String.length buf - plen - 2))
+  | `Udp -> Ok (buf, "")
 
 let decode_key_op proto buf =
   let open Result.Syntax in
   let* buf, linger = decode_protocol proto buf in
-  let* () = guard (Cstruct.length buf >= 1) `Partial in
-  let opkey = Cstruct.get_uint8 buf 0 in
+  let* () = guard (String.length buf >= 1) `Partial in
+  let opkey = String.get_uint8 buf 0 in
   let op, key = (opkey lsr 3, opkey land 0x07) in
   let+ op = int_to_operation op in
-  (op, key, Cstruct_ext.shift buf 1, linger)
+  (op, key, String.sub buf 1 (String.length buf - 1), linger)
 
 let operation = function
   | `Ack _ -> Ack
@@ -197,26 +197,28 @@ let protocol_len = function `Tcp -> 2 | `Udp -> 0
 
 let set_protocol buf proto =
   match proto with
-  | `Tcp -> Cstruct.BE.set_uint16 buf 0 (Cstruct.length buf - 2)
+  | `Tcp -> Bytes.set_uint16_be buf 0 (Bytes.length buf - 2)
   | `Udp -> ()
 
 let set_hmac buf proto hmac =
   (* protocol header, op_key, local session *)
   let off = protocol_len proto + 1 + 8 in
-  Cstruct.blit hmac 0 buf off (Cstruct.length hmac)
+  Bytes.blit_string hmac 0 buf off (String.length hmac)
 
 let split_hmac hmac_len op key buf =
   (* local_session_id ++ hmac, replay_id ++ ts ++ payload
      -> (hmac, replay_id ++ ts ++ opcode ++ local_session_id ++ payload
   *)
   (* below we modify the contents of buf, so we need to copy here *)
-  let hmac = Cstruct.sub_copy buf 8 hmac_len in
+  let hmac = String.sub buf 8 hmac_len in
   let to_cut = hmac_len - 1 (* - 1 (for key/op) *) in
-  let b = Cstruct.sub buf to_cut (Cstruct.length buf - to_cut) in
-  Cstruct.blit buf (hmac_len + 8) b 0 (id_len + 4);
-  Cstruct.set_uint8 b 8 (op_key op key);
-  Cstruct.blit buf 0 b 9 session_id_len;
-  (hmac, b)
+  let b =
+    Bytes.unsafe_of_string (String.sub buf to_cut (String.length buf - to_cut))
+  in
+  Bytes.blit_string buf (hmac_len + 8) b 0 (id_len + 4);
+  Bytes.set_uint8 b 8 (op_key op key);
+  Bytes.blit_string buf 0 b 9 session_id_len;
+  (hmac, Bytes.unsafe_to_string b)
 
 let encode proto hmac_len
     (key, (p : [< `Ack of header | `Control of operation * _ ])) =
@@ -231,43 +233,43 @@ let encode proto hmac_len
     | `Ack _ -> 0
     | `Control (_, (_, _, payload)) ->
         (* 4 is sequence number *)
-        4 + Cstruct.length payload
+        4 + String.length payload
   in
-  let buf = Cstruct.create_unsafe len in
+  let buf = Bytes.create len in
   set_protocol buf proto;
   let op = op_key (operation p) key in
-  Cstruct.set_uint8 buf (protocol_len proto) op;
-  let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
+  Bytes.set_uint8 buf (protocol_len proto) op;
+  let to_encode = protocol_len proto + 1 in
   let () =
     match p with
-    | `Ack ack -> ignore (encode_header hmac_len to_encode ack)
-    | `Control (_, control) -> encode_control hmac_len to_encode control
+    | `Ack ack -> ignore (encode_header hmac_len buf to_encode ack)
+    | `Control (_, control) -> encode_control hmac_len buf to_encode control
   in
   let feeder feed =
     (* replay_id ++ timestamp *)
-    feed (Cstruct.sub to_encode (hmac_len + 8) (4 + 4));
+    feed (Bytes.sub_string buf (to_encode + hmac_len + 8) (4 + 4));
     (* op_key ++ local_session *)
-    feed (Cstruct.sub buf (protocol_len proto) 9);
+    feed (Bytes.sub_string buf (protocol_len proto) 9);
     (* ack_len ++ acks ++ remote_session ++ sequence_number ++ payload *)
-    feed (Cstruct.shift to_encode (hmac_len + 16))
+    feed (Bytes.sub_string buf (to_encode + hmac_len + 16) (len - to_encode - hmac_len - 16))
   in
   (buf, feeder)
 
 let encode_data buf proto key =
   set_protocol buf proto;
   let op = op_key Data_v1 key in
-  Cstruct.set_uint8 buf (protocol_len proto) op
+  Bytes.set_uint8 buf (protocol_len proto) op
 
 module Tls_crypt = struct
   type cleartext_header = {
     local_session : int64;
     replay_id : int32;
     timestamp : int32;
-    hmac : Cstruct.t; (* always 32 bytes *)
+    hmac : string; (* always 32 bytes *)
   }
 
   let hmac_algorithm = `SHA256
-  let hmac_len = Mirage_crypto.Hash.SHA256.digest_size (* 32 *)
+  let hmac_len = Digestif.SHA256.digest_size (* 32 *)
   let hmac_offset = 16
 
   (* [encrypted_offset] is the offset of the header payload that is encrypted *)
@@ -275,46 +277,46 @@ module Tls_crypt = struct
 
   let set_hmac buf proto hmac =
     let off = protocol_len proto + 1 + hmac_offset in
-    Cstruct.blit hmac 0 buf off (Cstruct.length hmac)
+    Bytes.blit_string hmac 0 buf off (String.length hmac)
 
   let clear_hdr_len =
     hdr_len hmac_len - 1 (* not including acked sequence numbers *)
 
   let to_be_signed op key header decrypted =
     let hdr_len = hdr_len 0 in
-    let len = hdr_len + Cstruct.length decrypted in
-    let buf = Cstruct.create len in
-    Cstruct.set_uint8 buf 0 (op_key op key);
-    Cstruct.BE.set_uint64 buf 1 header.local_session;
-    Cstruct.BE.set_uint32 buf 9 header.replay_id;
-    Cstruct.BE.set_uint32 buf 13 header.timestamp;
-    Cstruct.blit decrypted 0 buf hdr_len (Cstruct.length decrypted);
-    buf
+    let len = hdr_len + String.length decrypted in
+    let buf = Bytes.create len in
+    Bytes.set_uint8 buf 0 (op_key op key);
+    Bytes.set_int64_be buf 1 header.local_session;
+    Bytes.set_int32_be buf 9 header.replay_id;
+    Bytes.set_int32_be buf 13 header.timestamp;
+    Bytes.blit_string decrypted 0 buf hdr_len (String.length decrypted);
+    Bytes.unsafe_to_string buf
 
-  let encode_header buf hdr =
+  let encode_header buf off hdr =
     let acks_len = id_len * List.length hdr.ack_sequence_numbers in
     let rsid_len = if acks_len = 0 then 0 else 8 in
-    Cstruct.BE.set_uint64 buf 0 hdr.local_session;
+    Bytes.set_int64_be buf off hdr.local_session;
     (* annoyingly the replay packet id and hmac are swapped from the tls-auth header *)
-    Cstruct.BE.set_uint32 buf 8 hdr.replay_id;
-    Cstruct.BE.set_uint32 buf 12 hdr.timestamp;
+    Bytes.set_int32_be buf (off + 8) hdr.replay_id;
+    Bytes.set_int32_be buf (off + 12) hdr.timestamp;
     (* hmac is set later using [Tls_crypt.set_hmac] *)
     (* Cstruct.blit hdr.hmac 0 buf 16 hmac_len; *)
-    Cstruct.set_uint8 buf (16 + hmac_len) (List.length hdr.ack_sequence_numbers);
+    Bytes.set_uint8 buf (off + 16 + hmac_len) (List.length hdr.ack_sequence_numbers);
     List.iteri
-      (fun i v -> Cstruct.BE.set_uint32 buf (hmac_len + 17 + (i * id_len)) v)
+      (fun i v -> Bytes.set_int32_be buf (off + hmac_len + 17 + (i * id_len)) v)
       hdr.ack_sequence_numbers;
     Option.iter
       (fun v ->
         assert (rsid_len <> 0);
-        Cstruct.BE.set_uint64 buf (clear_hdr_len + 1 + acks_len) v)
+        Bytes.set_int64_be buf (off + clear_hdr_len + 1 + acks_len) v)
       hdr.remote_session;
     clear_hdr_len + 1 + acks_len + rsid_len
 
-  let encode_control buf (header, sequence_number, payload) =
-    let len = encode_header buf header in
-    Cstruct.BE.set_uint32 buf len sequence_number;
-    Cstruct.blit payload 0 buf (len + 4) (Cstruct.length payload)
+  let encode_control buf off (header, sequence_number, payload) =
+    let len = encode_header buf off header in
+    Bytes.set_int32_be buf (off + len) sequence_number;
+    Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
   let encode proto (key, (p : [< `Ack of header | `Control of _ ])) =
     let hdr = header p in
@@ -325,28 +327,28 @@ module Tls_crypt = struct
       +
       match p with
       | `Ack _ -> 0
-      | `Control (_, (_, _, payload)) -> 4 + Cstruct.length payload
+      | `Control (_, (_, _, payload)) -> 4 + String.length payload
     in
     let wkc_len =
       match p with
-      | `Control (Hard_reset_client_v3, (_, _, wkc)) -> Cstruct.length wkc
+      | `Control (Hard_reset_client_v3, (_, _, wkc)) -> String.length wkc
       | _ -> 0
     in
-    let buf = Cstruct.create_unsafe len in
+    let buf = Bytes.create len in
     set_protocol buf proto;
-    Cstruct.set_uint8 buf (protocol_len proto) (op_key (operation p) key);
-    let to_encode = Cstruct.shift buf (protocol_len proto + 1) in
+    Bytes.set_uint8 buf (protocol_len proto) (op_key (operation p) key);
+    let to_encode = protocol_len proto + 1 in
     let () =
       match p with
-      | `Ack ack -> ignore (encode_header to_encode ack)
-      | `Control (_, control) -> encode_control to_encode control
+      | `Ack ack -> ignore (encode_header buf to_encode ack)
+      | `Control (_, control) -> encode_control buf to_encode control
     in
     let feeder feed =
       (* op ++ local_session ++ replay_id ++ timestamp *)
-      feed (Cstruct.sub buf (protocol_len proto) (1 + hmac_offset));
+      feed (Bytes.sub_string buf (protocol_len proto) (1 + hmac_offset));
       let l = protocol_len proto + 1 + hmac_offset + hmac_len in
       (* ack_len ++ acks ++ remote_session ++ sequence_number ++ payload (except wkc) *)
-      feed (Cstruct.sub buf l (Cstruct.length buf - l - wkc_len))
+      feed (Bytes.sub_string buf l (Bytes.length buf - l - wkc_len))
     in
     (* packet, to_encrypt_offset, to_encrypt_length, feeder *)
     let to_encrypt_offset = protocol_len proto + 1 + encrypted_offset in
@@ -354,19 +356,19 @@ module Tls_crypt = struct
 
   let decode_decrypted_header clear_hdr buf =
     let open Result.Syntax in
-    let* () = guard (Cstruct.length buf >= 1) `Partial in
-    let arr_len = Cstruct.get_uint8 buf 0 in
+    let* () = guard (String.length buf >= 1) `Partial in
+    let arr_len = String.get_uint8 buf 0 in
     let rs_len = if arr_len = 0 then 0 else 8 in
     let+ () =
-      guard (Cstruct.length buf >= 1 + (id_len * arr_len) + rs_len) `Partial
+      guard (String.length buf >= 1 + (id_len * arr_len) + rs_len) `Partial
     in
     let ack_sequence_number idx =
-      Cstruct.BE.get_uint32 buf (1 + (id_len * idx))
+      String.get_int32_be buf (1 + (id_len * idx))
     in
     let ack_sequence_numbers = List.init arr_len ack_sequence_number in
     let remote_session =
       if rs_len > 0 then
-        Some (Cstruct.BE.get_uint64 buf (1 + (id_len * arr_len)))
+        Some (String.get_int64_be buf (1 + (id_len * arr_len)))
       else None
     in
     let { local_session; replay_id; timestamp; _ } = clear_hdr in
@@ -384,19 +386,19 @@ module Tls_crypt = struct
   let decode_decrypted_ack clear_hdr buf =
     let open Result.Syntax in
     let+ hdr, off = decode_decrypted_header clear_hdr buf in
-    if off <> Cstruct.length buf then
+    if off <> String.length buf then
       Log.debug (fun m ->
           m "decode_decrypted_ack: %d extra bytes at end of message"
-            (Cstruct.length buf - off))
+            (String.length buf - off))
       [@coverage off];
     hdr
 
   let decode_decrypted_control clear_hdr buf =
     let open Result.Syntax in
     let* hdr, off = decode_decrypted_header clear_hdr buf in
-    let+ () = guard (Cstruct.length buf >= off + 4) `Partial in
-    let sequence_number = Cstruct.BE.get_uint32 buf off
-    and payload = Cstruct_ext.shift buf (off + 4) in
+    let+ () = guard (String.length buf >= off + 4) `Partial in
+    let sequence_number = String.get_int32_be buf off
+    and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
     (hdr, sequence_number, payload)
 
   let decode_decrypted_ack_or_control clear_hdr op buf =
@@ -412,20 +414,20 @@ module Tls_crypt = struct
   let decode_cleartext_header buf =
     let open Result.Syntax in
     (* header up till acked sequence numbers *)
-    let+ () = guard (Cstruct.length buf >= clear_hdr_len) `Partial in
-    let local_session = Cstruct.BE.get_uint64 buf 0
-    and replay_id = Cstruct.BE.get_uint32 buf 8
-    and timestamp = Cstruct.BE.get_uint32 buf 12
-    and hmac = Cstruct.sub buf 16 hmac_len in
+    let+ () = guard (String.length buf >= clear_hdr_len) `Partial in
+    let local_session = String.get_int64_be buf 0
+    and replay_id = String.get_int32_be buf 8
+    and timestamp = String.get_int32_be buf 12
+    and hmac = String.sub buf 16 hmac_len in
     ( { local_session; replay_id; timestamp; hmac },
-      Cstruct_ext.shift buf clear_hdr_len )
+      String.sub buf clear_hdr_len (String.length buf - clear_hdr_len) )
 end
 
 type ack = [ `Ack of header ]
 
 (* the int32 in the middle is the sequence number *)
-type control = [ `Control of operation * (header * int32 * Cstruct.t) ]
-type t = int * [ ack | control | `Data of Cstruct.t ]
+type control = [ `Control of operation * (header * int32 * string) ]
+type t = int * [ ack | control | `Data of string ]
 
 let sequence_number = function
   | `Ack _ -> None
@@ -436,16 +438,16 @@ let[@coverage off] pp ppf (key, p) =
   | `Ack a -> Fmt.pf ppf "key %d ack %a" key pp_header a
   | `Control (op, (hdr, id, payload)) ->
       Fmt.pf ppf "key %d control %a: %a sequence-number %lu@.payload %d bytes"
-        key pp_operation op pp_header hdr id (Cstruct.length payload)
-  | `Data d -> Fmt.pf ppf "key %d data %d bytes" key (Cstruct.length d)
+        key pp_operation op pp_header hdr id (String.length payload)
+  | `Data d -> Fmt.pf ppf "key %d data %d bytes" key (String.length d)
 
 type tls_data = {
   (* key method v2 only! *)
   (* 4 zero bytes *)
   (* key_method_type : int ; (* uint8 *) *)
-  pre_master : Cstruct.t; (* only in client -> server, 48 bytes *)
-  random1 : Cstruct.t; (* 32 bytes *)
-  random2 : Cstruct.t; (* 32 bytes *)
+  pre_master : string; (* only in client -> server, 48 bytes *)
+  random1 : string; (* 32 bytes *)
+  random2 : string; (* 32 bytes *)
   (* 16 bit len *)
   options : string; (* null terminated -- record may end after options! *)
   (* 16 bit len, user (0 terminated), 16 bit len, password (0 terminated) *)
@@ -455,8 +457,8 @@ type tls_data = {
 
 let[@coverage off] pp_tls_data ppf t =
   Fmt.pf ppf "TLS data PMS %d R1 %d R2 %d options %s %a %a"
-    (Cstruct.length t.pre_master)
-    (Cstruct.length t.random1) (Cstruct.length t.random2) t.options
+    (String.length t.pre_master)
+    (String.length t.random1) (String.length t.random2) t.options
     Fmt.(
       option ~none:(any "no user + pass")
         (append (any "user: ") (pair ~sep:(any ", pass") string string)))
@@ -474,15 +476,16 @@ let key_method = 0x02
    the terminating 0 byte is accounted for the length *)
 let write_string str =
   let len = String.length str in
-  let buf = Cstruct.create (len + 3) in
-  Cstruct.blit_from_string str 0 buf 2 len;
-  Cstruct.BE.set_uint16 buf 0 (succ len);
-  buf
+  let buf = Bytes.create (len + 3) in
+  Bytes.blit_string str 0 buf 2 len;
+  Bytes.set_uint16_be buf 0 (succ len);
+  Bytes.unsafe_to_string buf
 
 let encode_tls_data t =
-  let prefix = Cstruct.create 5 in
+  let prefix = Bytes.create 5 in
   (* 4 zero bytes, and one byte key_method *)
-  Cstruct.set_uint8 prefix 4 key_method;
+  Bytes.set_uint8 prefix 4 key_method;
+  let prefix = Bytes.unsafe_to_string prefix in
   (* the options field, and also username and password are zero-terminated
      in addition to be length-prefixed... *)
   let opt = write_string t.options
@@ -505,7 +508,7 @@ let encode_tls_data t =
      password string
      peer_info
   *)
-  Cstruct.concat
+  String.concat ""
     ([ prefix; t.pre_master; t.random1; t.random2; opt ] @ u_p @ peer_info)
 
 let maybe_string prefix buf off = function
@@ -513,8 +516,8 @@ let maybe_string prefix buf off = function
   | x ->
       let actual_len = pred x in
       (* null-terminated string *)
-      let data = Cstruct.(to_string (sub buf off actual_len)) in
-      if Cstruct.get_uint8 buf (off + actual_len) = 0x00 then Ok data
+      let data = String.sub buf off actual_len in
+      if String.get_uint8 buf (off + actual_len) = 0x00 then Ok data
       else Error (`Malformed (prefix ^ " is not null-terminated"))
 
 let decode_tls_data ?(with_premaster = false) buf =
@@ -528,65 +531,65 @@ let decode_tls_data ?(with_premaster = false) buf =
        + pre_master_len (if its a client tls data) *)
     pre_master_start + 2 + random_len + random_len + pre_master_len
   in
-  let* () = guard (Cstruct.length buf >= opt_start) `Partial in
+  let* () = guard (String.length buf >= opt_start) `Partial in
   let* () =
     guard
-      (Cstruct.BE.get_uint32 buf 0 = 0l)
+      (String.get_int32_be buf 0 = 0l)
       (`Malformed "tls data must start with 32 bits set to 0")
   in
   let* () =
     guard
-      (Cstruct.get_uint8 buf 4 = key_method)
+      (String.get_uint8 buf 4 = key_method)
       (`Malformed "tls data key_method wrong")
   in
-  let pre_master = Cstruct.sub buf pre_master_start pre_master_len in
+  let pre_master = String.sub buf pre_master_start pre_master_len in
   let random_start = pre_master_start + pre_master_len in
-  let random1 = Cstruct.sub buf random_start random_len
-  and random2 = Cstruct.sub buf (random_start + random_len) random_len in
-  let opt_len = Cstruct.BE.get_uint16 buf (opt_start - 2) in
-  let* () = guard (Cstruct.length buf >= opt_start + opt_len) `Partial in
+  let random1 = String.sub buf random_start random_len
+  and random2 = String.sub buf (random_start + random_len) random_len in
+  let opt_len = String.get_uint16_be buf (opt_start - 2) in
+  let* () = guard (String.length buf >= opt_start + opt_len) `Partial in
   let* options = maybe_string "TLS data options" buf opt_start opt_len in
   let+ user_pass, peer_info =
-    if Cstruct.length buf = opt_start + opt_len then Ok (None, None)
+    if String.length buf = opt_start + opt_len then Ok (None, None)
     else
       (* more bytes - there's username and password (2 bytes len, value, 0x00) *)
       let u_start = opt_start + opt_len in
       let* () =
-        guard (Cstruct.length buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial
+        guard (String.length buf >= u_start + 4 (* 2 * 16 bit len *)) `Partial
       in
-      let u_len = Cstruct.BE.get_uint16 buf (opt_start + opt_len) in
-      let* () = guard (Cstruct.length buf >= u_start + 4 + u_len) `Partial in
+      let u_len = String.get_uint16_be buf (opt_start + opt_len) in
+      let* () = guard (String.length buf >= u_start + 4 + u_len) `Partial in
       let* u = maybe_string "username" buf (u_start + 2) u_len in
       let p_start = u_start + 2 + u_len in
-      let p_len = Cstruct.BE.get_uint16 buf p_start in
-      let* () = guard (Cstruct.length buf >= p_start + 2 + p_len) `Partial in
+      let p_len = String.get_uint16_be buf p_start in
+      let* () = guard (String.length buf >= p_start + 2 + p_len) `Partial in
       let* p = maybe_string "password" buf (p_start + 2) p_len in
       let user_pass = match (u, p) with "", "" -> None | _ -> Some (u, p) in
       let peer_info_start = p_start + 2 + p_len in
       (* dinosaure: if we don't have enough to have a peer-info (at least 2 bytes),
          we just ignore it and return [None]. *)
       let+ peer_info =
-        if Cstruct.length buf <= peer_info_start + 2 then Ok None
+        if String.length buf <= peer_info_start + 2 then Ok None
         else
-          let data = Cstruct_ext.shift buf peer_info_start in
-          let len = Cstruct.BE.get_uint16 data 0 in
-          let data = Cstruct_ext.shift data 2 in
-          let* () = guard (Cstruct.length data >= len) `Partial in
-          if Cstruct.length data > len then
+          let len = String.get_uint16_be buf peer_info_start in
+          let* () = guard (String.length buf - peer_info_start - 2 >= len) `Partial in
+          let data = String.sub buf (peer_info_start + 2) len in
+          if String.length buf - peer_info_start - 2 > len then
             Log.warn (fun m ->
-                m "slack at end of tls_data %S @.%a"
-                  (Cstruct.to_string ~len data)
-                  Cstruct.hexdump_pp data)
+                m "slack at end of tls_data:@.%a"
+                  (Ohex.pp_hexdump ())
+                  (String.sub buf (peer_info_start + 2 + len)
+                     (String.length buf - peer_info_start - 2 - len)))
             [@coverage off];
-          Ok (if len = 0 then None else Some (Cstruct.to_string ~len data))
+            Ok (if len = 0 then None else Some data)
       in
       (user_pass, Option.map (String.split_on_char '\n') peer_info)
   in
   { pre_master; random1; random2; options; user_pass; peer_info }
 
-let push_request = Cstruct.of_string "PUSH_REQUEST\x00"
-let push_reply = Cstruct.of_string "PUSH_REPLY"
-let auth_failed = Cstruct.of_string "AUTH_FAILED\x00"
+let push_request = "PUSH_REQUEST\x00"
+let push_reply = "PUSH_REPLY"
+let auth_failed = "AUTH_FAILED\x00"
 
 module Iv_proto = struct
   type t = Request_push | Tls_key_export | Use_cc_exit_notify
@@ -604,17 +607,17 @@ end
 let decode_early_negotiation_tlvs data =
   let open Result.Syntax in
   let rec go acc data =
-    if Cstruct.is_empty data then Ok acc
+    if data = "" then Ok acc
     else
-      let* () = guard (Cstruct.length data >= 4) `Partial in
-      let typ = Cstruct.BE.get_uint16 data 0
-      and len = Cstruct.BE.get_uint16 data 2 in
-      let* () = guard (Cstruct.length data >= 4 + len) `Partial in
+      let* () = guard (String.length data >= 4) `Partial in
+      let typ = String.get_uint16_be data 0
+      and len = String.get_uint16_be data 2 in
+      let* () = guard (String.length data >= 4 + len) `Partial in
       if typ = 0x0001 (* EARLY_NEG_FLAGS *) then
         let* () = guard (len = 2) (`Malformed "Bad EARLY_NEG_FLAGS") in
-        let flags = Cstruct.BE.get_uint16 data 4 in
-        go (acc || flags = 0x0001 (* RESEND_WKC *)) (Cstruct.shift data 6)
+        let flags = String.get_uint16_be data 4 in
+        go (acc || flags = 0x0001 (* RESEND_WKC *)) (String.sub data 6 (String.length data - 6))
       else (* skip *)
-        go acc (Cstruct.shift data (4 + len))
+        go acc (String.sub data (4 + len) (String.length data - 4 - len))
   in
   go false data

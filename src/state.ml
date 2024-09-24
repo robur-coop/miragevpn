@@ -1,7 +1,7 @@
 type my_key_material = {
-  pre_master : Cstruct.t; (* only in client -> server, 48 bytes *)
-  random1 : Cstruct.t; (* 32 bytes *)
-  random2 : Cstruct.t; (* 32 bytes *)
+  pre_master : string; (* only in client -> server, 48 bytes *)
+  random1 : string; (* 32 bytes *)
+  random2 : string; (* 32 bytes *)
 }
 
 module IM = Map.Make (Int32)
@@ -30,22 +30,22 @@ let init_transport =
 
 type key_variant =
   | AES_CBC of {
-      my_key : Mirage_crypto.Cipher_block.AES.CBC.key;
-      my_hmac : Cstruct.t;
-      their_key : Mirage_crypto.Cipher_block.AES.CBC.key;
-      their_hmac : Cstruct.t;
+      my_key : Mirage_crypto.AES.CBC.key;
+      my_hmac : string;
+      their_key : Mirage_crypto.AES.CBC.key;
+      their_hmac : string;
     }
   | AES_GCM of {
-      my_key : Mirage_crypto.Cipher_block.AES.GCM.key;
-      my_implicit_iv : Cstruct.t;
-      their_key : Mirage_crypto.Cipher_block.AES.GCM.key;
-      their_implicit_iv : Cstruct.t;
+      my_key : Mirage_crypto.AES.GCM.key;
+      my_implicit_iv : string;
+      their_key : Mirage_crypto.AES.GCM.key;
+      their_implicit_iv : string;
     }
   | CHACHA20_POLY1305 of {
       my_key : Mirage_crypto.Chacha20.key;
-      my_implicit_iv : Cstruct.t;
+      my_implicit_iv : string;
       their_key : Mirage_crypto.Chacha20.key;
-      their_implicit_iv : Cstruct.t;
+      their_implicit_iv : string;
     }
 
 type keys = {
@@ -86,7 +86,7 @@ type channel = {
 }
 
 let received_packet ch data =
-  { ch with packets = succ ch.packets; bytes = Cstruct.length data + ch.bytes }
+  { ch with packets = succ ch.packets; bytes = String.length data + ch.bytes }
 
 let[@coverage off] pp_channel ppf c =
   Fmt.pf ppf "channel %d %a@ started %Lu bytes %d packets %d@ transport %a"
@@ -122,7 +122,7 @@ type event =
   | `Connected
   | `Connection_failed
   | `Tick
-  | `Data of Cstruct.t ]
+  | `Data of string ]
 
 let[@coverage off] pp_event ppf = function
   | `Resolved r -> Fmt.pf ppf "resolved %a" Ipaddr.pp r
@@ -130,7 +130,7 @@ let[@coverage off] pp_event ppf = function
   | `Connected -> Fmt.string ppf "connected"
   | `Connection_failed -> Fmt.string ppf "connection failed"
   | `Tick -> Fmt.string ppf "tick"
-  | `Data cs -> Fmt.pf ppf "data %d bytes" (Cstruct.length cs)
+  | `Data cs -> Fmt.pf ppf "data %d bytes" (String.length cs)
 
 type initial_action =
   [ `Resolve of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
@@ -222,9 +222,9 @@ let[@coverage off] pp_server_state ppf = function
   | Server_rekeying c -> Fmt.pf ppf "server rekeying %a" pp_channel c
 
 type tls_auth = {
-  hmac_algorithm : Mirage_crypto.Hash.hash;
-  my_hmac : Cstruct.t;
-  their_hmac : Cstruct.t;
+  hmac_algorithm : Digestif.hash';
+  my_hmac : string;
+  their_hmac : string;
 }
 
 type tls_crypt = { my : Tls_crypt.Key.t; their : Tls_crypt.Key.t }
@@ -251,8 +251,8 @@ type t = {
   config : Config.t;
   is_not_taken : Ipaddr.V4.t -> bool;
   auth_user_pass : (user:string -> pass:string -> bool) option;
-  linger : Cstruct.t;
-  rng : int -> Cstruct.t;
+  linger : string;
+  rng : int -> string;
   ts : unit -> int64;
   now : unit -> Ptime.t;
   control_crypto : control_crypto;
@@ -277,7 +277,7 @@ let[@coverage off] pp ppf t =
   Fmt.pf ppf
     "linger %d@ state %a@ control crypto %a@ session %a@ active %a@ lame duck \
      %a@ last-rcvd %Lu@ last-sent %Lu"
-    (Cstruct.length t.linger) pp_state t.state pp_control_crypto
+    (String.length t.linger) pp_state t.state pp_control_crypto
     t.control_crypto pp_session t.session pp_channel t.channel
     Fmt.(option ~none:(any "no") pp_channel)
     lame_duck t.last_received t.last_sent
@@ -293,8 +293,11 @@ let data_mtu config session =
   | `AES_256_CBC ->
       let static_key_mode = Config.mem Secret config in
       let ts = if static_key_mode then 4 (* timestamp *) else 0 in
-      let block_size = Mirage_crypto.Cipher_block.AES.CBC.block_size in
-      let hmac = Config.get Auth config |> Mirage_crypto.Hash.digest_size in
+      let block_size = Mirage_crypto.AES.CBC.block_size in
+      let hmac =
+        let module H = (val (Digestif.module_of_hash' (Config.get Auth config))) in
+        H.digest_size
+      in
       let not_yet_padded_payload =
         Packet.id_len + ts + if compress then 1 else 0
       in
@@ -314,7 +317,7 @@ let data_mtu config session =
       assert (r > 0);
       r
   | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ->
-      let tag_size = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+      let tag_size = Mirage_crypto.AES.GCM.tag_size in
       assert (Mirage_crypto.Chacha20.tag_size = tag_size);
       let hdr =
         Packet.id_len + tag_size + 1
@@ -334,10 +337,11 @@ let control_mtu config control_crypto session =
     match control_crypto with
     | `Tls_auth _ ->
         (* here, the hash is used from auth *)
-        Config.get Auth config |> Mirage_crypto.Hash.digest_size
+        let module H = (val (Digestif.module_of_hash' (Config.get Auth config))) in
+        H.digest_size
     | `Tls_crypt _ ->
         (* AES_CTR and SHA256 *)
-        Mirage_crypto.Hash.SHA256.digest_size
+        Digestif.SHA256.digest_size
   in
   let pre = 1 (* key / op *) + if session.protocol = `Tcp then 2 else 0 in
   let hdr = Packet.hdr_len mac_len in
@@ -397,7 +401,7 @@ type server = {
   server_config : Config.t;
   is_not_taken : Ipaddr.V4.t -> bool;
   auth_user_pass : (user:string -> pass:string -> bool) option;
-  server_rng : int -> Cstruct.t;
+  server_rng : int -> string;
   server_ts : unit -> int64;
   server_now : unit -> Ptime.t;
 }

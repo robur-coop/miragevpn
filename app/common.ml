@@ -6,14 +6,15 @@ let safe_close fd =
   Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
 
 let write_to_fd fd data =
-  let rec w fd data =
-    if Cstruct.length data = 0 then Lwt_result.return ()
+  let len = String.length data in
+  let rec w fd data off =
+    if len = off then Lwt_result.return ()
     else
-      let* len = Lwt_cstruct.write fd data in
-      w fd (Cstruct.shift data len)
+      let* len = Lwt_unix.write fd (Bytes.unsafe_of_string data) off (len - off) in
+      w fd data (len + off)
   in
   Lwt.catch
-    (fun () -> w fd data)
+    (fun () -> w fd data 0)
     (fun e ->
       let+ () = safe_close fd in
       Error (`Msg (Fmt.str "TCP write error %a" Fmt.exn e)))
@@ -26,18 +27,17 @@ let read_from_fd fd =
       Lwt_unix.read fd buf 0 bufsize >>= fun count ->
       if count = 0 then failwith "end of file from server"
       else
-        let cs = Cstruct.of_bytes ~len:count buf in
         Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return cs)
+        Lwt.return (Bytes.sub_string buf 0 count))
   |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let transmit proto fd data =
   match proto with
   | `Tcp -> write_to_fd fd data
   | `Udp -> (
-      let* r = Lwt_result.catch (fun () -> Lwt_cstruct.write fd data) in
+      let* r = Lwt_result.catch (fun () -> Lwt_unix.write fd (Bytes.unsafe_of_string data) 0 (String.length data)) in
       match r with
-      | Ok len when Cstruct.length data <> len ->
+      | Ok len when String.length data <> len ->
           Lwt_result.fail (`Msg "wrote short UDP packet")
       | Ok _ -> Lwt_result.return ()
       | Error exn ->
@@ -45,8 +45,8 @@ let transmit proto fd data =
           Error (`Msg (Fmt.str "UDP write error %a" Fmt.exn exn)))
 
 let receive proto fd =
-  let buf = Cstruct.create_unsafe 2048 in
-  let* r = Lwt_result.catch (fun () -> Lwt_cstruct.recvfrom fd buf []) in
+  let buf = Bytes.create 2048 in
+  let* r = Lwt_result.catch (fun () -> Lwt_unix.recvfrom fd buf 0 (Bytes.length buf) []) in
   match (r, proto) with
   | Ok (0, _), `Tcp ->
       Logs.debug (fun m -> m "received end of file");
@@ -54,7 +54,7 @@ let receive proto fd =
       Lwt.return `Connection_failed
   | Ok (len, _), _ ->
       Logs.debug (fun m -> m "received %d bytes" len);
-      Lwt.return (`Data (Cstruct.sub buf 0 len))
+      Lwt.return (`Data (Bytes.sub_string buf 0 len))
   | Error exn, _ ->
       let* () = safe_close fd in
       (* XXX: emit `Connection_failed?! *)
@@ -65,8 +65,8 @@ let write_udp fd data =
   let open Lwt.Infix in
   Lwt.catch
     (fun () ->
-      let len = Cstruct.length data in
-      Lwt_unix.send fd (Cstruct.to_bytes data) 0 len [] >|= fun sent ->
+      let len = String.length data in
+      Lwt_unix.send fd (Bytes.unsafe_of_string data) 0 len [] >|= fun sent ->
       if sent <> len then
         Logs.warn (fun m ->
             m "UDP short write (length %d, written %d)" len sent);
@@ -82,9 +82,8 @@ let read_udp =
   fun fd ->
     Lwt_result.catch (fun () ->
         Lwt_unix.recvfrom fd buf 0 bufsize [] >>= fun (count, _sa) ->
-        let cs = Cstruct.of_bytes ~len:count buf in
         Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return (Some cs))
+        Lwt.return (Some (Bytes.sub_string buf 0 count)))
     |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let string_of_file ~dir filename =

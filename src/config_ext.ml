@@ -49,23 +49,29 @@ let tls_auth config =
   | None -> Error (`Msg "no tls auth payload in config")
   | Some (direction, _, hmac1, _, hmac2) ->
       let hmac_algorithm = Config.get Auth config in
-      let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+      let hmac_len =
+        let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
+        H.digest_size
+      in
       let a, b =
         match direction with
         | None -> (hmac1, hmac1)
         | Some `Incoming -> (hmac2, hmac1)
         | Some `Outgoing -> (hmac1, hmac2)
       in
-      let s cs = Cstruct.sub cs 0 hmac_len in
+      let s cs = String.sub cs 0 hmac_len in
       Ok { State.hmac_algorithm; my_hmac = s a; their_hmac = s b }
 
 let secret config =
   match Config.find Secret config with
   | None -> Error (`Msg "no pre-shared secret found")
   | Some (dir, key1, hmac1, key2, hmac2) -> (
-      let hmac_len = Mirage_crypto.Hash.digest_size (Config.get Auth config) in
-      let hm cs = Cstruct.sub cs 0 hmac_len
-      and cipher cs = Cstruct.sub cs 0 32 in
+      let hmac_len =
+        let module H = (val (Digestif.module_of_hash' (Config.get Auth config))) in
+        H.digest_size
+      in
+      let hm cs = String.sub cs 0 hmac_len
+      and cipher cs = String.sub cs 0 32 in
       match dir with
       | None -> Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
       | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)
@@ -104,9 +110,9 @@ let control_crypto config =
         let keys =
           State.AES_CBC
             {
-              my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+              my_key = Mirage_crypto.AES.CBC.of_secret my_key;
               my_hmac;
-              their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+              their_key = Mirage_crypto.AES.CBC.of_secret their_key;
               their_hmac;
             }
         in

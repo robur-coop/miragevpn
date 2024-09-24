@@ -6,7 +6,6 @@
  (libraries
   fmt
   logs
-  cstruct
   ptime
   decompress.lzo
   mirage-crypto
@@ -14,10 +13,11 @@
   x509
   duration
   angstrom
-  hex
+  ohex
   domain-name
   ipaddr
   gmap
   randomconv
-  base64)
+  base64
+  digestif)
  (wrapped true))

@@ -11,7 +11,7 @@
   tcpip.tcp
   tcpip.udp
   tcpip.ipv4
-  mirage-random
+  mirage-crypto-rng-mirage
   mirage-clock
   dns-client
   dns-client-mirage)

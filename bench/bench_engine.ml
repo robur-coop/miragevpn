@@ -10,10 +10,10 @@ let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
 
 let tls_auth =
   ( None,
-    Cstruct.create 64,
-    Cstruct.create 64,
-    Cstruct.create 64,
-    Cstruct.create 64 )
+    String.make 64 '\000',
+    String.make 64 '\000',
+    String.make 64 '\000',
+    String.make 64 '\000' )
 
 let key = X509.Private_key.generate ~bits:2048 `RSA
 
@@ -174,7 +174,7 @@ let ciphers = [ `AES_256_CBC; `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
 let test_send_data cipher =
   let staged =
     let established_client, _ = established cipher in
-    let data = Cstruct.create 1024 in
+    let data = String.make 1024 '\000' in
     Staged.stage @@ fun () ->
     match Miragevpn.outgoing established_client data with
     | Ok _ -> ()
@@ -185,7 +185,7 @@ let test_send_data cipher =
 let test_receive_data cipher =
   let staged =
     let established_client, established_server = established cipher in
-    let data = Cstruct.create 1024 in
+    let data = String.make 1024 '\000' in
     let pkt =
       match Miragevpn.outgoing established_server data with
       | Ok (_state, pkt) -> pkt
