@@ -40,6 +40,7 @@ depends: [
   "x509" {>= "1.0.0"}
   "duration"
   "randomconv" {>= "0.2.0"}
+  "digestif" {>= "1.2.0"}
   # app:
   "mirage-crypto-rng-lwt" {>= "1.0.0"}
   "mtime"
@@ -52,6 +53,7 @@ depends: [
   "tcpip" {>= "8.1.0"}
   "mirage-crypto-rng-mirage" {>= "1.0.0"}
   "mirage-clock" {>= "3.0.0"}
+  "cstruct" {>= "6.0.0"}
   # tooling:
   "cmdliner" { >= "1.1.0" }
   "hxd"
