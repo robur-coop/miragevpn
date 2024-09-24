@@ -277,8 +277,8 @@ let[@coverage off] pp ppf t =
   Fmt.pf ppf
     "linger %d@ state %a@ control crypto %a@ session %a@ active %a@ lame duck \
      %a@ last-rcvd %Lu@ last-sent %Lu"
-    (String.length t.linger) pp_state t.state pp_control_crypto
-    t.control_crypto pp_session t.session pp_channel t.channel
+    (String.length t.linger) pp_state t.state pp_control_crypto t.control_crypto
+    pp_session t.session pp_channel t.channel
     Fmt.(option ~none:(any "no") pp_channel)
     lame_duck t.last_received t.last_sent
 
@@ -295,7 +295,8 @@ let data_mtu config session =
       let ts = if static_key_mode then 4 (* timestamp *) else 0 in
       let block_size = Mirage_crypto.AES.CBC.block_size in
       let hmac =
-        let module H = (val (Digestif.module_of_hash' (Config.get Auth config))) in
+        let module H = (val Digestif.module_of_hash' (Config.get Auth config))
+        in
         H.digest_size
       in
       let not_yet_padded_payload =
@@ -337,7 +338,8 @@ let control_mtu config control_crypto session =
     match control_crypto with
     | `Tls_auth _ ->
         (* here, the hash is used from auth *)
-        let module H = (val (Digestif.module_of_hash' (Config.get Auth config))) in
+        let module H = (val Digestif.module_of_hash' (Config.get Auth config))
+        in
         H.digest_size
     | `Tls_crypt _ ->
         (* AES_CTR and SHA256 *)

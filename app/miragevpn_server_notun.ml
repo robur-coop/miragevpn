@@ -122,7 +122,9 @@ let handle_payload t dst source_ip data =
               subheader = Unused;
             }
         and ip' = { ip with src = fst t.ip; dst = ip.src } in
-        let payload = Cstruct.of_string data ~len:(min 28 (String.length data)) in
+        let payload =
+          Cstruct.of_string data ~len:(min 28 (String.length data))
+        in
         let data =
           Cstruct.append
             (Icmpv4_packet.Marshal.make_cstruct ~payload reply)

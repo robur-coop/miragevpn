@@ -359,7 +359,10 @@ let send_recv conn config ip_config _mtu routes =
                   Bytes.unsafe_to_string pre ^ pkt
               | Linux -> pkt
             in
-            Lwt_unix.write tun_fd (Bytes.unsafe_of_string pkt) 0 (String.length pkt) >|= ignore)
+            Lwt_unix.write tun_fd
+              (Bytes.unsafe_of_string pkt)
+              0 (String.length pkt)
+            >|= ignore)
           pkts
         >>= fun () -> process_incoming ()
       in
@@ -367,7 +370,8 @@ let send_recv conn config ip_config _mtu routes =
         let open Lwt_result.Infix in
         let buf = Bytes.create 1500 in
         (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
-        ( Lwt_unix.read tun_fd buf 0 (Bytes.length buf) |> Lwt_result.ok >|= fun len ->
+        ( Lwt_unix.read tun_fd buf 0 (Bytes.length buf) |> Lwt_result.ok
+        >|= fun len ->
           let start, len =
             match Lazy.force platform with
             | Linux -> (0, len)

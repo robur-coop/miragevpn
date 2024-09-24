@@ -257,19 +257,11 @@ module Conf_map = struct
     | Rport : int k
     | Script_security : int k
     | Secret
-        : ([ `Incoming | `Outgoing ] option
-          * string
-          * string
-          * string
-          * string)
+        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
           k
     | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth
-        : ([ `Incoming | `Outgoing ] option
-          * string
-          * string
-          * string
-          * string)
+        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
           k
     | Tls_cert : X509.Certificate.t k
     | Tls_mode : [ `Client | `Server ] k
@@ -559,8 +551,7 @@ module Conf_map = struct
       p () "ca [inline]\n<ca>\n%a</ca>" Fmt.(list ~sep:(any "\n") pp_x509) certs
     in
     let[@coverage off] pp_x509_private_key key =
-      p () "key [inline]\n<key>\n%s</key>"
-        (X509.Private_key.encode_pem key)
+      p () "key [inline]\n<key>\n%s</key>" (X509.Private_key.encode_pem key)
     in
     let[@coverage off] pp_tls_version ppf v =
       Fmt.string ppf
@@ -1163,8 +1154,7 @@ let inline_payload element =
            | _ -> false)
        <* (end_of_line <|> abort "Invalid hex character")
        >>= fun hex ->
-         try return (Ohex.decode hex)
-         with Invalid_argument msg -> abort msg )
+         try return (Ohex.decode hex) with Invalid_argument msg -> abort msg )
        (string "-----END OpenVPN Static key V1-----" *> a_newline
        <|> abort "Missing END mark")
   <* commit

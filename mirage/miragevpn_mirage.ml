@@ -150,7 +150,9 @@ struct
                 subheader = Unused;
               }
           and ip' = { ip with src = fst t.ip; dst = ip.src } in
-          let payload = Cstruct.of_string data ~len:(min 28 (String.length data)) in
+          let payload =
+            Cstruct.of_string data ~len:(min 28 (String.length data))
+          in
           let data =
             Cstruct.append
               (Icmpv4_packet.Marshal.make_cstruct ~payload reply)
@@ -210,7 +212,9 @@ struct
           rm ip;
           TCP.close flow
       | Ok (`Data cs) -> (
-          match Miragevpn.handle !client_state (`Data (Cstruct.to_string cs)) with
+          match
+            Miragevpn.handle !client_state (`Data (Cstruct.to_string cs))
+          with
           | Error msg ->
               Log.err (fun m ->
                   m "%a internal miragevpn error %a" pp_dst dst

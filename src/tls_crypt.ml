@@ -108,15 +108,12 @@ end = struct
   let to_octets t = t
 
   let cipher_key cs =
-    Mirage_crypto.AES.CTR.of_secret
-      (String.sub cs 0 len_of_secret_aes_ctr_key)
+    Mirage_crypto.AES.CTR.of_secret (String.sub cs 0 len_of_secret_aes_ctr_key)
 
   let hmac cs = String.sub cs 64 Digestif.SHA256.digest_size
   let equal = Eqaf.equal
   let generate ?g () = Mirage_crypto_rng.generate ?g 128
-
-  let to_base64 cs =
-    Base64.encode_string ~pad:true cs
+  let to_base64 cs = Base64.encode_string ~pad:true cs
 end
 
 module Metadata = struct
@@ -145,8 +142,7 @@ module Metadata = struct
   let of_octets cs =
     match String.get_uint8 cs 0 with
     | 0 ->
-        if String.length cs > 1 then
-          Ok (User String.(sub cs 1 (length cs - 1)))
+        if String.length cs > 1 then Ok (User String.(sub cs 1 (length cs - 1)))
         else error_msgf "Invalid user metadata"
     | 1 -> (
         if String.length cs <> 1 + 8 then
@@ -289,14 +285,16 @@ end = struct
       guard ~msg:"wKc too big" @@ fun () -> net_len <= _TLS_CRYPT_V2_MAX_WKC_LEN
     in
     let cut = String.length buf - net_len in
-    String.sub buf 0 cut, String.sub buf cut (String.length buf - cut)
+    (String.sub buf 0 cut, String.sub buf cut (String.length buf - cut))
 
   let wrap ~key:server_key key metadata =
     let a = Key.to_octets (Tls_crypt.server_key key) in
     let b = Key.to_octets (Tls_crypt.client_key key) in
     let metadata = Metadata.to_octets metadata in
     let net_len =
-      _TLS_CRYPT_V2_TAG_SIZE + List.fold_left ( + ) 0 (List.map String.length [ a; b; metadata ]) + 2
+      _TLS_CRYPT_V2_TAG_SIZE
+      + List.fold_left ( + ) 0 (List.map String.length [ a; b; metadata ])
+      + 2
     in
     let net_len =
       let cs = Bytes.create 2 in
@@ -305,7 +303,8 @@ end = struct
     in
     let tag =
       let key = Key.hmac server_key in
-      Digestif.SHA256.(to_raw_string (hmacv_string ~key [ net_len; a; b; metadata ]))
+      Digestif.SHA256.(
+        to_raw_string (hmacv_string ~key [ net_len; a; b; metadata ]))
     in
     let module AES_CTR = Mirage_crypto.AES.CTR in
     let ctr = AES_CTR.ctr_of_octets tag in
@@ -333,10 +332,10 @@ end = struct
     in
     let tag' =
       let key = Key.hmac server_key in
-      Digestif.SHA256.(to_raw_string
-                         (hmacv_string ~key
-                            [ (String.sub wkc (String.length wkc - 2) 2) ;
-                              key_and_metadata ]))
+      Digestif.SHA256.(
+        to_raw_string
+          (hmacv_string ~key
+             [ String.sub wkc (String.length wkc - 2) 2; key_and_metadata ]))
     in
     let* () =
       guard ~msg:"Client key authentication error" @@ fun () ->

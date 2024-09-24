@@ -50,7 +50,7 @@ let tls_auth config =
   | Some (direction, _, hmac1, _, hmac2) ->
       let hmac_algorithm = Config.get Auth config in
       let hmac_len =
-        let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
+        let module H = (val Digestif.module_of_hash' hmac_algorithm) in
         H.digest_size
       in
       let a, b =
@@ -67,11 +67,11 @@ let secret config =
   | None -> Error (`Msg "no pre-shared secret found")
   | Some (dir, key1, hmac1, key2, hmac2) -> (
       let hmac_len =
-        let module H = (val (Digestif.module_of_hash' (Config.get Auth config))) in
+        let module H = (val Digestif.module_of_hash' (Config.get Auth config))
+        in
         H.digest_size
       in
-      let hm cs = String.sub cs 0 hmac_len
-      and cipher cs = String.sub cs 0 32 in
+      let hm cs = String.sub cs 0 hmac_len and cipher cs = String.sub cs 0 32 in
       match dir with
       | None -> Ok (cipher key1, hm hmac1, cipher key1, hm hmac1)
       | Some `Incoming -> Ok (cipher key2, hm hmac2, cipher key1, hm hmac1)

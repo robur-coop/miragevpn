@@ -37,8 +37,7 @@ let a_inline_payload str =
   let cs = Ohex.decode (String.concat "" data) in
   if String.length cs = 256 then
     String.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
-  else
-    Alcotest.failf "wrong size %d, need exactly 256 bytes" (String.length cs)
+  else Alcotest.failf "wrong size %d, need exactly 256 bytes" (String.length cs)
 
 let string_of_file filename =
   let config_dir = "sample-configuration-files" in

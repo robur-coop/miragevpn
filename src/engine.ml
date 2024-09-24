@@ -53,7 +53,7 @@ let ptime_to_ts_exn now =
 
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } key
     (p : [< Packet.ack | Packet.control ]) =
-  let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
+  let module H = (val Digestif.module_of_hash' hmac_algorithm) in
   let hmac_len = H.digest_size in
   let buf, feeder = Packet.encode protocol hmac_len (key, p) in
   let hmac = H.(to_raw_string (hmaci_string ~key:my_hmac feeder)) in
@@ -376,7 +376,7 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
     match cipher with
     | `AES_256_CBC ->
         let hmac_len =
-          let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
+          let module H = (val Digestif.module_of_hash' hmac_algorithm) in
           H.digest_size
         in
         let my_key, my_hmac, their_key, their_hmac =
@@ -574,8 +574,7 @@ let push_request tls =
 let push_reply tls data =
   (* a trailing 0 byte.. (String.make 1 '\000') *)
   let repl =
-    String.concat ""
-      [ Packet.push_reply; data; String.make 1 '\000' ]
+    String.concat "" [ Packet.push_reply; data; String.make 1 '\000' ]
   in
   Option.to_result
     ~none:(`Msg "Tls.send application data failed for push request")
@@ -627,7 +626,7 @@ let incoming_control_client config rng session channel now op data =
                     Fmt.(list ~sep:(any "\n") X509.Certificate.pp)
                     ca);
               X509.Authenticator.chain_of_trust
-                (* ~allowed_hashes:Mirage_crypto.Hash.hashes *)
+              (* ~allowed_hashes:Mirage_crypto.Hash.hashes *)
                 ~time:(fun () -> Some now)
                 ca
           | _, Some fps ->
@@ -653,8 +652,10 @@ let incoming_control_client config rng session channel now op data =
         and ciphers = Config_ext.tls_ciphers config
         and version = Config_ext.tls_version config
         and peer_name = Config.find Verify_x509_name config in
-        match Tls.Config.client ?ciphers ?version ?peer_name ~certificates
-                ~authenticator () with
+        match
+          Tls.Config.client ?ciphers ?version ?peer_name ~certificates
+            ~authenticator ()
+        with
         | Error _ -> assert false
         | Ok tls_config -> Tls.Engine.client tls_config
       in
@@ -909,9 +910,10 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
             assert false
       in
       let tls_config =
-        match Tls.Config.server ?ciphers ?version
-                ~certificates:(`Single ([ server ], key))
-                ?authenticator ()
+        match
+          Tls.Config.server ?ciphers ?version
+            ~certificates:(`Single ([ server ], key))
+            ?authenticator ()
         with
         | Ok tls_cfg -> tls_cfg
         | Error _ -> assert false
@@ -935,8 +937,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let channel_st =
         if Tls.Engine.handshake_in_progress tls' then TLS_handshake tls'
         else
-          let random1, random2 = (rng 32, rng 32)
-          and pre_master = "" in
+          let random1, random2 = (rng 32, rng 32) and pre_master = "" in
           TLS_established (tls', { State.pre_master; random1; random2 })
       in
       let out =
@@ -1094,9 +1095,8 @@ let[@coverage off] pp_error ppf = function
       Fmt.pf ppf "mismatched my session id: expected %016LX, received %016LX"
         expected received
   | `Bad_mac (state, computed, received, data) ->
-      Fmt.pf ppf "bad mac: computed %a received %a data %a@ (state %a)"
-        Ohex.pp computed Ohex.pp received
-        (Ohex.pp_hexdump ()) data pp state
+      Fmt.pf ppf "bad mac: computed %a received %a data %a@ (state %a)" Ohex.pp
+        computed Ohex.pp received (Ohex.pp_hexdump ()) data pp state
   | `No_transition (channel, op, data) ->
       Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
         Packet.pp_operation op pp_channel channel (Ohex.pp_hexdump ()) data
@@ -1122,20 +1122,13 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let set_replay_id dest off =
-    Bytes.set_int32_be dest off ctx.my_replay_id
-  in
+  let set_replay_id dest off = Bytes.set_int32_be dest off ctx.my_replay_id in
   let aead (type key)
       (authenticate_encrypt_tag :
-        key:key ->
-        nonce:string ->
-        ?adata:string ->
-        string ->
-        string * string) (my_key : key) my_implicit_iv =
+        key:key -> nonce:string -> ?adata:string -> string -> string * string)
+      (my_key : key) my_implicit_iv =
     let nonce, replay_id =
-      let b =
-        Bytes.create (Packet.id_len + String.length my_implicit_iv)
-      in
+      let b = Bytes.create (Packet.id_len + String.length my_implicit_iv) in
       set_replay_id b 0;
       Bytes.blit_string my_implicit_iv 0 b 4 (String.length my_implicit_iv);
       (* We reuse the replay id part of the nonce to avoid another allocation *)
@@ -1143,9 +1136,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
     in
     let data =
       if compress then (
-        let b =
-          Bytes.create (Bool.to_int compress + String.length data)
-        in
+        let b = Bytes.create (Bool.to_int compress + String.length data) in
         (* 0xFA is "no compression" *)
         Bytes.set_uint8 b 0 0xfa;
         Bytes.blit_string data 0 b 1 (String.length data);
@@ -1157,11 +1148,16 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
     in
     let b =
       Bytes.create
-        (prefix_len + String.length replay_id + String.length tag + String.length enc)
+        (prefix_len + String.length replay_id + String.length tag
+       + String.length enc)
     in
     Bytes.blit_string replay_id 0 b prefix_len (String.length replay_id);
-    Bytes.blit_string tag 0 b (prefix_len + String.length replay_id) (String.length tag);
-    Bytes.blit_string enc 0 b (prefix_len + String.length replay_id + String.length tag) (String.length enc);
+    Bytes.blit_string tag 0 b
+      (prefix_len + String.length replay_id)
+      (String.length tag);
+    Bytes.blit_string enc 0 b
+      (prefix_len + String.length replay_id + String.length tag)
+      (String.length enc);
     b
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
@@ -1176,9 +1172,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
         let open Mirage_crypto in
         let hdr_len = 4 + if Option.is_some add_timestamp then 4 else 0 in
         let data =
-          let unpad_len =
-            hdr_len + Bool.to_int compress + String.length data
-          in
+          let unpad_len = hdr_len + Bool.to_int compress + String.length data in
           let pad_len =
             let l = unpad_len mod AES.CBC.block_size in
             AES.CBC.block_size - l
@@ -1198,13 +1192,21 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
         let iv = rng AES.CBC.block_size in
         let enc = AES.CBC.encrypt ~key:my_key ~iv data in
         let hmac =
-          let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
-          H.(to_raw_string (hmacv_string ~key:my_hmac [ iv ; enc ]))
+          let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+          H.(to_raw_string (hmacv_string ~key:my_hmac [ iv; enc ]))
         in
-        let b = Bytes.create (prefix_len + String.length hmac + String.length iv + String.length enc) in
+        let b =
+          Bytes.create
+            (prefix_len + String.length hmac + String.length iv
+           + String.length enc)
+        in
         Bytes.blit_string hmac 0 b prefix_len (String.length hmac);
-        Bytes.blit_string iv 0 b (prefix_len + String.length hmac) (String.length iv);
-        Bytes.blit_string enc 0 b (prefix_len + String.length hmac + String.length iv) (String.length enc);
+        Bytes.blit_string iv 0 b
+          (prefix_len + String.length hmac)
+          (String.length iv);
+        Bytes.blit_string enc 0 b
+          (prefix_len + String.length hmac + String.length iv)
+          (String.length enc);
         b
     | AES_GCM { my_key; my_implicit_iv; _ } ->
         aead Mirage_crypto.AES.GCM.authenticate_encrypt_tag my_key
@@ -1375,18 +1377,22 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
            ~add_timestamp is provided and true.
         *)
         let open Mirage_crypto in
-        let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
+        let module H = (val Digestif.module_of_hash' hmac_algorithm) in
         let hmac, data =
-          String.sub data 0 H.digest_size,
-          String.sub data H.digest_size (String.length data - H.digest_size)
+          ( String.sub data 0 H.digest_size,
+            String.sub data H.digest_size (String.length data - H.digest_size)
+          )
         in
-        let computed_hmac = H.(to_raw_string (hmac_string ~key:their_hmac data)) in
+        let computed_hmac =
+          H.(to_raw_string (hmac_string ~key:their_hmac data))
+        in
         let* () =
           guard (String.equal hmac computed_hmac) (err hmac computed_hmac)
         in
         let iv, data =
-          String.sub data 0 AES.CBC.block_size,
-          String.sub data AES.CBC.block_size (String.length data - AES.CBC.block_size)
+          ( String.sub data 0 AES.CBC.block_size,
+            String.sub data AES.CBC.block_size
+              (String.length data - AES.CBC.block_size) )
         in
         let dec = AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
@@ -1400,7 +1406,8 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         Log.debug (fun m ->
             m "received replay packet id is %lu" (String.get_int32_be dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad AES.CBC.block_size (String.sub dec hdr_len (String.length dec - hdr_len))
+        unpad AES.CBC.block_size
+          (String.sub dec hdr_len (String.length dec - hdr_len))
     | AES_GCM { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.AES.GCM.tag_size in
         let* () =
@@ -1409,14 +1416,15 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
         let replay_id, tag, payload =
-          String.sub data 0 Packet.id_len,
-          String.sub data Packet.id_len tag_len,
-          String.sub data (Packet.id_len + tag_len) (String.length data - Packet.id_len - tag_len)
+          ( String.sub data 0 Packet.id_len,
+            String.sub data Packet.id_len tag_len,
+            String.sub data (Packet.id_len + tag_len)
+              (String.length data - Packet.id_len - tag_len) )
         in
         let nonce = replay_id ^ their_implicit_iv in
         let plain =
-          Mirage_crypto.AES.GCM.authenticate_decrypt_tag
-            ~key:their_key ~nonce ~adata:replay_id ~tag payload
+          Mirage_crypto.AES.GCM.authenticate_decrypt_tag ~key:their_key ~nonce
+            ~adata:replay_id ~tag payload
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
@@ -1431,9 +1439,10 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
         let replay_id, tag, payload =
-          String.sub data 0 Packet.id_len,
-          String.sub data Packet.id_len tag_len,
-          String.sub data (Packet.id_len + tag_len) (String.length data - Packet.id_len - tag_len)
+          ( String.sub data 0 Packet.id_len,
+            String.sub data Packet.id_len tag_len,
+            String.sub data (Packet.id_len + tag_len)
+              (String.length data - Packet.id_len - tag_len) )
         in
         let nonce = replay_id ^ their_implicit_iv in
         let plain =
@@ -1492,14 +1501,15 @@ let split_control ~acks mtu outs =
                       else
                         let l = min mtu (String.length data) in
                         let data, rest =
-                          String.sub data 0 l,
-                          String.sub data l (String.length data - l)
+                          ( String.sub data 0 l,
+                            String.sub data l (String.length data - l) )
                         in
                         datas (data :: acc) rest
                     in
                     let data1, rdata =
-                      String.sub data 0 first_mtu,
-                      String.sub data first_mtu (String.length data - first_mtu)
+                      ( String.sub data 0 first_mtu,
+                        String.sub data first_mtu
+                          (String.length data - first_mtu) )
                     in
                     datas [ data1 ] rdata
                   else [ data ]
@@ -1571,12 +1581,9 @@ let maybe_add_wkc now mtu session tls_crypt needs_wkc key transport outs =
       let acks = bytes_of_acks transport in
       let l = min (mtu - acks - String.length wkc) (String.length data) in
       let data, data' =
-        String.sub data 0 l,
-        String.sub data l (String.length data - l)
+        (String.sub data 0 l, String.sub data l (String.length data - l))
       in
-      let rest =
-        if data' = "" then rest else (`Control, data') :: rest
-      in
+      let rest = if data' = "" then rest else (`Control, data') :: rest in
       let session, transport, header = header session transport now_ts in
       let transport, sn = next_sequence_number transport in
       let p = `Control (Packet.Control_wkc, (header, sn, data)) in
@@ -1698,13 +1705,9 @@ let validate_control state control_crypto op key payload =
   let open Result.Syntax in
   match control_crypto with
   | `Tls_auth { hmac_algorithm; their_hmac; _ } ->
-      let module H = (val (Digestif.module_of_hash' hmac_algorithm)) in
-      let hmac, tbs =
-        Packet.split_hmac H.digest_size op key payload
-      in
-      let computed_mac =
-        H.(to_raw_string (hmac_string ~key:their_hmac tbs))
-      in
+      let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+      let hmac, tbs = Packet.split_hmac H.digest_size op key payload in
+      let computed_mac = H.(to_raw_string (hmac_string ~key:their_hmac tbs)) in
       let* () =
         guard
           (Eqaf.equal computed_mac hmac)
@@ -1813,9 +1816,7 @@ let incoming state control_crypto buf =
                             (List.length out'));
                       (* each control needs to be acked! *)
                       let out' =
-                        match out' with
-                        | [] -> [ (`Ack, "") ]
-                        | xs -> xs
+                        match out' with [] -> [ (`Ack, "") ] | xs -> xs
                       in
                       (* now prepare outgoing packets *)
                       let state = { state with session } in
@@ -1961,7 +1962,8 @@ let new_connection server data =
               Packet.set_protocol buf `Tcp;
               Bytes.set_uint8 buf 2
                 (Packet.op_key Packet.Hard_reset_client_v3 key);
-              Bytes.blit_string actual_packet 0 buf 3 (String.length actual_packet);
+              Bytes.blit_string actual_packet 0 buf 3
+                (String.length actual_packet);
               Bytes.unsafe_to_string buf
             in
             let* tls_crypt, metadata =
@@ -2242,8 +2244,7 @@ let handle_static_client t s keys ev =
           and compress = t.session.compress
           and hmac_algorithm = Config.get Auth t.config in
           let rec process_one acc linger =
-            if String.length linger = 0 then
-              Ok ({ t with linger = "" }, acc)
+            if String.length linger = 0 then Ok ({ t with linger = "" }, acc)
             else
               match Packet.decode_protocol t.session.protocol linger with
               | Error `Partial -> Error `Partial

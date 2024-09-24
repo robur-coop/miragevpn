@@ -10,7 +10,9 @@ let write_to_fd fd data =
   let rec w fd data off =
     if len = off then Lwt_result.return ()
     else
-      let* len = Lwt_unix.write fd (Bytes.unsafe_of_string data) off (len - off) in
+      let* len =
+        Lwt_unix.write fd (Bytes.unsafe_of_string data) off (len - off)
+      in
       w fd data (len + off)
   in
   Lwt.catch
@@ -26,16 +28,20 @@ let read_from_fd fd =
       let buf = Bytes.create bufsize in
       Lwt_unix.read fd buf 0 bufsize >>= fun count ->
       if count = 0 then failwith "end of file from server"
-      else
-        Logs.debug (fun m -> m "read %d bytes" count);
-        Lwt.return (Bytes.sub_string buf 0 count))
+      else Logs.debug (fun m -> m "read %d bytes" count);
+      Lwt.return (Bytes.sub_string buf 0 count))
   |> Lwt_result.map_error (fun e -> `Msg (Printexc.to_string e))
 
 let transmit proto fd data =
   match proto with
   | `Tcp -> write_to_fd fd data
   | `Udp -> (
-      let* r = Lwt_result.catch (fun () -> Lwt_unix.write fd (Bytes.unsafe_of_string data) 0 (String.length data)) in
+      let* r =
+        Lwt_result.catch (fun () ->
+            Lwt_unix.write fd
+              (Bytes.unsafe_of_string data)
+              0 (String.length data))
+      in
       match r with
       | Ok len when String.length data <> len ->
           Lwt_result.fail (`Msg "wrote short UDP packet")
@@ -46,7 +52,10 @@ let transmit proto fd data =
 
 let receive proto fd =
   let buf = Bytes.create 2048 in
-  let* r = Lwt_result.catch (fun () -> Lwt_unix.recvfrom fd buf 0 (Bytes.length buf) []) in
+  let* r =
+    Lwt_result.catch (fun () ->
+        Lwt_unix.recvfrom fd buf 0 (Bytes.length buf) [])
+  in
   match (r, proto) with
   | Ok (0, _), `Tcp ->
       Logs.debug (fun m -> m "received end of file");

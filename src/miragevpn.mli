@@ -143,19 +143,11 @@ module Config : sig
     | Rport : int k
     | Script_security : int k
     | Secret
-        : ([ `Incoming | `Outgoing ] option
-          * string
-          * string
-          * string
-          * string)
+        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
           k
     | Server : Ipaddr.V4.Prefix.t k
     | Tls_auth
-        : ([ `Incoming | `Outgoing ] option
-          * string
-          * string
-          * string
-          * string)
+        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
           k
     | Tls_cert : X509.Certificate.t k
     | Tls_mode : [ `Client | `Server ] k
@@ -326,9 +318,7 @@ val pp_error : error Fmt.t
 (** [pp_error ppf e] pretty prints the error [e]. *)
 
 val handle :
-  t ->
-  event ->
-  (t * string list * string list * action option, error) result
+  t -> event -> (t * string list * string list * action option, error) result
 (** [handle t event] handles the [event] with the state [t]. The return value is
     the new state, a list of packets to transmit to the other peer, a list of
     payloads to foward to the application, and maybe an action to handle. *)

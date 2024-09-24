@@ -121,7 +121,9 @@ let encode_header hmac_len buf off hdr =
   (* Cstruct.blit hdr.hmac 0 buf 8 hmac_len; *)
   Bytes.set_int32_be buf (off + hmac_len + 8) hdr.replay_id;
   Bytes.set_int32_be buf (off + hmac_len + 12) hdr.timestamp;
-  Bytes.set_uint8 buf (off + hmac_len + 16) (List.length hdr.ack_sequence_numbers);
+  Bytes.set_uint8 buf
+    (off + hmac_len + 16)
+    (List.length hdr.ack_sequence_numbers);
   List.iteri
     (fun i v -> Bytes.set_int32_be buf (off + hmac_len + 17 + (i * id_len)) v)
     hdr.ack_sequence_numbers;
@@ -172,7 +174,8 @@ let decode_protocol proto buf =
       let* () = guard (String.length buf >= 2) `Tcp_partial in
       let plen = String.get_uint16_be buf 0 in
       let+ () = guard (String.length buf - 2 >= plen) `Tcp_partial in
-      (String.sub buf 2 plen, String.sub buf (plen + 2) (String.length buf - plen - 2))
+      ( String.sub buf 2 plen,
+        String.sub buf (plen + 2) (String.length buf - plen - 2) )
   | `Udp -> Ok (buf, "")
 
 let decode_key_op proto buf =
@@ -251,7 +254,10 @@ let encode proto hmac_len
     (* op_key ++ local_session *)
     feed (Bytes.sub_string buf (protocol_len proto) 9);
     (* ack_len ++ acks ++ remote_session ++ sequence_number ++ payload *)
-    feed (Bytes.sub_string buf (to_encode + hmac_len + 16) (len - to_encode - hmac_len - 16))
+    feed
+      (Bytes.sub_string buf
+         (to_encode + hmac_len + 16)
+         (len - to_encode - hmac_len - 16))
   in
   (buf, feeder)
 
@@ -302,7 +308,9 @@ module Tls_crypt = struct
     Bytes.set_int32_be buf (off + 12) hdr.timestamp;
     (* hmac is set later using [Tls_crypt.set_hmac] *)
     (* Cstruct.blit hdr.hmac 0 buf 16 hmac_len; *)
-    Bytes.set_uint8 buf (off + 16 + hmac_len) (List.length hdr.ack_sequence_numbers);
+    Bytes.set_uint8 buf
+      (off + 16 + hmac_len)
+      (List.length hdr.ack_sequence_numbers);
     List.iteri
       (fun i v -> Bytes.set_int32_be buf (off + hmac_len + 17 + (i * id_len)) v)
       hdr.ack_sequence_numbers;
@@ -367,8 +375,7 @@ module Tls_crypt = struct
     in
     let ack_sequence_numbers = List.init arr_len ack_sequence_number in
     let remote_session =
-      if rs_len > 0 then
-        Some (String.get_int64_be buf (1 + (id_len * arr_len)))
+      if rs_len > 0 then Some (String.get_int64_be buf (1 + (id_len * arr_len)))
       else None
     in
     let { local_session; replay_id; timestamp; _ } = clear_hdr in
@@ -572,16 +579,18 @@ let decode_tls_data ?(with_premaster = false) buf =
         if String.length buf <= peer_info_start + 2 then Ok None
         else
           let len = String.get_uint16_be buf peer_info_start in
-          let* () = guard (String.length buf - peer_info_start - 2 >= len) `Partial in
+          let* () =
+            guard (String.length buf - peer_info_start - 2 >= len) `Partial
+          in
           let data = String.sub buf (peer_info_start + 2) len in
           if String.length buf - peer_info_start - 2 > len then
             Log.warn (fun m ->
-                m "slack at end of tls_data:@.%a"
-                  (Ohex.pp_hexdump ())
-                  (String.sub buf (peer_info_start + 2 + len)
+                m "slack at end of tls_data:@.%a" (Ohex.pp_hexdump ())
+                  (String.sub buf
+                     (peer_info_start + 2 + len)
                      (String.length buf - peer_info_start - 2 - len)))
             [@coverage off];
-            Ok (if len = 0 then None else Some data)
+          Ok (if len = 0 then None else Some data)
       in
       (user_pass, Option.map (String.split_on_char '\n') peer_info)
   in
@@ -616,8 +625,11 @@ let decode_early_negotiation_tlvs data =
       if typ = 0x0001 (* EARLY_NEG_FLAGS *) then
         let* () = guard (len = 2) (`Malformed "Bad EARLY_NEG_FLAGS") in
         let flags = String.get_uint16_be data 4 in
-        go (acc || flags = 0x0001 (* RESEND_WKC *)) (String.sub data 6 (String.length data - 6))
-      else (* skip *)
+        go
+          (acc || flags = 0x0001 (* RESEND_WKC *))
+          (String.sub data 6 (String.length data - 6))
+      else
+        (* skip *)
         go acc (String.sub data (4 + len) (String.length data - 4 - len))
   in
   go false data
