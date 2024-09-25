@@ -33,6 +33,7 @@ module Client_router
 
   val mtu : t -> int
   val get_ip : t -> Ipaddr.V4.t
+  val configured_ips : t -> Ipaddr.V4.Prefix.t list
 
   val connect :
     Miragevpn.Config.t -> S.t -> (t, [ `Msg of string ]) result Lwt.t
