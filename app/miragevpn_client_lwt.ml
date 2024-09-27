@@ -353,10 +353,7 @@ let send_recv conn config ip_config _mtu routes =
             (* on FreeBSD, the tun read is prepended with a 4 byte protocol (AF_INET) *)
             let pkt =
               match Lazy.force platform with
-              | FreeBSD ->
-                  let pre = "\000\000\000\002" in
-                  Bytes.set_uint8 pre 3 2;
-                  Bytes.unsafe_to_string pre ^ pkt
+              | FreeBSD -> "\000\000\000\002" ^ pkt
               | Linux -> pkt
             in
             Lwt_unix.write tun_fd
