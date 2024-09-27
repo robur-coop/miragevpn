@@ -632,8 +632,8 @@ let incoming_control_client config rng session channel now op data =
           | _, Some fps ->
               Log.info (fun m ->
                   m "authenticating with fingerprints %a"
-                    Fmt.(list ~sep:(any "\n") string)
-                    (List.map Ohex.encode fps));
+                    Fmt.(list ~sep:(any "\n") (of_to_string Ohex.encode))
+                    fps);
               fun ?ip ~host chain ->
                 List.fold_left
                   (fun acc fingerprint ->
