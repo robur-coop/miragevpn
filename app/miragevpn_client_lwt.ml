@@ -354,7 +354,7 @@ let send_recv conn config ip_config _mtu routes =
             let pkt =
               match Lazy.force platform with
               | FreeBSD ->
-                  let pre = Bytes.create 4 in
+                  let pre = "\000\000\000\002" in
                   Bytes.set_uint8 pre 3 2;
                   Bytes.unsafe_to_string pre ^ pkt
               | Linux -> pkt
