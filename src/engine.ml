@@ -1132,13 +1132,8 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
       (Bytes.unsafe_to_string b, Bytes.sub_string b 0 4)
     in
     let data =
-      if compress then (
-        let b = Bytes.create (Bool.to_int compress + String.length data) in
-        (* 0xFA is "no compression" *)
-        Bytes.set_uint8 b 0 0xfa;
-        Bytes.blit_string data 0 b 1 (String.length data);
-        Bytes.unsafe_to_string b)
-      else data
+      if compress then (* 0xFA is "no compression" *)
+        "\xfa" ^ data else data
     in
     let enc, tag =
       authenticate_encrypt_tag ~key:my_key ~nonce ~adata:replay_id data
