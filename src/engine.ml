@@ -1108,11 +1108,11 @@ let[@coverage off] pp_error ppf = function
         actual
   | `Msg msg -> Fmt.string ppf msg
 
-let unpad block_size cs =
-  let l = String.length cs in
-  let amount = String.get_uint8 cs (pred l) in
+let unpad block_size cs off =
+  let l = String.length cs - off in
+  let amount = String.get_uint8 cs (off + pred l) in
   let len = l - amount in
-  if len >= 0 && amount <= block_size then Ok (String.sub cs 0 len)
+  if len >= 0 && amount <= block_size then Ok (String.sub cs off len)
   else Error (`Msg "bad padding")
 
 let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
@@ -1370,23 +1370,23 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         *)
         let open Mirage_crypto in
         let module H = (val Digestif.module_of_hash' hmac_algorithm) in
-        let hmac, data =
-          ( String.sub data 0 H.digest_size,
-            String.sub data H.digest_size (String.length data - H.digest_size)
-          )
+        let hmac, off =
+          (H.of_raw_string (String.sub data 0 H.digest_size), H.digest_size)
         in
-        let computed_hmac =
-          H.(to_raw_string (hmac_string ~key:their_hmac data))
-        in
+        let computed_hmac = H.(hmac_string ~off ~key:their_hmac data) in
         let* () =
-          guard (String.equal hmac computed_hmac) (err hmac computed_hmac)
+          guard
+            (H.equal hmac computed_hmac)
+            (err (H.to_raw_string hmac) (H.to_raw_string computed_hmac))
         in
-        let iv, data =
-          ( String.sub data 0 AES.CBC.block_size,
-            String.sub data AES.CBC.block_size
-              (String.length data - AES.CBC.block_size) )
+        let iv, off =
+          (String.sub data off AES.CBC.block_size, off + AES.CBC.block_size)
         in
-        let dec = AES.CBC.decrypt ~key:their_key ~iv data in
+        let l = String.length data - off in
+        let dec = Bytes.create l in
+        AES.CBC.decrypt_into ~key:their_key ~iv data ~src_off:off dec ~dst_off:0
+          l;
+        let dec = Bytes.unsafe_to_string dec in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
         let* () =
@@ -1398,8 +1398,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         Log.debug (fun m ->
             m "received replay packet id is %lu" (String.get_int32_be dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad AES.CBC.block_size
-          (String.sub dec hdr_len (String.length dec - hdr_len))
+        unpad AES.CBC.block_size dec off
     | AES_GCM { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.AES.GCM.tag_size in
         let* () =
@@ -1407,22 +1406,24 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (String.length data >= Packet.id_len + tag_len)
             (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
-        let replay_id, tag, payload =
+        let replay_id, tag_off, off =
           ( String.sub data 0 Packet.id_len,
-            String.sub data Packet.id_len tag_len,
-            String.sub data (Packet.id_len + tag_len)
-              (String.length data - Packet.id_len - tag_len) )
+            Packet.id_len,
+            Packet.id_len + tag_len )
         in
         let nonce = replay_id ^ their_implicit_iv in
-        let plain =
-          Mirage_crypto.AES.GCM.authenticate_decrypt_tag ~key:their_key ~nonce
-            ~adata:replay_id ~tag payload
+        let plain = Bytes.create (String.length data - off) in
+        let valid =
+          Mirage_crypto.AES.GCM.authenticate_decrypt_into ~key:their_key ~nonce
+            ~adata:replay_id data ~src_off:off ~tag_off plain ~dst_off:0
+            (String.length data - off)
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
             m "received replay packet id is %lu"
               (String.get_int32_be replay_id 0));
-        Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
+        if valid then Ok (Bytes.unsafe_to_string plain)
+        else Error (`Msg "AEAD decrypt failed")
     | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.Chacha20.tag_size in
         let* () =
@@ -1430,22 +1431,24 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
             (String.length data >= Packet.id_len + tag_len)
             (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
-        let replay_id, tag, payload =
+        let replay_id, tag_off, off =
           ( String.sub data 0 Packet.id_len,
-            String.sub data Packet.id_len tag_len,
-            String.sub data (Packet.id_len + tag_len)
-              (String.length data - Packet.id_len - tag_len) )
+            Packet.id_len,
+            Packet.id_len + tag_len )
         in
         let nonce = replay_id ^ their_implicit_iv in
-        let plain =
-          Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
-            ~adata:replay_id ~tag payload
+        let plain = Bytes.create (String.length data - off) in
+        let valid =
+          Mirage_crypto.Chacha20.authenticate_decrypt_into ~key:their_key ~nonce
+            ~adata:replay_id data ~src_off:off ~tag_off plain ~dst_off:0
+            (String.length data - off)
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
             m "received replay packet id is %lu"
               (String.get_int32_be replay_id 0));
-        Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
+        if valid then Ok (Bytes.unsafe_to_string plain)
+        else Error (`Msg "AEAD decrypt failed")
   in
   let+ data' =
     if compress then
@@ -1876,7 +1879,8 @@ let incoming state control_crypto buf =
         if linger = "" then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let r = multi (state.linger ^ buf) (state, [], [], None) in
+  let buf = if state.linger = "" then buf else state.linger ^ buf in
+  let r = multi buf (state, [], [], None) in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
