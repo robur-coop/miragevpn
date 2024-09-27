@@ -525,8 +525,8 @@ module Conf_map = struct
         "# CN: %S\n\
          # Expiry: %a\n\
          # Hosts: %a\n\
-         # Cert fingerprint (sha256): %a\n\
-         # Key fingerprint (sha256): %a\n\
+         # Cert fingerprint (sha256): %s\n\
+         # Key fingerprint (sha256): %s\n\
          %s"
         (match
            X509.(Distinguished_name.common_name (Certificate.subject cert))
@@ -537,11 +537,10 @@ module Conf_map = struct
         (X509.Certificate.validity cert)
         X509.Host.Set.pp
         (X509.Certificate.hostnames cert)
-        Ohex.pp
-        (X509.Certificate.fingerprint `SHA256 cert)
-        Ohex.pp
-        (X509.Public_key.fingerprint ~hash:`SHA256
-           (X509.Certificate.public_key cert))
+        (Ohex.encode (X509.Certificate.fingerprint `SHA256 cert))
+        (Ohex.encode
+           (X509.Public_key.fingerprint ~hash:`SHA256
+              (X509.Certificate.public_key cert)))
         (X509.Certificate.encode_pem cert)
     in
     let[@coverage off] pp_cert cert =
