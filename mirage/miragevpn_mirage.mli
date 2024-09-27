@@ -6,7 +6,7 @@
     - established ++ read on connection -> handle + forward/write to destination
 *)
 module Server
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)
@@ -24,7 +24,7 @@ module Server
 end
 
 module Client_router
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)
@@ -33,6 +33,7 @@ module Client_router
 
   val mtu : t -> int
   val get_ip : t -> Ipaddr.V4.t
+  val configured_ips : t -> Ipaddr.V4.Prefix.t list
 
   val connect :
     Miragevpn.Config.t -> S.t -> (t, [ `Msg of string ]) result Lwt.t
@@ -44,7 +45,7 @@ module Client_router
 end
 
 module Client_stack
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)

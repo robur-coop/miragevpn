@@ -7,19 +7,19 @@ end
 
 let a_ca_payload str =
   let open Miragevpn.Config in
-  match X509.Certificate.decode_pem_multiple (Cstruct.of_string str) with
+  match X509.Certificate.decode_pem_multiple str with
   | Ok certs -> B (Ca, certs)
   | Error (`Msg msg) -> Alcotest.failf "ca: invalid certificate(s): %s" msg
 
 let a_cert_payload str =
   let open Miragevpn.Config in
-  match X509.Certificate.decode_pem (Cstruct.of_string str) with
+  match X509.Certificate.decode_pem str with
   | Ok cert -> B (Tls_cert, cert)
   | Error (`Msg msg) -> Alcotest.failf "cert: invalid certificate: %s" msg
 
 let a_key_payload str =
   let open Miragevpn.Config in
-  match X509.Private_key.decode_pem (Cstruct.of_string str) with
+  match X509.Private_key.decode_pem str with
   | Ok key -> B (Tls_key, key)
   | Error (`Msg msg) -> Alcotest.failf "no key found in x509 tls-key %s" msg
 
@@ -34,11 +34,10 @@ let a_inline_payload str =
         else content acc false tl
   in
   let data = content [] false (String.split_on_char '\n' str) in
-  let cs = Cstruct.of_hex (String.concat "" data) in
-  if Cstruct.length cs = 256 then
-    Cstruct.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
-  else
-    Alcotest.failf "wrong size %d, need exactly 256 bytes" (Cstruct.length cs)
+  let cs = Ohex.decode (String.concat "" data) in
+  if String.length cs = 256 then
+    String.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
+  else Alcotest.failf "wrong size %d, need exactly 256 bytes" (String.length cs)
 
 let string_of_file filename =
   let config_dir = "sample-configuration-files" in
@@ -115,10 +114,10 @@ let tls_auth_config =
   minimal_config
   |> Miragevpn.Config.add Tls_auth
        ( None,
-         Cstruct.create 64,
-         Cstruct.create 64,
-         Cstruct.create 64,
-         Cstruct.create 64 )
+         String.make 64 '\000',
+         String.make 64 '\000',
+         String.make 64 '\000',
+         String.make 64 '\000' )
 
 let ok_minimal_client () =
   (* verify that we can parse a minimal good config. *)
@@ -403,10 +402,10 @@ let key_direction () =
   let expected =
     Miragevpn.Config.add Tls_auth
       ( Some `Incoming,
-        Cstruct.create 64,
-        Cstruct.create 64,
-        Cstruct.create 64,
-        Cstruct.create 64 )
+        String.make 64 '\000',
+        String.make 64 '\000',
+        String.make 64 '\000',
+        String.make 64 '\000' )
       tls_auth_config
   in
   let with_key_direction =
@@ -616,8 +615,7 @@ let ipredator_conf =
   let ca =
     match
       X509.Certificate.decode_pem
-      @@ Cstruct.of_string
-           {|
+      @@ {|
 -----BEGIN CERTIFICATE-----
 MIIFJzCCBA+gAwIBAgIJAKee4ZMMpvhzMA0GCSqGSIb3DQEBBQUAMIG9MQswCQYD
 VQQGEwJTRTESMBAGA1UECBMJQnJ5Z2dsYW5kMQ8wDQYDVQQHEwZPZWxkYWwxJDAi

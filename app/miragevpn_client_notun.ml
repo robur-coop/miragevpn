@@ -33,16 +33,13 @@ let resolve (name, ip_version) =
       | Ok ip -> `Resolved (Ipaddr.V6 ip))
 
 type action =
-  [ Miragevpn.action
-  | `Suspend
-  | `Transmit of Cstruct.t
-  | `Payload of Cstruct.t ]
+  [ Miragevpn.action | `Suspend | `Transmit of string | `Payload of string ]
 
 let pp_action ppf = function
   | #Miragevpn.action as action -> Miragevpn.pp_action ppf action
   | `Suspend -> Fmt.pf ppf "suspend"
-  | `Transmit data -> Fmt.pf ppf "transmit %u bytes" (Cstruct.length data)
-  | `Payload data -> Fmt.pf ppf "payload %u bytes" (Cstruct.length data)
+  | `Transmit data -> Fmt.pf ppf "transmit %u bytes" (String.length data)
+  | `Payload data -> Fmt.pf ppf "payload %u bytes" (String.length data)
 
 let event k (tick : [ `Tick ] Lwt.t) client actions ev =
   Logs.debug (fun m -> m "event %a" Miragevpn.pp_event ev);
@@ -95,9 +92,11 @@ let send_ping ({ ip_config; seq_no; mtu = _; ping = _ } as ifconfig) =
       ~payload_len:(Cstruct.lenv [ icmpv4_hdr; payload ])
       ipv4_hdr
   in
-  (ifconfig, Cstruct.concat [ ipv4_hdr; icmpv4_hdr; payload ])
+  ( ifconfig,
+    Cstruct.to_string (Cstruct.concat [ ipv4_hdr; icmpv4_hdr; payload ]) )
 
 let pong { ip_config; _ } buf =
+  let buf = Cstruct.of_string buf in
   let ( let* ) = Result.bind and ( let+ ) = Fun.flip Result.map in
   let* ipv4_hdr, off = Ipv4_packet.Unmarshal.header_of_cstruct buf in
   let buf = Cstruct.shift buf off in
@@ -231,7 +230,7 @@ and connected_action test proto fd incoming tick client actions =
       let* ev =
         Lwt.choose
           [
-            (tick :> [ `Tick | `Data of Cstruct.t | `Connection_failed ] Lwt.t);
+            (tick :> [ `Tick | `Data of string | `Connection_failed ] Lwt.t);
             incoming;
           ]
       in

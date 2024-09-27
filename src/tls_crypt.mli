@@ -1,11 +1,10 @@
 module Key : sig
   type t
 
-  val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
-  val unsafe_to_cstruct : t -> Cstruct.t
-  val to_string : t -> string
-  val cipher_key : t -> Mirage_crypto.Cipher_block.AES.CTR.key
-  val hmac : t -> Cstruct.t
+  val of_octets : string -> (t, [> `Msg of string ]) result
+  val to_octets : t -> string
+  val cipher_key : t -> Mirage_crypto.AES.CTR.key
+  val hmac : t -> string
   val equal : t -> t -> bool
   val generate : ?g:Mirage_crypto_rng.g -> unit -> t
   val to_base64 : t -> string
@@ -18,8 +17,8 @@ module Metadata : sig
 
   val timestamp : Ptime.t -> t
   val user : string -> t
-  val to_cstruct : t -> Cstruct.t
-  val of_cstruct : Cstruct.t -> (t, [> `Msg of string ]) result
+  val to_octets : t -> string
+  val of_octets : string -> (t, [> `Msg of string ]) result
   val pp_hum : t Fmt.t
 end
 
@@ -37,13 +36,13 @@ module Wrapped_key : sig
   type tls_crypt := t
   type t
 
-  val of_cstruct : Cstruct.t -> (Cstruct.t * t, [> `Msg of string ]) result
+  val of_octets : string -> (string * t, [> `Msg of string ]) result
   val wrap : key:V2_server.t -> tls_crypt -> Metadata.t -> t
 
   val unwrap :
     key:V2_server.t -> t -> (tls_crypt * Metadata.t, [> `Msg of string ]) result
 
-  val unsafe_to_cstruct : t -> Cstruct.t
+  val to_octets : t -> string
   val equal : t -> t -> bool
 end
 

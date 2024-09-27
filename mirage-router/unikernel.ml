@@ -46,7 +46,7 @@ module K = struct
 end
 
 module Main
-    (R : Mirage_random.S)
+    (R : Mirage_crypto_rng_mirage.S)
     (M : Mirage_clock.MCLOCK)
     (P : Mirage_clock.PCLOCK)
     (T : Mirage_time.S)
@@ -54,7 +54,7 @@ module Main
     (N : Mirage_net.S)
     (E : Ethernet.S)
     (A : Arp.S)
-    (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t)
+    (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t and type prefix = Ipaddr.V4.Prefix.t)
     (B : Mirage_block.S) =
 struct
   module O = Miragevpn_mirage.Client_router (R) (M) (P) (T) (S)
@@ -267,7 +267,9 @@ struct
         Lwt.return_unit
 
     let add_rule t table packet =
-      let public_ip = O.get_ip t.ovpn in
+      let public_ip =
+        Ipaddr.V4.Prefix.address (List.hd (O.configured_ips t.ovpn))
+      in
       match
         Mirage_nat_lru.add table packet public_ip
           (fun () -> Some (Randomconv.int16 R.generate)) `NAT
@@ -453,7 +455,7 @@ struct
                             {
                               hdr with
                               Ipv4_packet.ttl = 255;
-                              src = List.hd (I.get_ip t.private_ip);
+                              src = Ipaddr.V4.Prefix.address (List.hd (I.configured_ips t.private_ip));
                               (* or which ip should be used? *)
                               dst = hdr.Ipv4_packet.src;
                               proto = Ipv4_packet.Marshal.protocol_to_int `ICMP;

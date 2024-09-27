@@ -4,7 +4,7 @@
  (modules common)
  (libraries
   lwt
-  cstruct-lwt
+  lwt.unix
   fmt
   logs
   logs.fmt
@@ -31,8 +31,7 @@
   dns-client-lwt
   mirage-crypto-rng-lwt
   mtime.clock.os
-  tuntap
-  cstruct-lwt))
+  tuntap))
 
 (executable
  (name miragevpn_client_notun)
@@ -50,7 +49,6 @@
   dns-client-lwt
   mirage-crypto-rng-lwt
   mtime.clock.os
-  cstruct-lwt
   tcpip
   tcpip.icmpv4
   tcpip.ipv4))
@@ -91,7 +89,6 @@
   dns-client-lwt
   mirage-crypto-rng-lwt
   mtime.clock.os
-  cstruct-lwt
   tcpip
   tcpip.icmpv4
   tcpip.ipv4))

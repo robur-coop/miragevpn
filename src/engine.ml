@@ -53,11 +53,12 @@ let ptime_to_ts_exn now =
 
 let hmac_and_out protocol { hmac_algorithm; my_hmac; _ } key
     (p : [< Packet.ack | Packet.control ]) =
-  let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+  let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+  let hmac_len = H.digest_size in
   let buf, feeder = Packet.encode protocol hmac_len (key, p) in
-  let hmac = Mirage_crypto.Hash.maci hmac_algorithm ~key:my_hmac feeder in
+  let hmac = H.(to_raw_string (hmaci_string ~key:my_hmac feeder)) in
   Packet.set_hmac buf protocol hmac;
-  buf
+  Bytes.unsafe_to_string buf
 
 let encrypt_and_out protocol { my; _ } key
     (p : [< Packet.ack | Packet.control ]) =
@@ -66,16 +67,18 @@ let encrypt_and_out protocol { my; _ } key
   let buf, enc_off, enc_len, feeder =
     Packet.Tls_crypt.encode protocol (key, p)
   in
-  let hmac = Mirage_crypto.Hash.SHA256.hmaci ~key:my_hmac feeder in
-  let iv = Cstruct.sub hmac 0 16 in
-  let ctr = Mirage_crypto.Cipher_block.AES.CTR.ctr_of_cstruct iv in
+  let hmac =
+    Digestif.SHA256.(to_raw_string (hmaci_string ~key:my_hmac feeder))
+  in
+  let iv = String.sub hmac 0 16 in
+  let ctr = Mirage_crypto.AES.CTR.ctr_of_octets iv in
   Packet.Tls_crypt.set_hmac buf protocol hmac;
   let encrypted =
-    Mirage_crypto.Cipher_block.AES.CTR.encrypt ~key:my_key ~ctr
-      (Cstruct_ext.sub buf enc_off enc_len)
+    Mirage_crypto.AES.CTR.encrypt ~key:my_key ~ctr
+      (if Bytes.length buf = 0 then "" else Bytes.sub_string buf enc_off enc_len)
   in
-  Cstruct.blit encrypted 0 buf enc_off enc_len;
-  buf
+  Bytes.blit_string encrypted 0 buf enc_off enc_len;
+  Bytes.unsafe_to_string buf
 
 let wrap_and_out protocol control_crypto key p =
   match control_crypto with
@@ -129,7 +132,7 @@ let client ?pkcs12_password config ts now rng =
               List.partition
                 (fun cert ->
                   let cert_pubkey = X509.Certificate.public_key cert in
-                  Cstruct.equal (X509.Public_key.fingerprint cert_pubkey) key_fp)
+                  String.equal (X509.Public_key.fingerprint cert_pubkey) key_fp)
                 certs
             with
             | [ cert ], extra_certs ->
@@ -180,7 +183,7 @@ let client ?pkcs12_password config ts now rng =
       auth_user_pass = None;
       state = Client state;
       control_crypto;
-      linger = Cstruct.empty;
+      linger = "";
       rng;
       ts;
       now;
@@ -234,16 +237,16 @@ let[@coverage off] pp_tls_error ppf = function
 
 let prf ?sids ~label ~secret ~client_random ~server_random len =
   let sids =
-    Option.value ~default:Cstruct.empty
+    Option.value ~default:""
       (Option.map
          (fun (c, s) ->
-           let buf = Cstruct.create_unsafe 16 in
-           Cstruct.BE.set_uint64 buf 0 c;
-           Cstruct.BE.set_uint64 buf 8 s;
-           buf)
+           let buf = Bytes.create 16 in
+           Bytes.set_int64_be buf 0 c;
+           Bytes.set_int64_be buf 8 s;
+           Bytes.unsafe_to_string buf)
          sids)
   in
-  let seed = Cstruct.concat [ client_random; server_random; sids ] in
+  let seed = String.concat "" [ client_random; server_random; sids ] in
   Tls.Handshake_crypto.pseudo_random_function `TLS_1_0
     `RSA_WITH_AES_256_GCM_SHA384 (* cipher, does not matter for TLS 1.0 *) len
     secret label seed
@@ -251,7 +254,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
 let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
     (their_key_material : Packet.tls_data) =
   (* are we the server? *)
-  let server = Cstruct.is_empty my_key_material.pre_master in
+  let server = my_key_material.pre_master = "" in
   let length = 4 * 64 in
   let keys =
     match tls_ekm with
@@ -301,9 +304,9 @@ let incoming_tls tls data =
       | Some `Eof ->
           Log.err (fun m ->
               m "response %a, TLS payload %a"
-                Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
+                Fmt.(option ~none:(any "no") (Ohex.pp_hexdump ()))
                 out
-                Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
+                Fmt.(option ~none:(any "no") (Ohex.pp_hexdump ()))
                 d);
           Error (`Tls `Eof)
       | None -> Ok (tls', out, d))
@@ -364,23 +367,26 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
   in
   let maybe_swap (a, b, c, d) = if server then (c, d, a, b) else (a, b, c, d) in
   let extract klen hlen =
-    ( Cstruct.sub keys 0 klen,
-      Cstruct.sub keys 64 hlen,
-      Cstruct.sub keys 128 klen,
-      Cstruct.sub keys 192 hlen )
+    ( String.sub keys 0 klen,
+      String.sub keys 64 hlen,
+      String.sub keys 128 klen,
+      String.sub keys 192 hlen )
   in
   let keys =
     match cipher with
     | `AES_256_CBC ->
-        let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
+        let hmac_len =
+          let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+          H.digest_size
+        in
         let my_key, my_hmac, their_key, their_hmac =
           maybe_swap (extract 32 hmac_len)
         in
         AES_CBC
           {
-            my_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret my_key;
+            my_key = Mirage_crypto.AES.CBC.of_secret my_key;
             my_hmac;
-            their_key = Mirage_crypto.Cipher_block.AES.CBC.of_secret their_key;
+            their_key = Mirage_crypto.AES.CBC.of_secret their_key;
             their_hmac;
           }
     | `AES_128_GCM ->
@@ -389,9 +395,9 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
         in
         AES_GCM
           {
-            my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+            my_key = Mirage_crypto.AES.GCM.of_secret my_key;
             my_implicit_iv;
-            their_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+            their_key = Mirage_crypto.AES.GCM.of_secret their_key;
             their_implicit_iv;
           }
     | `AES_256_GCM ->
@@ -400,9 +406,9 @@ let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
         in
         AES_GCM
           {
-            my_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret my_key;
+            my_key = Mirage_crypto.AES.GCM.of_secret my_key;
             my_implicit_iv;
-            their_key = Mirage_crypto.Cipher_block.AES.GCM.of_secret their_key;
+            their_key = Mirage_crypto.AES.GCM.of_secret their_key;
             their_implicit_iv;
           }
     | `CHACHA20_POLY1305 ->
@@ -443,7 +449,7 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
     let td =
       let options = Config.server_generate_connect_options config in
       {
-        Packet.pre_master = Cstruct.empty;
+        Packet.pre_master = "";
         random1 = my_key_material.random1;
         random2 = my_key_material.random2;
         options;
@@ -517,7 +523,7 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
     let options = Config.server_generate_connect_options config in
     let td =
       {
-        Packet.pre_master = Cstruct.empty;
+        Packet.pre_master = "";
         random1 = my_key_material.random1;
         random2 = my_key_material.random2;
         options;
@@ -566,21 +572,18 @@ let push_request tls =
     (Tls.Engine.send_application_data tls [ Packet.push_request ])
 
 let push_reply tls data =
-  (* a trailing 0 byte.. (Cstruct.create 1) *)
-  let repl =
-    Cstruct.concat
-      [ Packet.push_reply; Cstruct.of_string data; Cstruct.create 1 ]
-  in
+  (* a trailing 0 byte.. ("\000") *)
+  let repl = String.concat "" [ Packet.push_reply; data; "\000" ] in
   Option.to_result
     ~none:(`Msg "Tls.send application data failed for push request")
     (Tls.Engine.send_application_data tls [ repl ])
 
 let maybe_push_reply config = function
   | Some data ->
-      if Cstruct.(equal empty data) then
+      if String.equal "" data then
         Error (`Msg "push request sent: empty TLS reply")
       else
-        let str = Cstruct.(to_string (sub data 0 (pred (length data)))) in
+        let str = String.sub data 0 (pred (String.length data)) in
         Log.info (fun m -> m "push request sent, received TLS payload %S" str);
         let p_r = "PUSH_REPLY" in
         let p_r_len = String.length p_r in
@@ -621,14 +624,14 @@ let incoming_control_client config rng session channel now op data =
                     Fmt.(list ~sep:(any "\n") X509.Certificate.pp)
                     ca);
               X509.Authenticator.chain_of_trust
-                ~allowed_hashes:Mirage_crypto.Hash.hashes
+              (* ~allowed_hashes:Mirage_crypto.Hash.hashes *)
                 ~time:(fun () -> Some now)
                 ca
           | _, Some fps ->
               Log.info (fun m ->
                   m "authenticating with fingerprints %a"
-                    Fmt.(list ~sep:(any "\n") Hex.pp)
-                    (List.map Hex.of_cstruct fps));
+                    Fmt.(list ~sep:(any "\n") (of_to_string Ohex.encode))
+                    fps);
               fun ?ip ~host chain ->
                 List.fold_left
                   (fun acc fingerprint ->
@@ -647,10 +650,12 @@ let incoming_control_client config rng session channel now op data =
         and ciphers = Config_ext.tls_ciphers config
         and version = Config_ext.tls_version config
         and peer_name = Config.find Verify_x509_name config in
-        Tls.(
-          Engine.client
-            (Config.client ?ciphers ?version ?peer_name ~certificates
-               ~authenticator ()))
+        match
+          Tls.Config.client ?ciphers ?version ?peer_name ~certificates
+            ~authenticator ()
+        with
+        | Error _ -> assert false
+        | Ok tls_config -> Tls.Engine.client tls_config
       in
       Ok
         ( None,
@@ -663,7 +668,7 @@ let incoming_control_client config rng session channel now op data =
       let* tls', tls_response, d = incoming_tls tls data in
       Log.debug (fun m ->
           m "TLS payload is %a"
-            Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
+            Fmt.(option ~none:(any "no") (Ohex.pp_hexdump ()))
             d);
       let+ channel_st, data = maybe_kex_client rng config tls' in
       let out =
@@ -732,7 +737,7 @@ let incoming_control_client config rng session channel now op data =
                   ( None,
                     config,
                     { channel with channel_st },
-                    tls_out @ [ (`Ack, Cstruct.empty) ] )
+                    tls_out @ [ (`Ack, "") ] )
               else
                 (* now we send a PUSH_REQUEST\0 and see what happens *)
                 let+ tls'', out = push_request tls' in
@@ -744,7 +749,7 @@ let incoming_control_client config rng session channel now op data =
                 ( None,
                   config,
                   { channel with channel_st },
-                  tls_out @ [ (`Ack, Cstruct.empty); (`Control, out) ] )))
+                  tls_out @ [ (`Ack, ""); (`Control, out) ] )))
   | Push_request_sent (tls, key, tls_data), Packet.Control ->
       let open Result.Syntax in
       Log.debug (fun m -> m "in push request sent");
@@ -764,7 +769,6 @@ let incoming_control_client config rng session channel now op data =
       let channel = { channel with channel_st = Established (tls', keys) } in
       let act =
         Option.bind d (fun d ->
-            let d = Cstruct.to_string d in
             match Cc_message.parse d with
             | Some msg -> Some msg
             | None ->
@@ -774,7 +778,7 @@ let incoming_control_client config rng session channel now op data =
       (act, config, channel, [])
   | _ -> Error (`No_transition (channel, op, data))
 
-let init_channel ?(payload = Cstruct.empty) how session keyid now ts =
+let init_channel ?(payload = "") how session keyid now ts =
   let channel = new_channel keyid ts in
   let timestamp = ptime_to_ts_exn now in
   let session, transport, header = header session channel.transport timestamp in
@@ -881,7 +885,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
               (Some
                  (X509.Authenticator.chain_of_trust
                     ~time:(fun () -> Some now)
-                    ~allowed_hashes:Mirage_crypto.Hash.hashes ca))
+                    (* ~allowed_hashes:Mirage_crypto.Hash.hashes *) ca))
         | None, None, Some fps | Some `Required, None, Some fps ->
             Ok
               (Some
@@ -904,9 +908,13 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
             assert false
       in
       let tls_config =
-        Tls.Config.server ?ciphers ?version
-          ~certificates:(`Single ([ server ], key))
-          ?authenticator ()
+        match
+          Tls.Config.server ?ciphers ?version
+            ~certificates:(`Single ([ server ], key))
+            ?authenticator ()
+        with
+        | Ok tls_cfg -> tls_cfg
+        | Error _ -> assert false
       in
       let tls = Tls.Engine.server tls_config in
       let channel = { channel with channel_st = TLS_handshake tls } in
@@ -915,20 +923,19 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
         | None -> `Reset_server
         | Some _ -> `Reset
       in
-      Ok (None, config, channel, [ (control_typ, Cstruct.empty) ])
+      Ok (None, config, channel, [ (control_typ, "") ])
   | TLS_handshake tls, Packet.Control -> (
       let open Result.Syntax in
       let* tls', tls_response, d = incoming_tls tls data in
       Log.debug (fun m ->
           m "TLS handshake payload is %a"
-            Fmt.(option ~none:(any "no") Cstruct.hexdump_pp)
+            Fmt.(option ~none:(any "no") (Ohex.pp_hexdump ()))
             d);
       (* if tls is established, move to next state (await tls_data) *)
       let channel_st =
         if Tls.Engine.handshake_in_progress tls' then TLS_handshake tls'
         else
-          let random1, random2 = (rng 32, rng 32)
-          and pre_master = Cstruct.empty in
+          let random1, random2 = (rng 32, rng 32) and pre_master = "" in
           TLS_established (tls', { State.pre_master; random1; random2 })
       in
       let out =
@@ -960,7 +967,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let open Result.Syntax in
       let* tls', d = incoming_tls_without_reply tls data in
       let* data = Option.to_result ~none:(`Msg "expected push request") d in
-      if Cstruct.(equal Packet.push_request data) then
+      if String.equal Packet.push_request data then
         let* ip_config, config, channel_st, out =
           server_send_push_reply config is_not_taken tls' session key tls_data
         in
@@ -972,7 +979,6 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let channel = { channel with channel_st = Established (tls', keys) } in
       let act =
         Option.bind d (fun d ->
-            let d = Cstruct.to_string d in
             match Cc_message.parse d with
             | Some (`Cc_exit as msg) -> Some msg
             | Some (`Cc_restart _ | `Cc_halt _) ->
@@ -1063,8 +1069,8 @@ type error =
   | `Non_monotonic_sequence_number of int32 * int32
   | `Mismatch_their_session_id of int64 * int64
   | `Mismatch_my_session_id of int64 * int64
-  | `Bad_mac of t * Cstruct.t * Cstruct.t * Cstruct.t
-  | `No_transition of channel * Packet.operation * Cstruct.t
+  | `Bad_mac of t * string * string * string
+  | `No_transition of channel * Packet.operation * string
   | `No_channel of int
   | `Tls of
     [ `Alert of Tls.Packet.alert_type | `Eof | `Fail of Tls.Engine.failure ]
@@ -1087,12 +1093,11 @@ let[@coverage off] pp_error ppf = function
       Fmt.pf ppf "mismatched my session id: expected %016LX, received %016LX"
         expected received
   | `Bad_mac (state, computed, received, data) ->
-      Fmt.pf ppf "bad mac: computed %a received %a data %a@ (state %a)"
-        Cstruct.hexdump_pp computed Cstruct.hexdump_pp received
-        Cstruct.hexdump_pp data pp state
+      Fmt.pf ppf "bad mac: computed %a received %a data %a@ (state %a)" Ohex.pp
+        computed Ohex.pp received (Ohex.pp_hexdump ()) data pp state
   | `No_transition (channel, op, data) ->
       Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
-        Packet.pp_operation op pp_channel channel Cstruct.hexdump_pp data
+        Packet.pp_operation op pp_channel channel (Ohex.pp_hexdump ()) data
   | `No_channel keyid ->
       Fmt.pf ppf
         "no channel found for keyid %u, and not in the right state for rekeying"
@@ -1104,10 +1109,10 @@ let[@coverage off] pp_error ppf = function
   | `Msg msg -> Fmt.string ppf msg
 
 let unpad block_size cs =
-  let l = Cstruct.length cs in
-  let amount = Cstruct.get_uint8 cs (pred l) in
+  let l = String.length cs in
+  let amount = String.get_uint8 cs (pred l) in
   let len = l - amount in
-  if len >= 0 && amount <= block_size then Ok (Cstruct_ext.sub cs 0 len)
+  if len >= 0 && amount <= block_size then Ok (String.sub cs 0 len)
   else Error (`Msg "bad padding")
 
 let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
@@ -1115,40 +1120,37 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
-  let set_replay_id dest off =
-    Cstruct.BE.set_uint32 dest off ctx.my_replay_id
-  in
+  let set_replay_id dest off = Bytes.set_int32_be dest off ctx.my_replay_id in
   let aead (type key)
       (authenticate_encrypt_tag :
-        key:key ->
-        nonce:Cstruct.t ->
-        ?adata:Cstruct.t ->
-        Cstruct.t ->
-        Cstruct.t * Cstruct.t) (my_key : key) my_implicit_iv =
+        key:key -> nonce:string -> ?adata:string -> string -> string * string)
+      (my_key : key) my_implicit_iv =
     let nonce, replay_id =
-      let b =
-        Cstruct.create_unsafe (Packet.id_len + Cstruct.length my_implicit_iv)
-      in
+      let b = Bytes.create (Packet.id_len + String.length my_implicit_iv) in
       set_replay_id b 0;
-      Cstruct.blit my_implicit_iv 0 b 4 (Cstruct.length my_implicit_iv);
-      (* We reuse the replay id part of the nonce to avoid another allocation *)
-      (b, Cstruct.sub b 0 4)
+      Bytes.blit_string my_implicit_iv 0 b 4 (String.length my_implicit_iv);
+      (Bytes.unsafe_to_string b, Bytes.sub_string b 0 4)
     in
     let data =
-      if compress then (
-        let b =
-          Cstruct.create_unsafe (Bool.to_int compress + Cstruct.length data)
-        in
-        (* 0xFA is "no compression" *)
-        Cstruct.set_uint8 b 0 0xfa;
-        Cstruct.blit data 0 b 1 (Cstruct.length data);
-        b)
-      else data
+      if compress then (* 0xFA is "no compression" *)
+        "\xfa" ^ data else data
     in
     let enc, tag =
       authenticate_encrypt_tag ~key:my_key ~nonce ~adata:replay_id data
     in
-    Cstruct_ext.concat_with_unsafe_prefix prefix_len [ replay_id; tag; enc ]
+    let b =
+      Bytes.create
+        (prefix_len + String.length replay_id + String.length tag
+       + String.length enc)
+    in
+    Bytes.blit_string replay_id 0 b prefix_len (String.length replay_id);
+    Bytes.blit_string tag 0 b
+      (prefix_len + String.length replay_id)
+      (String.length tag);
+    Bytes.blit_string enc 0 b
+      (prefix_len + String.length replay_id + String.length tag)
+      (String.length enc);
+    b
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
     match ctx.keys with
@@ -1162,35 +1164,44 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
         let open Mirage_crypto in
         let hdr_len = 4 + if Option.is_some add_timestamp then 4 else 0 in
         let data =
-          let unpad_len =
-            hdr_len + Bool.to_int compress + Cstruct.length data
-          in
+          let unpad_len = hdr_len + Bool.to_int compress + String.length data in
           let pad_len =
-            let l = unpad_len mod Cipher_block.AES.CBC.block_size in
-            Cipher_block.AES.CBC.block_size - l
+            let l = unpad_len mod AES.CBC.block_size in
+            AES.CBC.block_size - l
           in
-          let b = Cstruct.create_unsafe (unpad_len + pad_len) in
+          let b = Bytes.create (unpad_len + pad_len) in
           set_replay_id b 0;
-          Option.iter (fun ts -> Cstruct.BE.set_uint32 b 4 ts) add_timestamp;
+          Option.iter (fun ts -> Bytes.set_int32_be b 4 ts) add_timestamp;
           if compress then
             (* 0xFA is "no compression" *)
-            Cstruct.set_uint8 b hdr_len 0xfa;
-          Cstruct.blit data 0 b
+            Bytes.set_uint8 b hdr_len 0xfa;
+          Bytes.blit_string data 0 b
             (hdr_len + Bool.to_int compress)
-            (Cstruct.length data);
-          Cstruct.memset (Cstruct.sub b unpad_len pad_len) pad_len;
-          b
+            (String.length data);
+          Bytes.fill b unpad_len pad_len (char_of_int pad_len);
+          Bytes.unsafe_to_string b
         in
-        let iv = rng Cipher_block.AES.CBC.block_size in
-        let enc = Cipher_block.AES.CBC.encrypt ~key:my_key ~iv data in
+        let iv = rng AES.CBC.block_size in
+        let enc = AES.CBC.encrypt ~key:my_key ~iv data in
         let hmac =
-          Hash.maci hmac_algorithm ~key:my_hmac (fun feed ->
-              feed iv;
-              feed enc)
+          let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+          H.(to_raw_string (hmacv_string ~key:my_hmac [ iv; enc ]))
         in
-        Cstruct_ext.concat_with_unsafe_prefix prefix_len [ hmac; iv; enc ]
+        let b =
+          Bytes.create
+            (prefix_len + String.length hmac + String.length iv
+           + String.length enc)
+        in
+        Bytes.blit_string hmac 0 b prefix_len (String.length hmac);
+        Bytes.blit_string iv 0 b
+          (prefix_len + String.length hmac)
+          (String.length iv);
+        Bytes.blit_string enc 0 b
+          (prefix_len + String.length hmac + String.length iv)
+          (String.length enc);
+        b
     | AES_GCM { my_key; my_implicit_iv; _ } ->
-        aead Mirage_crypto.Cipher_block.AES.GCM.authenticate_encrypt_tag my_key
+        aead Mirage_crypto.AES.GCM.authenticate_encrypt_tag my_key
           my_implicit_iv
     | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
         aead Mirage_crypto.Chacha20.authenticate_encrypt_tag my_key
@@ -1204,9 +1215,10 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     out ?add_timestamp prefix_len ctx hmac_algorithm compress rng data
   in
   Packet.encode_data out protocol key;
+  let out = Bytes.unsafe_to_string out in
   Log.debug (fun m ->
-      m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
-        (Cstruct.length out) ctx.my_replay_id);
+      m "sending %d bytes data (enc %d) out id %lu" (String.length data)
+        (String.length out) ctx.my_replay_id);
   (ctx, out)
 
 let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
@@ -1215,14 +1227,15 @@ let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
     out ~add_timestamp prefix_len ctx hmac_algorithm compress rng data
   in
   Packet.set_protocol out protocol;
+  let out = Bytes.unsafe_to_string out in
   Log.debug (fun m ->
-      m "sending %d bytes data (enc %d) out id %lu" (Cstruct.length data)
-        (Cstruct.length out) ctx.my_replay_id);
+      m "sending %d bytes data (enc %d) out id %lu" (String.length data)
+        (String.length out) ctx.my_replay_id);
   (ctx, out)
 
 let outgoing s data =
   let incr ch out =
-    { ch with packets = succ ch.packets; bytes = Cstruct.length out + ch.bytes }
+    { ch with packets = succ ch.packets; bytes = String.length out + ch.bytes }
   in
   match (s.control_crypto, keys_opt s.channel) with
   | `Static keys, _ ->
@@ -1248,7 +1261,7 @@ let outgoing s data =
 
 let ping =
   (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
-  Cstruct.of_hex "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
+  Ohex.decode "2a 18 7b f3 64 1e b4 cb  07 ed 2d 0a 98 1f c7 48"
 
 let maybe_ping state =
   (* ping if we haven't send anything for the configured interval *)
@@ -1356,61 +1369,74 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
            ~add_timestamp is provided and true.
         *)
         let open Mirage_crypto in
-        let module H = (val Mirage_crypto.Hash.module_of hmac_algorithm) in
-        let hmac, data = Cstruct.split data H.digest_size in
-        let computed_hmac = H.hmac ~key:their_hmac data in
-        let* () =
-          guard (Cstruct.equal hmac computed_hmac) (err hmac computed_hmac)
+        let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+        let hmac, data =
+          ( String.sub data 0 H.digest_size,
+            String.sub data H.digest_size (String.length data - H.digest_size)
+          )
         in
-        let iv, data = Cstruct.split data Cipher_block.AES.CBC.block_size in
-        let dec = Cipher_block.AES.CBC.decrypt ~key:their_key ~iv data in
+        let computed_hmac =
+          H.(to_raw_string (hmac_string ~key:their_hmac data))
+        in
+        let* () =
+          guard (String.equal hmac computed_hmac) (err hmac computed_hmac)
+        in
+        let iv, data =
+          ( String.sub data 0 AES.CBC.block_size,
+            String.sub data AES.CBC.block_size
+              (String.length data - AES.CBC.block_size) )
+        in
+        let dec = AES.CBC.decrypt ~key:their_key ~iv data in
         (* dec is: uint32 replay packet id followed by (lzo-compressed) data and padding *)
         let hdr_len = Packet.id_len + if add_timestamp then 4 else 0 in
         let* () =
           guard
-            (Cstruct.length dec >= hdr_len)
-            (`Payload_too_short (hdr_len, Cstruct.length dec))
+            (String.length dec >= hdr_len)
+            (`Payload_too_short (hdr_len, String.length dec))
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
-            m "received replay packet id is %lu" (Cstruct.BE.get_uint32 dec 0));
+            m "received replay packet id is %lu" (String.get_int32_be dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad Cipher_block.AES.CBC.block_size (Cstruct.shift dec hdr_len)
+        unpad AES.CBC.block_size
+          (String.sub dec hdr_len (String.length dec - hdr_len))
     | AES_GCM { their_key; their_implicit_iv; _ } ->
-        let tag_len = Mirage_crypto.Cipher_block.AES.GCM.tag_size in
+        let tag_len = Mirage_crypto.AES.GCM.tag_size in
         let* () =
           guard
-            (Cstruct.length data >= Packet.id_len + tag_len)
-            (`Payload_too_short (Packet.id_len + tag_len, Cstruct.length data))
+            (String.length data >= Packet.id_len + tag_len)
+            (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
         let replay_id, tag, payload =
-          let sn, rest = Cstruct.split data Packet.id_len in
-          let tag, payload = Cstruct.split rest tag_len in
-          (sn, tag, payload)
+          ( String.sub data 0 Packet.id_len,
+            String.sub data Packet.id_len tag_len,
+            String.sub data (Packet.id_len + tag_len)
+              (String.length data - Packet.id_len - tag_len) )
         in
-        let nonce = Cstruct.append replay_id their_implicit_iv in
+        let nonce = replay_id ^ their_implicit_iv in
         let plain =
-          Mirage_crypto.Cipher_block.AES.GCM.authenticate_decrypt_tag
-            ~key:their_key ~nonce ~adata:replay_id ~tag payload
+          Mirage_crypto.AES.GCM.authenticate_decrypt_tag ~key:their_key ~nonce
+            ~adata:replay_id ~tag payload
         in
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
             m "received replay packet id is %lu"
-              (Cstruct.BE.get_uint32 replay_id 0));
+              (String.get_int32_be replay_id 0));
         Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
     | CHACHA20_POLY1305 { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.Chacha20.tag_size in
         let* () =
           guard
-            (Cstruct.length data >= Packet.id_len + tag_len)
-            (`Payload_too_short (Packet.id_len + tag_len, Cstruct.length data))
+            (String.length data >= Packet.id_len + tag_len)
+            (`Payload_too_short (Packet.id_len + tag_len, String.length data))
         in
         let replay_id, tag, payload =
-          let sn, rest = Cstruct.split data Packet.id_len in
-          let tag, payload = Cstruct.split rest tag_len in
-          (sn, tag, payload)
+          ( String.sub data 0 Packet.id_len,
+            String.sub data Packet.id_len tag_len,
+            String.sub data (Packet.id_len + tag_len)
+              (String.length data - Packet.id_len - tag_len) )
         in
-        let nonce = Cstruct.append replay_id their_implicit_iv in
+        let nonce = replay_id ^ their_implicit_iv in
         let plain =
           Mirage_crypto.Chacha20.authenticate_decrypt_tag ~key:their_key ~nonce
             ~adata:replay_id ~tag payload
@@ -1418,7 +1444,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         (* TODO validate replay packet id and ordering *)
         Log.debug (fun m ->
             m "received replay packet id is %lu"
-              (Cstruct.BE.get_uint32 replay_id 0));
+              (String.get_int32_be replay_id 0));
         Option.to_result ~none:(`Msg "AEAD decrypt failed") plain
   in
   let+ data' =
@@ -1426,23 +1452,28 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
       (* if dec[hdr_len - 1] == 0xfa, then compression is off *)
       let* () =
         guard
-          (Cstruct.length data >= 1)
+          (String.length data >= 1)
           (`Msg "payload too short, need compression byte")
       in
-      let comp, data = Cstruct.split data 1 in
-      match Cstruct.get_uint8 comp 0 with
-      | 0xFA -> Ok data
+      match String.get_uint8 data 0 with
+      | 0xFA -> Ok (String.sub data 1 (String.length data - 1))
       | 0x66 ->
-          let+ lz = Lzo.uncompress_with_buffer (Cstruct.to_bigarray data) in
-          let lz = Cstruct.of_string lz in
-          Log.debug (fun m -> m "decompressed:@.%a" Cstruct.hexdump_pp lz);
+          let bigstring =
+            Bigarray.Array1.create Bigarray.char Bigarray.c_layout
+              (String.length data - 1)
+          in
+          for i = 1 to String.length data - 1 do
+            Bigarray.Array1.set bigstring (pred i) (String.get data i)
+          done;
+          let+ lz = Lzo.uncompress_with_buffer bigstring in
+          Log.debug (fun m -> m "decompressed:@.%a" (Ohex.pp_hexdump ()) lz);
           lz
       | comp ->
           Result.error_msgf "unknown compression %#X in packet:@.%a" comp
-            Cstruct.hexdump_pp data
+            (Ohex.pp_hexdump ()) data
     else Ok data
   in
-  if Cstruct.equal data' ping then (
+  if String.equal data' ping then (
     Log.debug (fun m -> m "received ping!");
     None)
   else Some data'
@@ -1456,15 +1487,22 @@ let split_control ~acks mtu outs =
             | `Control, data ->
                 let first_mtu = if idx = 0 then mtu - acks else mtu in
                 let outs =
-                  if first_mtu < Cstruct.length data then
+                  if first_mtu < String.length data then
                     let rec datas acc data =
-                      if Cstruct.is_empty data then acc
+                      if data = "" then acc
                       else
-                        let l = min mtu (Cstruct.length data) in
-                        let data, rest = Cstruct.split data l in
+                        let l = min mtu (String.length data) in
+                        let data, rest =
+                          ( String.sub data 0 l,
+                            String.sub data l (String.length data - l) )
+                        in
                         datas (data :: acc) rest
                     in
-                    let data1, rdata = Cstruct.split data first_mtu in
+                    let data1, rdata =
+                      ( String.sub data 0 first_mtu,
+                        String.sub data first_mtu
+                          (String.length data - first_mtu) )
+                    in
                     datas [ data1 ] rdata
                   else [ data ]
                 in
@@ -1531,21 +1569,21 @@ let maybe_add_wkc now mtu session tls_crypt needs_wkc key transport outs =
      packet length afterwards *)
   match (needs_wkc, outs) with
   | Some wkc, (`Control, data) :: rest ->
-      let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
+      let wkc = Tls_crypt.Wrapped_key.to_octets wkc in
       let acks = bytes_of_acks transport in
-      let l = min (mtu - acks - Cstruct.length wkc) (Cstruct.length data) in
-      let data, data' = Cstruct.split data l in
-      let rest =
-        if Cstruct.is_empty data' then rest else (`Control, data') :: rest
+      let l = min (mtu - acks - String.length wkc) (String.length data) in
+      let data, data' =
+        (String.sub data 0 l, String.sub data l (String.length data - l))
       in
+      let rest = if data' = "" then rest else (`Control, data') :: rest in
       let session, transport, header = header session transport now_ts in
       let transport, sn = next_sequence_number transport in
       let p = `Control (Packet.Control_wkc, (header, sn, data)) in
       (* First we encrypt *)
       let out = encrypt_and_out session.protocol tls_crypt key p in
       (* Then we append wkc and fix the length if TCP *)
-      let out = Cstruct.append out wkc in
-      Packet.set_protocol out session.protocol;
+      let out = out ^ wkc in
+      Packet.set_protocol (Bytes.unsafe_of_string out) session.protocol;
       (session, transport, Some out, rest)
   | Some _, _ ->
       Log.err (fun m ->
@@ -1583,9 +1621,10 @@ let send_control_message s data =
       let* channel_st, out =
         match (s.state, s.channel.channel_st) with
         | (Client Ready | Server Server_ready), Established (tls, keys) ->
-            let data' = Cstruct.create_unsafe (String.length data + 1) in
-            Cstruct.blit_from_string data 0 data' 0 (String.length data);
-            Cstruct.set_uint8 data' (String.length data) 0;
+            let data' = Bytes.create (String.length data + 1) in
+            Bytes.blit_string data 0 data' 0 (String.length data);
+            Bytes.set_uint8 data' (String.length data) 0;
+            let data' = Bytes.unsafe_to_string data' in
             let* tls, out =
               (* reynir: I *think* it only returns [None] when not established
                  or after write is shutdown. *)
@@ -1658,16 +1697,12 @@ let validate_control state control_crypto op key payload =
   let open Result.Syntax in
   match control_crypto with
   | `Tls_auth { hmac_algorithm; their_hmac; _ } ->
-      let hmac, tbs =
-        let hmac_len = Mirage_crypto.Hash.digest_size hmac_algorithm in
-        Packet.split_hmac hmac_len op key payload
-      in
-      let computed_mac =
-        Mirage_crypto.Hash.mac hmac_algorithm ~key:their_hmac tbs
-      in
+      let module H = (val Digestif.module_of_hash' hmac_algorithm) in
+      let hmac, tbs = Packet.split_hmac H.digest_size op key payload in
+      let computed_mac = H.(to_raw_string (hmac_string ~key:their_hmac tbs)) in
       let* () =
         guard
-          (Eqaf_cstruct.equal computed_mac hmac)
+          (Eqaf.equal computed_mac hmac)
           (`Bad_mac (state, computed_mac, hmac, tbs))
       in
       let+ p = Packet.decode_ack_or_control op tbs in
@@ -1676,9 +1711,9 @@ let validate_control state control_crypto op key payload =
       let* cleartext, encrypted =
         Packet.Tls_crypt.decode_cleartext_header payload
       in
-      let module Aes_ctr = Mirage_crypto.Cipher_block.AES.CTR in
-      let iv = Cstruct.sub cleartext.hmac 0 16 in
-      let ctr = Aes_ctr.ctr_of_cstruct iv in
+      let module Aes_ctr = Mirage_crypto.AES.CTR in
+      let iv = String.sub cleartext.hmac 0 16 in
+      let ctr = Aes_ctr.ctr_of_octets iv in
       let decrypted =
         let key = Tls_crypt.Key.cipher_key their in
         Aes_ctr.decrypt ~key ~ctr encrypted
@@ -1688,11 +1723,11 @@ let validate_control state control_crypto op key payload =
       in
       let computed_hmac =
         let key = Tls_crypt.Key.hmac their in
-        Mirage_crypto.Hash.SHA256.hmac ~key to_be_signed
+        Digestif.SHA256.(to_raw_string (hmac_string ~key to_be_signed))
       in
       let* () =
         guard
-          (Eqaf_cstruct.equal computed_hmac cleartext.hmac)
+          (Eqaf.equal computed_hmac cleartext.hmac)
           (`Bad_mac (state, computed_hmac, cleartext.hmac, to_be_signed))
       in
       let* p =
@@ -1773,9 +1808,7 @@ let incoming state control_crypto buf =
                             (List.length out'));
                       (* each control needs to be acked! *)
                       let out' =
-                        match out' with
-                        | [] -> [ (`Ack, Cstruct.empty) ]
-                        | xs -> xs
+                        match out' with [] -> [ (`Ack, "") ] | xs -> xs
                       in
                       (* now prepare outgoing packets *)
                       let state = { state with session } in
@@ -1837,16 +1870,18 @@ let incoming state control_crypto buf =
                           (state, out, payloads, act))))
         in
         (* Invariant: [linger] is always empty for UDP *)
-        if Cstruct.is_empty linger then Ok (state, out, payloads, act_opt)
+        if linger = "" then Ok (state, out, payloads, act_opt)
         else multi linger (state, out, payloads, act_opt)
   in
-  let r = multi (Cstruct_ext.append' state.linger buf) (state, [], [], None) in
+  let r = multi (state.linger ^ buf) (state, [], [], None) in
   let+ s', out, payloads, act_opt = udp_ignore r in
   Log.debug (fun m -> m "out state is %a" State.pp s');
   Log.debug (fun m ->
-      m "%u outgoing packets (%d bytes)" (List.length out) (Cstruct.lenv out));
+      m "%u outgoing packets (%d bytes)" (List.length out)
+        (List.fold_left ( + ) 0 (List.map String.length out)));
   Log.debug (fun m ->
-      m "%u payloads (%d bytes)" (List.length payloads) (Cstruct.lenv payloads));
+      m "%u payloads (%d bytes)" (List.length payloads)
+        (List.fold_left ( + ) 0 (List.map String.length payloads)));
   Log.debug (fun m ->
       m "action %a" Fmt.(option ~none:(any "none") pp_action) act_opt);
   (s', out, List.rev payloads, act_opt)
@@ -1878,7 +1913,7 @@ let new_connection server data =
           auth_user_pass = server.auth_user_pass;
           control_crypto :> control_crypto;
           state = Server Server_handshaking;
-          linger = Cstruct.empty;
+          linger = "";
           rng = server.server_rng;
           ts = server.server_ts;
           now = server.server_now;
@@ -1906,21 +1941,22 @@ let new_connection server data =
             assert false
         | Error _ as e -> e
         | Ok (Packet.Hard_reset_client_v2, _key, _received, linger) ->
-            assert (Cstruct.is_empty linger);
+            assert (linger = "");
             tls_auth_or_tls_crypt (`Msg "server only supports tls-crypt-v2")
         | Ok (Packet.Hard_reset_client_v3, key, received, linger) ->
-            assert (Cstruct.is_empty linger);
+            assert (linger = "");
             (* decode and unwrap wKc *)
             let* actual_packet, wkc =
-              Tls_crypt.Wrapped_key.of_cstruct received
+              Tls_crypt.Wrapped_key.of_octets received
             in
             let actual_packet =
-              let buf = Cstruct.create (Cstruct.length actual_packet + 3) in
+              let buf = Bytes.create (String.length actual_packet + 3) in
               Packet.set_protocol buf `Tcp;
-              Cstruct.set_uint8 buf 2
+              Bytes.set_uint8 buf 2
                 (Packet.op_key Packet.Hard_reset_client_v3 key);
-              Cstruct.blit actual_packet 0 buf 3 (Cstruct.length actual_packet);
-              buf
+              Bytes.blit_string actual_packet 0 buf 3
+                (String.length actual_packet);
+              Bytes.unsafe_to_string buf
             in
             let* tls_crypt, metadata =
               Tls_crypt.Wrapped_key.unwrap ~key:wrapping_key wkc
@@ -1942,7 +1978,7 @@ let new_connection server data =
                   is_not_taken = server.is_not_taken;
                   control_crypto;
                   state = Server Server_handshaking;
-                  linger = Cstruct.empty;
+                  linger = "";
                   rng = server.server_rng;
                   ts = server.server_ts;
                   now = server.server_now;
@@ -2026,7 +2062,7 @@ let resolve_connect_client t ts s ev =
       in
       (* We reset [linger] to enforce the invariant that [linger] is empty when
          we are connecting (or resolving) *)
-      Ok ({ t with linger = Cstruct.empty; state = Client state }, action)
+      Ok ({ t with linger = ""; state = Client state }, action)
   in
   match (s, ev) with
   | Resolving (idx, _, retry), `Resolved ip ->
@@ -2101,7 +2137,7 @@ let handle_client t control_crypto s ev =
           let session, channel, out =
             match control_crypto with
             | `Tls_crypt (_, Some wkc) ->
-                let wkc = Tls_crypt.Wrapped_key.unsafe_to_cstruct wkc in
+                let wkc = Tls_crypt.Wrapped_key.to_octets wkc in
                 let session = { session with my_replay_id = 0x0f000001l } in
                 init_channel ~payload:wkc Packet.Hard_reset_client_v3 session
                   keyid now ts
@@ -2200,8 +2236,7 @@ let handle_static_client t s keys ev =
           and compress = t.session.compress
           and hmac_algorithm = Config.get Auth t.config in
           let rec process_one acc linger =
-            if Cstruct.length linger = 0 then
-              Ok ({ t with linger = Cstruct.empty }, acc)
+            if String.length linger = 0 then Ok ({ t with linger = "" }, acc)
             else
               match Packet.decode_protocol t.session.protocol linger with
               | Error `Partial -> Error `Partial
@@ -2217,7 +2252,7 @@ let handle_static_client t s keys ev =
                   let acc = Option.fold d ~none:acc ~some:(fun p -> p :: acc) in
                   process_one acc linger
           in
-          let+ t, payloads = process_one [] (Cstruct_ext.append' t.linger cs) in
+          let+ t, payloads = process_one [] (t.linger ^ cs) in
           (t, [], List.rev payloads, None)
       | s, ev ->
           Result.error_msgf

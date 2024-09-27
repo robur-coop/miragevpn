@@ -6,9 +6,9 @@ let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
 let catch ~exn fn = try fn () with v -> exn v
 
 let pp_key_hum ppf key =
-  let cs = Tls_crypt.Key.unsafe_to_cstruct key in
-  let cipher_key = Cstruct.(to_string (sub cs 0 64)) in
-  let hmac = Cstruct.(to_string (sub cs 64 64)) in
+  let cs = Tls_crypt.Key.to_octets key in
+  let cipher_key = String.sub cs 0 64 in
+  let hmac = String.sub cs 64 64 in
   Fmt.pf ppf "Cipher Key: @[<hov>%a@]\n%!"
     (Hxd_string.pp Hxd.default)
     cipher_key;
