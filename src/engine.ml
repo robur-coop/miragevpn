@@ -1131,7 +1131,6 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
       let b = Bytes.create (Packet.id_len + String.length my_implicit_iv) in
       set_replay_id b 0;
       Bytes.blit_string my_implicit_iv 0 b 4 (String.length my_implicit_iv);
-      (* We reuse the replay id part of the nonce to avoid another allocation *)
       (Bytes.unsafe_to_string b, Bytes.sub_string b 0 4)
     in
     let data =
