@@ -2246,7 +2246,12 @@ let handle_static_client t s keys ev =
               | Error `Tcp_partial ->
                   (* we don't need to check protocol as [`Tcp_partial] is only ever returned for tcp *)
                   Ok ({ t with linger }, acc)
-              | Ok (cs, linger) ->
+              | Ok (poff, plen) ->
+                  let cs, linger =
+                    ( String.sub linger poff plen,
+                      String.sub linger (poff + plen)
+                        (String.length linger - poff - plen) )
+                  in
                   let bad_mac computed rcv = `Bad_mac (t, computed, rcv, cs) in
                   let* d =
                     incoming_data ~add_timestamp bad_mac keys hmac_algorithm
