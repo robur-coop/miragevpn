@@ -128,10 +128,7 @@ module Metadata = struct
 
   let to_octets = function
     | User str ->
-        let cs = Bytes.create (1 + String.length str) in
-        Bytes.set_uint8 cs 0 0;
-        Bytes.blit_string str 0 cs 1 (String.length str);
-        Bytes.unsafe_to_string cs
+        "\000" ^ str
     | Timestamp ptime ->
         let n = Int64.of_float (Ptime.to_float_s ptime) in
         let cs = Bytes.create (1 + 8) in
