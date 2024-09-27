@@ -1121,10 +1121,18 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
      the ~add_timestamp argument is only used in static key mode
   *)
   let set_replay_id dest off = Bytes.set_int32_be dest off ctx.my_replay_id in
-  let aead (type key)
-      (authenticate_encrypt_tag :
-        key:key -> nonce:string -> ?adata:string -> string -> string * string)
-      (my_key : key) my_implicit_iv =
+  let aead (type key) tag_size
+      (authenticate_encrypt_into :
+        key:key ->
+        nonce:string ->
+        ?adata:string ->
+        string ->
+        src_off:int ->
+        bytes ->
+        dst_off:int ->
+        tag_off:int ->
+        int ->
+        unit) (my_key : key) my_implicit_iv =
     let nonce, replay_id =
       let b = Bytes.create (Packet.id_len + String.length my_implicit_iv) in
       set_replay_id b 0;
@@ -1135,21 +1143,16 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
       if compress then (* 0xFA is "no compression" *)
         "\xfa" ^ data else data
     in
-    let enc, tag =
-      authenticate_encrypt_tag ~key:my_key ~nonce ~adata:replay_id data
-    in
     let b =
       Bytes.create
-        (prefix_len + String.length replay_id + String.length tag
-       + String.length enc)
+        (prefix_len + String.length replay_id + tag_size + String.length data)
     in
     Bytes.blit_string replay_id 0 b prefix_len (String.length replay_id);
-    Bytes.blit_string tag 0 b
-      (prefix_len + String.length replay_id)
-      (String.length tag);
-    Bytes.blit_string enc 0 b
-      (prefix_len + String.length replay_id + String.length tag)
-      (String.length enc);
+    authenticate_encrypt_into ~key:my_key ~nonce ~adata:replay_id data
+      ~src_off:0 b
+      ~dst_off:(prefix_len + String.length replay_id + tag_size)
+      ~tag_off:(prefix_len + String.length replay_id)
+      (String.length data);
     b
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
@@ -1162,6 +1165,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
              - timestamp only used in static key mode (32bit, seconds since unix epoch)
         *)
         let open Mirage_crypto in
+        let module H = (val Digestif.module_of_hash' hmac_algorithm) in
         let hdr_len = 4 + if Option.is_some add_timestamp then 4 else 0 in
         let data =
           let unpad_len = hdr_len + Bool.to_int compress + String.length data in
@@ -1181,31 +1185,29 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
           Bytes.fill b unpad_len pad_len (char_of_int pad_len);
           Bytes.unsafe_to_string b
         in
+        (* FIXME: rng_into *)
         let iv = rng AES.CBC.block_size in
-        let enc = AES.CBC.encrypt ~key:my_key ~iv data in
-        let hmac =
-          let module H = (val Digestif.module_of_hash' hmac_algorithm) in
-          H.(to_raw_string (hmacv_string ~key:my_hmac [ iv; enc ]))
-        in
         let b =
           Bytes.create
-            (prefix_len + String.length hmac + String.length iv
-           + String.length enc)
+            (prefix_len + H.digest_size + String.length iv + String.length data)
         in
-        Bytes.blit_string hmac 0 b prefix_len (String.length hmac);
-        Bytes.blit_string iv 0 b
-          (prefix_len + String.length hmac)
-          (String.length iv);
-        Bytes.blit_string enc 0 b
-          (prefix_len + String.length hmac + String.length iv)
-          (String.length enc);
+        AES.CBC.encrypt_into ~key:my_key ~iv data ~src_off:0 b
+          ~dst_off:(prefix_len + H.digest_size + String.length iv)
+          (String.length data);
+        let hmac =
+          H.hmac_bytes ~key:my_hmac ~off:(prefix_len + H.digest_size) b
+        in
+        (* H.get_into_bytes hmac ~off:prefix_len b; *)
+        Bytes.blit_string (H.to_raw_string hmac) 0 b prefix_len H.digest_size;
+        Bytes.blit_string iv 0 b (prefix_len + H.digest_size) (String.length iv);
         b
     | AES_GCM { my_key; my_implicit_iv; _ } ->
-        aead Mirage_crypto.AES.GCM.authenticate_encrypt_tag my_key
-          my_implicit_iv
+        aead Mirage_crypto.AES.GCM.tag_size
+          Mirage_crypto.AES.GCM.authenticate_encrypt_into my_key my_implicit_iv
     | CHACHA20_POLY1305 { my_key; my_implicit_iv; _ } ->
-        aead Mirage_crypto.Chacha20.authenticate_encrypt_tag my_key
-          my_implicit_iv )
+        aead Mirage_crypto.Chacha20.tag_size
+          Mirage_crypto.Chacha20.authenticate_encrypt_into my_key my_implicit_iv
+  )
 
 let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
     key data =
