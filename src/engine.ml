@@ -573,9 +573,7 @@ let push_request tls =
 
 let push_reply tls data =
   (* a trailing 0 byte.. ("\000") *)
-  let repl =
-    String.concat "" [ Packet.push_reply; data; "\000" ]
-  in
+  let repl = String.concat "" [ Packet.push_reply; data; "\000" ] in
   Option.to_result
     ~none:(`Msg "Tls.send application data failed for push request")
     (Tls.Engine.send_application_data tls [ repl ])

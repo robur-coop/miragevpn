@@ -127,8 +127,7 @@ module Metadata = struct
     User str
 
   let to_octets = function
-    | User str ->
-        "\000" ^ str
+    | User str -> "\000" ^ str
     | Timestamp ptime ->
         let n = Int64.of_float (Ptime.to_float_s ptime) in
         let cs = Bytes.create (1 + 8) in
