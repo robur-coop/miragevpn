@@ -356,10 +356,7 @@ let send_recv conn config ip_config _mtu routes =
               | FreeBSD -> "\000\000\000\002" ^ pkt
               | Linux -> pkt
             in
-            Lwt_unix.write tun_fd
-              (Bytes.unsafe_of_string pkt)
-              0 (String.length pkt)
-            >|= ignore)
+            Lwt_unix.write_string tun_fd pkt 0 (String.length pkt) >|= ignore)
           pkts
         >>= fun () -> process_incoming ()
       in

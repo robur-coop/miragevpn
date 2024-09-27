@@ -10,9 +10,7 @@ let write_to_fd fd data =
   let rec w fd data off =
     if len = off then Lwt_result.return ()
     else
-      let* len =
-        Lwt_unix.write fd (Bytes.unsafe_of_string data) off (len - off)
-      in
+      let* len = Lwt_unix.write_string fd data off (len - off) in
       w fd data (len + off)
   in
   Lwt.catch
@@ -38,9 +36,7 @@ let transmit proto fd data =
   | `Udp -> (
       let* r =
         Lwt_result.catch (fun () ->
-            Lwt_unix.write fd
-              (Bytes.unsafe_of_string data)
-              0 (String.length data))
+            Lwt_unix.write_string fd data 0 (String.length data))
       in
       match r with
       | Ok len when String.length data <> len ->
