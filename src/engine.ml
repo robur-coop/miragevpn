@@ -1147,7 +1147,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
       Bytes.create
         (prefix_len + String.length replay_id + tag_size + String.length data)
     in
-    Bytes.blit_string replay_id 0 b prefix_len (String.length replay_id);
+    set_replay_id b prefix_len;
     authenticate_encrypt_into ~key:my_key ~nonce ~adata:replay_id data
       ~src_off:0 b
       ~dst_off:(prefix_len + String.length replay_id + tag_size)
