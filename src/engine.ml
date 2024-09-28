@@ -1400,7 +1400,7 @@ let incoming_data ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
         Log.debug (fun m ->
             m "received replay packet id is %lu" (String.get_int32_be dec 0));
         (* TODO validate ts if provided (avoid replay) *)
-        unpad AES.CBC.block_size dec off
+        unpad AES.CBC.block_size dec hdr_len
     | AES_GCM { their_key; their_implicit_iv; _ } ->
         let tag_len = Mirage_crypto.AES.GCM.tag_size in
         let* () =
