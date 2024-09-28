@@ -1768,112 +1768,109 @@ let incoming state control_crypto buf =
     | Ok (op, key, received, linger) ->
         let state = { state with linger } in
         let* state, out, payloads, act_opt =
-          match find_channel state key op with
-          | None -> (
-              match op with
-              | Packet.Data_v1 ->
-                  Log.warn (fun m ->
-                      m "ignoring packet with stale or bad key id");
-                  Ok (state, out, payloads, act_opt)
-              | _ -> ignore_udp_error (Error (`No_channel key)))
-          | Some (ch, set_ch) -> (
+          match (find_channel state key op, op) with
+          | None, Data_v1 ->
+              Log.warn (fun m -> m "ignoring packet with stale or bad key id");
+              Ok (state, out, payloads, act_opt)
+          | None, _control -> ignore_udp_error (Error (`No_channel key))
+          | Some (ch, set_ch), Data_v1 ->
               Log.debug (fun m ->
                   m "channel %a - received key %u op %a" pp_channel ch key
                     Packet.pp_operation op);
-              match op with
-              | Packet.Data_v1 ->
-                  let+ state, payload =
-                    ignore_udp_error (received_data state ch set_ch received)
+              let+ state, payload =
+                ignore_udp_error (received_data state ch set_ch received)
+              in
+              let payloads =
+                Option.fold payload ~none:payloads ~some:(fun p ->
+                    p :: payloads)
+              in
+              (state, out, payloads, act_opt)
+          | Some (ch, set_ch), op -> (
+              Log.debug (fun m ->
+                  m "channel %a - received key %u op %a" pp_channel ch key
+                    Packet.pp_operation op);
+              let* p, needs_wkc =
+                ignore_udp_error
+                  (validate_control state control_crypto op key received)
+              in
+              let* session, transport =
+                ignore_udp_error (expected_packet state.session ch.transport p)
+              in
+              let state = { state with session }
+              and ch = { ch with transport } in
+              match p with
+              | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
+              | `Control (_, (_, _, data)) -> (
+                  let* est, config, ch, out' =
+                    incoming_control state.auth_user_pass state.is_not_taken
+                      state.config state.rng state.state state.session ch
+                      (state.now ()) (state.ts ()) key op data
                   in
-                  let payloads =
-                    Option.fold payload ~none:payloads ~some:(fun p ->
-                        p :: payloads)
+                  Log.debug (fun m ->
+                      m "out channel %a, pkts %d" pp_channel ch
+                        (List.length out'));
+                  (* each control needs to be acked! *)
+                  let out' =
+                    match out' with [] -> [ (`Ack, "") ] | xs -> xs
                   in
-                  (state, out, payloads, act_opt)
-              | op -> (
-                  let* p, needs_wkc =
-                    ignore_udp_error
-                      (validate_control state control_crypto op key received)
+                  (* now prepare outgoing packets *)
+                  let state = { state with session } in
+                  let session, transport, encs =
+                    wrap_control state control_crypto needs_wkc key ch.transport
+                      out'
                   in
-                  let* session, transport =
-                    ignore_udp_error
-                      (expected_packet state.session ch.transport p)
-                  in
-                  let state = { state with session }
-                  and ch = { ch with transport } in
-                  match p with
-                  | `Ack _ -> Ok (set_ch state ch, out, payloads, act_opt)
-                  | `Control (_, (_, _, data)) -> (
-                      let* est, config, ch, out' =
-                        incoming_control state.auth_user_pass state.is_not_taken
-                          state.config state.rng state.state state.session ch
-                          (state.now ()) (state.ts ()) key op data
+                  let out = out @ encs
+                  and ch = { ch with transport }
+                  and state = { state with config; session } in
+                  match est with
+                  | None -> Ok (set_ch state ch, out, payloads, act_opt)
+                  | Some `Exit ->
+                      let act =
+                        match act_opt with
+                        | None -> Some `Exit
+                        | Some a_old ->
+                            Log.warn (fun m ->
+                                m
+                                  "Producing another action; ignoring older %a \
+                                   and using newer %a"
+                                  pp_action a_old pp_action `Exit);
+                            Some `Exit
                       in
-                      Log.debug (fun m ->
-                          m "out channel %a, pkts %d" pp_channel ch
-                            (List.length out'));
-                      (* each control needs to be acked! *)
-                      let out' =
-                        match out' with [] -> [ (`Ack, "") ] | xs -> xs
+                      Ok (set_ch state ch, out, payloads, act)
+                  | Some (#Cc_message.cc_message as a_new) ->
+                      let act =
+                        match act_opt with
+                        | None -> Some a_new
+                        | Some a_old ->
+                            Log.warn (fun m ->
+                                m
+                                  "Ignoring new control channel message %a due \
+                                   to older action %a"
+                                  pp_action a_new pp_action a_old);
+                            Some a_old
                       in
-                      (* now prepare outgoing packets *)
-                      let state = { state with session } in
-                      let session, transport, encs =
-                        wrap_control state control_crypto needs_wkc key
-                          ch.transport out'
+                      Ok (set_ch state ch, out, payloads, act)
+                  | Some (`Established ip_config) ->
+                      let state = { state with channel = ch } in
+                      let+ state, mtu = transition_to_established state in
+                      let est =
+                        Option.map
+                          (fun mtu -> `Established (ip_config, mtu, config))
+                          mtu
                       in
-                      let out = out @ encs
-                      and ch = { ch with transport }
-                      and state = { state with config; session } in
-                      match est with
-                      | None -> Ok (set_ch state ch, out, payloads, act_opt)
-                      | Some `Exit ->
-                          let act =
-                            match act_opt with
-                            | None -> Some `Exit
-                            | Some a_old ->
-                                Log.warn (fun m ->
-                                    m
-                                      "Producing another action; ignoring \
-                                       older %a and using newer %a"
-                                      pp_action a_old pp_action `Exit);
-                                Some `Exit
-                          in
-                          Ok (set_ch state ch, out, payloads, act)
-                      | Some (#Cc_message.cc_message as a_new) ->
-                          let act =
-                            match act_opt with
-                            | None -> Some a_new
-                            | Some a_old ->
-                                Log.warn (fun m ->
-                                    m
-                                      "Ignoring new control channel message %a \
-                                       due to older action %a"
-                                      pp_action a_new pp_action a_old);
-                                Some a_old
-                          in
-                          Ok (set_ch state ch, out, payloads, act)
-                      | Some (`Established ip_config) ->
-                          let state = { state with channel = ch } in
-                          let+ state, mtu = transition_to_established state in
-                          let est =
-                            Option.map
-                              (fun mtu -> `Established (ip_config, mtu, config))
-                              mtu
-                          in
-                          let act =
-                            match (act_opt, est) with
-                            | None, None -> None
-                            | None, (Some _ as a) | (Some _ as a), None -> a
-                            | Some a_old, (Some a_new as a) ->
-                                Log.warn (fun m ->
-                                    m
-                                      "Producing another action; ignoring \
-                                       older %a and using newer %a"
-                                      pp_action a_old pp_action a_new);
-                                a
-                          in
-                          (state, out, payloads, act))))
+                      let act =
+                        match (act_opt, est) with
+                        | None, None -> None
+                        | None, (Some _ as a) | (Some _ as a), None -> a
+                        | Some a_old, (Some a_new as a) ->
+                            Log.warn (fun m ->
+                                m
+                                  "Producing another action; ignoring older %a \
+                                   and using newer %a"
+                                  pp_action a_old pp_action a_new);
+                            a
+                      in
+                      (state, out, payloads, act)))
         in
         (* Invariant: [linger] is always empty for UDP *)
         if linger = "" then Ok (state, out, payloads, act_opt)
