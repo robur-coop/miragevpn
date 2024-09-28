@@ -1191,6 +1191,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
           Bytes.create
             (prefix_len + H.digest_size + String.length iv + String.length data)
         in
+        Bytes.blit_string iv 0 b (prefix_len + H.digest_size) (String.length iv);
         AES.CBC.encrypt_into ~key:my_key ~iv data ~src_off:0 b
           ~dst_off:(prefix_len + H.digest_size + String.length iv)
           (String.length data);
@@ -1199,7 +1200,6 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
         in
         (* H.get_into_bytes hmac ~off:prefix_len b; *)
         Bytes.blit_string (H.to_raw_string hmac) 0 b prefix_len H.digest_size;
-        Bytes.blit_string iv 0 b (prefix_len + H.digest_size) (String.length iv);
         b
     | AES_GCM { my_key; my_implicit_iv; _ } ->
         aead Mirage_crypto.AES.GCM.tag_size
