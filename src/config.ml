@@ -2070,8 +2070,8 @@ let valid_server_options ~client:_ _server_t =
   Log.err (fun m -> m "TODO valid_server_options is not implemented");
   Ok ()
 
-let parse_next (effect : parser_effect) initial_state :
-    (parser_state, 'err) result =
+let parse_next (eff : parser_effect) initial_state : (parser_state, 'err) result
+    =
   let open Result.Syntax in
   let block acc (`Inline (kind, payload)) =
     let* acc = acc in
@@ -2107,7 +2107,7 @@ let parse_next (effect : parser_effect) initial_state :
         let retb ?tl b = multib ?tl [ b ] in
         match hd with
         | `Path (wanted_name, kind) -> (
-            match effect with
+            match eff with
             | Some (`File (effect_name, content))
               when String.equal effect_name wanted_name ->
                 (* TODO ensure returned B matches kind? *)
