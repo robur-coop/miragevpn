@@ -194,7 +194,7 @@ let test_receive_data cipher =
     Staged.stage @@ fun () ->
     match Miragevpn.handle established_client (`Data pkt) with
     | Ok _ -> ()
-    | Error _ -> assert false
+    | Error err -> Format.kasprintf failwith "%a" Miragevpn.pp_error err
   in
   Test.make ~name:"decode data" staged
 
