@@ -38,11 +38,11 @@ module K = struct
     let doc = Arg.info ~doc:"Use network address translation (NAT) on local traffic before sending over the tunnel."
         ["nat"]
     in
-    Arg.(value & flag doc)
+    Mirage_runtime.register_arg Arg.(value & flag doc)
 
   let nat_table_size =
     let doc = Arg.info ~doc:"The size of the NAT table (n/100 -> ICMP, n/2 -> TCP, n/2 -> UDP)." ["nat-table-size"] in
-    Arg.(value & opt int 2048 doc)
+    Mirage_runtime.register_arg Arg.(value & opt int 2048 doc)
 end
 
 module Main
@@ -484,14 +484,14 @@ struct
     t.ovpn_fragments <- frags;
     ovpn_recv t private_ip
 
-  let start _ _ _ _ s net eth arp ip block private_ip nat nat_table_size =
+  let start _ _ _ _ s net eth arp ip block =
     (* TODO maybe rename private to local? *)
     (let open Lwt_result.Infix in
      read_config block >>= fun config ->
      let nat =
-       if nat then
-         let icmp_size = nat_table_size / 100 in
-         let tcp_size = (nat_table_size - icmp_size) / 2 in
+       if K.nat () then
+         let icmp_size = K.nat_table_size () / 100 in
+         let tcp_size = (K.nat_table_size () - icmp_size) / 2 in
          Logs.info (fun m -> m "Using NAT with %u ICMP, %u TCP, and %u UDP entries"
                        icmp_size tcp_size tcp_size);
          Some (Mirage_nat_lru.empty ~tcp_size ~udp_size:tcp_size ~icmp_size)
@@ -510,6 +510,7 @@ struct
          private_fragments = Fragments.Cache.empty (256 * 1024);
        }
      in
+     let private_ip = List.hd (I.configured_ips ip) in
      Lwt_result.ok (Lwt.join
                       [ ovpn_recv t private_ip;
                         private_recv t private_ip net eth arp ]))

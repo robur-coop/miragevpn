@@ -4,24 +4,27 @@ module K = struct
   open Cmdliner
 
   let ipv4 =
-    Mirage_runtime_network.V4.network (Ipaddr.V4.Prefix.of_string_exn "10.0.0.2/24")
+    Mirage_runtime.register_arg
+      (Mirage_runtime_network.V4.network (Ipaddr.V4.Prefix.of_string_exn "10.0.0.2/24"))
 
   let ipv4_gateway =
-    Mirage_runtime_network.V4.gateway None
+    Mirage_runtime.register_arg (Mirage_runtime_network.V4.gateway None)
 
-  let ipv4_only = Mirage_runtime_network.ipv4_only ()
+  let ipv4_only =
+    Mirage_runtime.register_arg (Mirage_runtime_network.ipv4_only ())
 
-  let ipv6_only = Mirage_runtime_network.ipv6_only ()
+  let ipv6_only =
+    Mirage_runtime.register_arg (Mirage_runtime_network.ipv6_only ())
 
   let nat_table_size =
     let doc = Arg.info ~doc:"The size of the NAT table (n/100 -> ICMP, n/2 -> TCP, n/2 -> UDP)." ["nat-table-size"] in
-    Arg.(value & opt int 2048 doc)
+    Mirage_runtime.register_arg Arg.(value & opt int 2048 doc)
 
   let really_no_authentication =
     let doc = Arg.info ~doc:"Allow to not do any authentication. This will allow any client to connect."
         ["really-no-authentication"]
     in
-    Arg.(value & flag doc)
+    Mirage_runtime.register_arg Arg.(value & flag doc)
 end
 
 module Main
@@ -304,27 +307,27 @@ begin
     | Error e -> Logs.warn (fun m -> m "error %a when sending data received over tunnel"
                                S.IP.pp_error e)
 
-  let start _ _ _ _ net eth arp ipv6 block ipv4 ipv4_gateway ipv4_only ipv6_only nat_table_size really_no_authentication =
+  let start _ _ _ _ net eth arp ipv6 block =
     read_config block >>= function
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "error while reading config %s" msg);
         failwith "config file error"
     | Ok config ->
         let table =
-          let icmp_size = nat_table_size / 100 in
-          let tcp_size = (nat_table_size - icmp_size) / 2 in
+          let icmp_size = K.nat_table_size () / 100 in
+          let tcp_size = (K.nat_table_size () - icmp_size) / 2 in
           Logs.info (fun m -> m "Using NAT with %u ICMP, %u TCP, and %u UDP entries"
                         icmp_size tcp_size tcp_size);
           Mirage_nat_lru.empty ~tcp_size ~udp_size:tcp_size ~icmp_size
         in
-        Ipv4.connect ~no_init:ipv6_only ~cidr:ipv4 ?gateway:ipv4_gateway eth arp table config >>= fun ipv4 ->
-        IPV4V6.connect ~ipv4_only ~ipv6_only ipv4 ipv6 >>= fun ip ->
+        Ipv4.connect ~no_init:(K.ipv6_only ()) ~cidr:(K.ipv4 ()) ?gateway:(K.ipv4_gateway ()) eth arp table config >>= fun ipv4 ->
+        IPV4V6.connect ~ipv4_only:(K.ipv4_only ()) ~ipv6_only:(K.ipv6_only ()) ipv4 ipv6 >>= fun ip ->
         ICMP.connect ipv4 >>= fun icmp ->
         UDP.connect ip >>= fun udp ->
         TCP.connect ip >>= fun tcp ->
         S.connect net eth arp ip icmp udp tcp >>= fun stack ->
         let payloadv4_from_tunnel = payloadv4_from_tunnel config table stack in
-        let t = O.connect ~really_no_authentication ~payloadv4_from_tunnel config stack in
+        let t = O.connect ~really_no_authentication:(K.really_no_authentication ()) ~payloadv4_from_tunnel config stack in
         Ipv4.inject_write (O.write t);
         let task, _u = Lwt.task () in
         task

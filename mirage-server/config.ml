@@ -1,4 +1,4 @@
-(* mirage >= 4.7.0 & < 4.8.0 *)
+(* mirage >= 4.8.0 & < 4.9.0 *)
 
 open Mirage
 
@@ -14,15 +14,8 @@ let miragevpn_handler =
       package "mirage-nat";
       package "tcpip" ~sublibs:[ "stack-direct" ];
     ]
-  and runtime_args = [
-    runtime_arg ~pos:__POS__ "Unikernel.K.ipv4";
-    runtime_arg ~pos:__POS__ "Unikernel.K.ipv4_gateway";
-    runtime_arg ~pos:__POS__ "Unikernel.K.ipv4_only";
-    runtime_arg ~pos:__POS__ "Unikernel.K.ipv6_only";
-    runtime_arg ~pos:__POS__ "Unikernel.K.nat_table_size";
-    runtime_arg ~pos:__POS__ "Unikernel.K.really_no_authentication";
-  ] in
-  main ~runtime_args ~packages "Unikernel.Main"
+  in
+  main ~packages "Unikernel.Main"
     (random @-> mclock @-> pclock @-> time @-> network @-> ethernet @-> arpv4 @-> ipv6 @-> block @-> job)
 
 let block =
