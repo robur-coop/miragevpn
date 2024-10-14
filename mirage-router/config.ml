@@ -1,16 +1,11 @@
-(* mirage >= 4.7.0 & < 4.8.0 *)
+(* mirage >= 4.8.0 & < 4.9.0 *)
 
 open Mirage
 
 let private_netif = netif ~group:"private" "private"
 let private_ethernet = ethif private_netif
 let private_arp = arp private_ethernet
-(* this is temporary until we find a better way *)
-let ip = Runtime_arg.V4.network ~group:"private" (Ipaddr.V4.Prefix.of_string_exn "10.0.0.2/24")
 let private_ipv4 = create_ipv4 ~group:"private" private_ethernet private_arp
-
-let nat = runtime_arg ~pos:__POS__ "Unikernel.K.nat"
-let nat_table_size = runtime_arg ~pos:__POS__ "Unikernel.K.nat_table_size"
 
 let miragevpn_handler =
   let packages =
@@ -21,9 +16,8 @@ let miragevpn_handler =
       package "mirage-kv";
       package ~min:"3.0.0" "mirage-nat";
     ]
-  and runtime_args = [ Runtime_arg.v ip ; nat ; nat_table_size ]
   in
-  main ~runtime_args ~packages "Unikernel.Main"
+  main ~packages "Unikernel.Main"
     (random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> network
    @-> ethernet @-> arpv4 @-> ipv4 @-> block @-> job)
 
