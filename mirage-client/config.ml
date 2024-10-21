@@ -7,7 +7,7 @@ let data = generic_kv_ro ~key:data_key "configuration"
 
 let miragevpn_handler =
   let packages =
-    let pin = "git+file://" ^ Filename.dirname (Sys.getcwd ()) in
+    let pin = "git+file://" ^ Filename.dirname (Sys.getcwd ()) ^ "#HEAD" in
     [
       package "logs";
       package ~pin ~sublibs:[ "mirage" ] "miragevpn";
