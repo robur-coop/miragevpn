@@ -187,9 +187,6 @@ let rec reader_udp mvar r =
       Lwt_mvar.put mvar (`Data data) >>= fun () -> reader_udp mvar r
   | Ok None -> reader_udp mvar r
 
-let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
-let now () = Ptime_clock.now ()
-
 let resolve (name, ip_version) =
   let happy_eyeballs = Happy_eyeballs_lwt.create () in
   let res = Dns_client_lwt.create happy_eyeballs in
@@ -384,9 +381,7 @@ let send_recv conn config ip_config _mtu routes =
       Lwt.pick [ process_incoming (); process_outgoing tun_fd ]
 
 let establish_tunnel config pkcs12_password =
-  match
-    Miragevpn.client ?pkcs12_password config ts now Mirage_crypto_rng.generate
-  with
+  match Miragevpn.client ?pkcs12_password config with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "client construction failed %s" msg);
       failwith msg

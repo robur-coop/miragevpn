@@ -252,9 +252,6 @@ type t = {
   is_not_taken : Ipaddr.V4.t -> bool;
   auth_user_pass : (user:string -> pass:string -> bool) option;
   linger : string;
-  rng : int -> string;
-  ts : unit -> int64;
-  now : unit -> Ptime.t;
   control_crypto : control_crypto;
   state : state;
   session : session;
@@ -385,14 +382,14 @@ let transition_to_established t =
       Ok ({ t with state = Client Ready; session }, Some mtu)
   | Client (Rekeying _) ->
       (* TODO: may cipher (i.e. mtu) or compress change between rekeys? *)
-      let lame_duck = Some (t.channel, t.ts ()) in
+      let lame_duck = Some (t.channel, Mirage_mtime.elapsed_ns ()) in
       Ok ({ t with state = Client Ready; lame_duck }, None)
   | Server Server_handshaking ->
       let mtu = data_mtu t.config t.session in
       Ok ({ t with state = Server Server_ready }, Some mtu)
   | Server (Server_rekeying _) ->
       (* TODO: may cipher (i.e. mtu) or compress (or IP?) change between rekeys? *)
-      let lame_duck = Some (t.channel, t.ts ()) in
+      let lame_duck = Some (t.channel, Mirage_mtime.elapsed_ns ()) in
       Ok ({ t with state = Server Server_ready; lame_duck }, None)
   | state ->
       Error
@@ -403,9 +400,6 @@ type server = {
   server_config : Config.t;
   is_not_taken : Ipaddr.V4.t -> bool;
   auth_user_pass : (user:string -> pass:string -> bool) option;
-  server_rng : int -> string;
-  server_ts : unit -> int64;
-  server_now : unit -> Ptime.t;
 }
 
 let[@coverage off] pp_server ppf _s = Fmt.pf ppf "server"

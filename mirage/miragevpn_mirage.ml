@@ -54,7 +54,6 @@ module Server (S : Tcpip.Stack.V4V6) = struct
     payloadv4_from_tunnel : Ipv4_packet.t -> Cstruct.t -> unit Lwt.t;
   }
 
-  let now () = Mirage_ptime.now ()
   let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
 
   let write t dst cs =
@@ -305,8 +304,7 @@ module Server (S : Tcpip.Stack.V4V6) = struct
     let connections = Hashtbl.create 7 in
     let is_not_taken ip = not (Hashtbl.mem connections ip) in
     match
-      Miragevpn.server ?really_no_authentication config ~is_not_taken
-        Mirage_mtime.elapsed_ns now Mirage_crypto_rng.generate
+      Miragevpn.server ?really_no_authentication ~is_not_taken config
     with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "server construction failed %s" msg);
@@ -354,7 +352,6 @@ module Client_router (S : Tcpip.Stack.V4V6) = struct
     mutable mtu : int;
   }
 
-  let now () = Mirage_ptime.now ()
   let get_ip t = Ipaddr.V4.Prefix.address t.ip_config.Miragevpn.cidr
   let configured_ips t = [ t.ip_config.Miragevpn.cidr ]
   let mtu t = t.mtu
@@ -549,7 +546,7 @@ module Client_router (S : Tcpip.Stack.V4V6) = struct
         event s conn
 
   let connect config s =
-    match Miragevpn.client config Mirage_mtime.elapsed_ns now Mirage_crypto_rng.generate with
+    match Miragevpn.client config with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "client construction failed %s" msg);
         Lwt.return (Error (`Msg msg))

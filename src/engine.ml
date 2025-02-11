@@ -85,9 +85,9 @@ let wrap_and_out protocol control_crypto key p =
   | `Tls_auth tls_auth -> hmac_and_out protocol tls_auth key p
   | `Tls_crypt (tls_crypt, _wkc_opt) -> encrypt_and_out protocol tls_crypt key p
 
-let client ?pkcs12_password config ts now rng =
+let client ?pkcs12_password config =
   let open Result.Syntax in
-  let current_ts = ts () in
+  let current_ts = Mirage_mtime.elapsed_ns () in
   let* () = Config.is_valid_client_config config in
   let remotes =
     let remotes = Config_ext.remotes config in
@@ -96,7 +96,7 @@ let client ?pkcs12_password config ts now rng =
     | () ->
         let remotes = Array.of_list remotes in
         for i = Array.length remotes - 1 downto 1 do
-          let j = Randomconv.int rng ~bound:(succ i) in
+          let j = Randomconv.int Mirage_crypto_rng.generate ~bound:(succ i) in
           let t = remotes.(i) in
           remotes.(i) <- remotes.(j);
           remotes.(j) <- t
@@ -184,9 +184,6 @@ let client ?pkcs12_password config ts now rng =
       state = Client state;
       control_crypto;
       linger = "";
-      rng;
-      ts;
-      now;
       session;
       channel;
       lame_duck = None;
@@ -197,8 +194,8 @@ let client ?pkcs12_password config ts now rng =
   in
   Ok (state, action)
 
-let server ?(really_no_authentication = false) server_config ~is_not_taken
-    ?auth_user_pass server_ts server_now server_rng =
+let server ?(really_no_authentication = false) ~is_not_taken
+    ?auth_user_pass server_config =
   let open Result.Syntax in
   let* () = Config.is_valid_server_config server_config in
   let+ () =
@@ -220,9 +217,6 @@ let server ?(really_no_authentication = false) server_config ~is_not_taken
       server_config;
       is_not_taken;
       auth_user_pass;
-      server_rng;
-      server_ts;
-      server_now;
     },
     Config_ext.server_ip server_config,
     port )
@@ -318,11 +312,11 @@ let incoming_tls_without_reply tls data =
   | tls', None, d -> Ok (tls', d)
   | _, Some _, _ -> Error (`Msg "expected no TLS reply")
 
-let maybe_kex_client rng config tls =
+let maybe_kex_client config tls =
   let open Result.Syntax in
   if Tls.Engine.handshake_in_progress tls then Ok (TLS_handshake tls, None)
   else
-    let pre_master, random1, random2 = (rng 48, rng 32, rng 32) in
+    let pre_master, random1, random2 = (Mirage_crypto_rng.generate 48, Mirage_crypto_rng.generate 32, Mirage_crypto_rng.generate 32) in
     let options = Config.client_generate_connect_options config in
     let pull = Config.mem Pull config in
     let user_pass = Config.find Auth_user_pass config in
@@ -600,7 +594,7 @@ let maybe_push_reply config = function
           Error (`Msg (Fmt.str "push request expected push_reply, got %S" str))
   | None -> Error (`Msg "push request expected data, received no data")
 
-let incoming_control_client config rng session channel now op data =
+let incoming_control_client config session channel op data =
   match (channel.channel_st, op) with
   | Expect_reset, (Packet.Hard_reset_server_v2 | Packet.Soft_reset_v2) ->
       (* for rekey we receive a soft_reset -- a bit alien that we don't send soft_reset *)
@@ -625,7 +619,7 @@ let incoming_control_client config rng session channel now op data =
                     ca);
               X509.Authenticator.chain_of_trust
               (* ~allowed_hashes:Mirage_crypto.Hash.hashes *)
-                ~time:(fun () -> Some now)
+                ~time:(fun () -> Some (Mirage_ptime.now ()))
                 ca
           | _, Some fps ->
               Log.info (fun m ->
@@ -639,7 +633,7 @@ let incoming_control_client config rng session channel now op data =
                     | Ok _ -> acc
                     | Error _ ->
                         X509.Validation.trust_cert_fingerprint
-                          ~time:(fun () -> Some now)
+                          ~time:(fun () -> Some (Mirage_ptime.now ()))
                           ~hash:`SHA256 ~fingerprint ?ip ~host chain)
                   (Error (`Msg "No fingerprints provided"))
                   fps
@@ -670,7 +664,7 @@ let incoming_control_client config rng session channel now op data =
           m "TLS payload is %a"
             Fmt.(option ~none:(any "no") (Ohex.pp_hexdump ()))
             d);
-      let+ channel_st, data = maybe_kex_client rng config tls' in
+      let+ channel_st, data = maybe_kex_client config tls' in
       let out =
         match (tls_response, data) with
         | None, None ->
@@ -862,8 +856,8 @@ let server_handle_tls_data config auth_user_pass is_not_taken session keys tls d
       Ok (ip_config, config, channel_st, out)
   | `Authentication_failed _tls -> Ok (Some `Exit, config, Expect_reset, out)
 
-let incoming_control_server auth_user_pass is_not_taken config rng session
-    channel now _ts _key op data =
+let incoming_control_server auth_user_pass is_not_taken config session
+    channel _key op data =
   let open Result.Syntax in
   match (channel.channel_st, op) with
   | ( Expect_reset,
@@ -884,7 +878,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
             Ok
               (Some
                  (X509.Authenticator.chain_of_trust
-                    ~time:(fun () -> Some now)
+                    ~time:(fun () -> Some (Mirage_ptime.now ()))
                     (* ~allowed_hashes:Mirage_crypto.Hash.hashes *) ca))
         | None, None, Some fps | Some `Required, None, Some fps ->
             Ok
@@ -896,7 +890,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
                        | Ok _ -> acc
                        | Error _ ->
                            X509.Validation.trust_cert_fingerprint
-                             ~time:(fun () -> Some now)
+                             ~time:(fun () -> Some (Mirage_ptime.now ()))
                              ~hash:`SHA256 ~fingerprint ?ip ~host chain)
                      (Error (`Msg "No fingerprints provided"))
                      fps))
@@ -935,7 +929,7 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       let channel_st =
         if Tls.Engine.handshake_in_progress tls' then TLS_handshake tls'
         else
-          let random1, random2 = (rng 32, rng 32) and pre_master = "" in
+          let random1, random2 = (Mirage_crypto_rng.generate 32, Mirage_crypto_rng.generate 32) and pre_master = "" in
           TLS_established (tls', { State.pre_master; random1; random2 })
       in
       let out =
@@ -991,16 +985,16 @@ let incoming_control_server auth_user_pass is_not_taken config rng session
       (act, config, channel, [])
   | _, _ -> Error (`No_transition (channel, op, data))
 
-let incoming_control auth_user_pass is_not_taken config rng state session
-    channel now ts key op data =
+let incoming_control auth_user_pass is_not_taken config state session channel
+    key op data =
   Log.info (fun m ->
       m "incoming control! op %a (channel %a)" Packet.pp_operation op pp_channel
         channel);
   match state with
-  | Client _ -> incoming_control_client config rng session channel now op data
+  | Client _ -> incoming_control_client config session channel op data
   | Server _ ->
-      incoming_control_server auth_user_pass is_not_taken config rng session
-        channel now ts key op data
+      incoming_control_server auth_user_pass is_not_taken config session
+        channel key op data
 
 let expected_packet session transport data =
   let open Result.Syntax in
@@ -1115,7 +1109,7 @@ let unpad block_size cs off =
   if len >= 0 && amount <= block_size then Ok (String.sub cs off len)
   else Error (`Msg "bad padding")
 
-let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
+let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress data
     =
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
@@ -1186,7 +1180,7 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
           Bytes.unsafe_to_string b
         in
         (* FIXME: rng_into *)
-        let iv = rng AES.CBC.block_size in
+        let iv = Mirage_crypto_rng.generate AES.CBC.block_size in
         let b =
           Bytes.create
             (prefix_len + H.digest_size + String.length iv + String.length data)
@@ -1209,12 +1203,12 @@ let out ?add_timestamp prefix_len (ctx : keys) hmac_algorithm compress rng data
           Mirage_crypto.Chacha20.authenticate_encrypt_into my_key my_implicit_iv
   )
 
-let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
-    key data =
+let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol key
+    data =
   (* as described in [out], ~add_timestamp is only used in static key mode *)
   let prefix_len = Packet.protocol_len protocol + 1 in
   let ctx, out =
-    out ?add_timestamp prefix_len ctx hmac_algorithm compress rng data
+    out ?add_timestamp prefix_len ctx hmac_algorithm compress data
   in
   Packet.encode_data out protocol key;
   let out = Bytes.unsafe_to_string out in
@@ -1223,10 +1217,10 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol rng
         (String.length out) ctx.my_replay_id);
   (ctx, out)
 
-let static_out ~add_timestamp ctx hmac_algorithm compress protocol rng data =
+let static_out ~add_timestamp ctx hmac_algorithm compress protocol data =
   let prefix_len = Packet.protocol_len protocol in
   let ctx, out =
-    out ~add_timestamp prefix_len ctx hmac_algorithm compress rng data
+    out ~add_timestamp prefix_len ctx hmac_algorithm compress data
   in
   Packet.set_protocol out protocol;
   let out = Bytes.unsafe_to_string out in
@@ -1241,25 +1235,25 @@ let outgoing s data =
   in
   match (s.control_crypto, keys_opt s.channel) with
   | `Static keys, _ ->
-      let add_timestamp = ptime_to_ts_exn (s.now ()) in
+      let add_timestamp = ptime_to_ts_exn (Mirage_ptime.now ()) in
       let hmac_algorithm = Config.get Auth s.config in
       let keys, out =
         static_out ~add_timestamp keys hmac_algorithm s.session.compress
-          s.session.protocol s.rng data
+          s.session.protocol data
       in
       let channel = incr s.channel out in
       let control_crypto = `Static keys in
-      Ok ({ s with control_crypto; channel; last_sent = s.ts () }, out)
+      Ok ({ s with control_crypto; channel; last_sent = Mirage_mtime.elapsed_ns () }, out)
   | _, None -> Error `Not_ready
   | _, Some ctx ->
       let sess = s.session in
       let hmac_algorithm = Config.get Auth s.config in
       let ctx, out =
-        data_out ctx hmac_algorithm sess.compress sess.protocol s.rng
+        data_out ctx hmac_algorithm sess.compress sess.protocol
           s.channel.keyid data
       in
       let channel = incr (set_keys s.channel ctx) out in
-      Ok ({ s with channel; last_sent = s.ts () }, out)
+      Ok ({ s with channel; last_sent = Mirage_mtime.elapsed_ns () }, out)
 
 let ping =
   (* constant ping_string in OpenVPN: src/openvpn/ping.c *)
@@ -1267,7 +1261,7 @@ let ping =
 
 let maybe_ping state =
   (* ping if we haven't send anything for the configured interval *)
-  let current_ts = state.ts () in
+  let current_ts = Mirage_mtime.elapsed_ns () in
   let s_since_sent = Duration.to_sec (Int64.sub current_ts state.last_sent) in
   let interval = Config.(get Ping_interval state.config) in
   match interval with
@@ -1292,7 +1286,8 @@ let maybe_init_rekey s =
        to "this is a renegotiation" *)
   in
   let init_channel () =
-    init_channel Packet.Soft_reset_v2 s.session keyid (s.now ()) (s.ts ())
+    init_channel Packet.Soft_reset_v2 s.session keyid (Mirage_ptime.now ())
+      (Mirage_mtime.elapsed_ns ())
   in
   match (s.state, s.control_crypto) with
   | Client Ready, (#control_tls as cc) ->
@@ -1331,7 +1326,7 @@ let maybe_rekey state =
           find Renegotiate_packets state.config )
     with
     | Some y, _, _
-      when y <= Duration.to_sec (Int64.sub (state.ts ()) state.channel.started)
+      when y <= Duration.to_sec (Int64.sub (Mirage_mtime.elapsed_ns ()) state.channel.started)
            && y > 0 ->
         true
     | _, Some b, _ when b <= state.channel.bytes && b > 0 -> true
@@ -1346,7 +1341,7 @@ let maybe_drop_lame_duck state =
   | _, None -> state (* TODO: warn? *)
   | Some (_, ts'), Some s ->
       (* TODO: log when dropped *)
-      if Duration.to_sec (Int64.sub (state.ts ()) ts') >= s then
+      if Duration.to_sec (Int64.sub (Mirage_mtime.elapsed_ns ()) ts') >= s then
         { state with lame_duck = None }
       else state
 
@@ -1597,8 +1592,8 @@ let maybe_add_wkc now mtu session tls_crypt needs_wkc key transport outs =
   | None, _ -> (session, transport, None, outs)
 
 let wrap_control state control_crypto needs_wkc key transport outs =
-  let now = state.now ()
-  and ts = state.ts ()
+  let now = Mirage_ptime.now ()
+  and ts = Mirage_mtime.elapsed_ns ()
   and my_mtu = control_mtu state.config control_crypto state.session in
   let session, transport, maybe_wkc, outs =
     match control_crypto with
@@ -1660,10 +1655,10 @@ let find_channel state key op =
       Log.warn (fun m -> m "no channel found! %d" key);
       match (state.state, op) with
       | Client Ready, Packet.Soft_reset_v2 ->
-          let channel = new_channel key (state.ts ()) in
+          let channel = new_channel key (Mirage_mtime.elapsed_ns ()) in
           Some (channel, fun s ch -> { s with state = Client (Rekeying ch) })
       | Server Server_ready, Packet.Soft_reset_v2 ->
-          let channel = new_channel key (state.ts ()) in
+          let channel = new_channel key (Mirage_mtime.elapsed_ns ()) in
           Some
             (channel, fun s ch -> { s with state = Server (Server_rekeying ch) })
       | ( ( Client (Resolving _ | Connecting _ | Handshaking _ | Rekeying _)
@@ -1749,7 +1744,7 @@ let validate_control state control_crypto op key payload =
 
 let incoming state control_crypto buf =
   let open Result.Syntax in
-  let state = { state with last_received = state.ts () } in
+  let state = { state with last_received = Mirage_mtime.elapsed_ns () } in
   let udp_ignore = function
     | Error `Udp_ignore ->
         (* XXX: probably we want to track how many bad packets we get? *)
@@ -1808,8 +1803,8 @@ let incoming state control_crypto buf =
               | `Control (_, (_, _, data)) -> (
                   let* est, config, ch, out' =
                     incoming_control state.auth_user_pass state.is_not_taken
-                      state.config state.rng state.state state.session ch
-                      (state.now ()) (state.ts ()) key op data
+                      state.config state.state state.session ch
+                      key op data
                   in
                   Log.debug (fun m ->
                       m "out channel %a, pkts %d" pp_channel ch
@@ -1900,10 +1895,10 @@ let new_connection server data =
   let protocol = `Tcp in
   let session =
     init_session
-      ~my_session_id:(Randomconv.int64 server.server_rng)
+      ~my_session_id:(Randomconv.int64 Mirage_crypto_rng.generate)
       ~protocol ()
   in
-  let current_ts = server.server_ts () in
+  let current_ts = Mirage_mtime.elapsed_ns () in
   let channel = new_channel 0 current_ts in
   let* t, (control_crypto : control_tls), packet =
     let tls_auth_or_tls_crypt error =
@@ -1923,9 +1918,6 @@ let new_connection server data =
           control_crypto :> control_crypto;
           state = Server Server_handshaking;
           linger = "";
-          rng = server.server_rng;
-          ts = server.server_ts;
-          now = server.server_now;
           session;
           channel;
           lame_duck = None;
@@ -1988,9 +1980,6 @@ let new_connection server data =
                   control_crypto;
                   state = Server Server_handshaking;
                   linger = "";
-                  rng = server.server_rng;
-                  ts = server.server_ts;
-                  now = server.server_now;
                   session;
                   channel;
                   lame_duck = None;
@@ -2009,7 +1998,7 @@ let new_connection server data =
 let maybe_ping_timeout state =
   (* timeout fires if no data was received within the configured interval *)
   let s_since_rcvd =
-    Duration.to_sec (Int64.sub (state.ts ()) state.last_received)
+    Duration.to_sec (Int64.sub (Mirage_mtime.elapsed_ns ()) state.last_received)
   in
   let timeout, action =
     match Config.(get Ping_timeout state.config) with
@@ -2132,14 +2121,14 @@ let handshake_timeout next_or_fail t s ts =
 
 let handle_client t control_crypto s ev =
   let open Result.Syntax in
-  let now = t.now () and ts = t.ts () in
+  let now = Mirage_ptime.now () and ts = Mirage_mtime.elapsed_ns () in
   match resolve_connect_client t ts s ev with
   | Ok (t, action) -> Ok (t, [], [], action)
   | Error (`Msg _) as e -> e
   | Error (`Not_handled (remote, next_or_fail)) -> (
       match (s, ev) with
       | Connecting (idx, _, _), `Connected ->
-          let my_session_id = Randomconv.int64 t.rng in
+          let my_session_id = Randomconv.int64 Mirage_crypto_rng.generate in
           let protocol = match remote idx with _, _, proto -> proto in
           let keyid = 0 in
           let session = init_session ~my_session_id ~protocol () in
@@ -2203,7 +2192,7 @@ let handle_server t cc s ev =
 
 let handle_static_client t s keys ev =
   let open Result.Syntax in
-  let ts = t.ts () in
+  let ts = Mirage_mtime.elapsed_ns () in
   match resolve_connect_client t ts s ev with
   | Ok (t, action) -> Ok (t, [], [], action)
   | Error (`Msg _) as e -> e
@@ -2220,9 +2209,9 @@ let handle_static_client t s keys ev =
           let session = { t.session with protocol } in
           let hmac_algorithm = Config.get Auth t.config in
           let keys, out =
-            let add_timestamp = ptime_to_ts_exn (t.now ()) in
+            let add_timestamp = ptime_to_ts_exn (Mirage_ptime.now ()) in
             static_out ~add_timestamp keys hmac_algorithm t.session.compress
-              protocol t.rng ping
+              protocol ping
           in
           let state = Client Ready and control_crypto = `Static keys in
           Ok

@@ -286,26 +286,20 @@ val pp_action : action Fmt.t
 val client :
   ?pkcs12_password:string ->
   Config.t ->
-  (unit -> int64) ->
-  (unit -> Ptime.t) ->
-  (int -> string) ->
   (t * initial_action, [> `Msg of string ]) result
-(** [client config ts now rng] constructs a [t], returns the remote to
+(** [client config] constructs a [t], returns the remote to
     connect to, an initial buffer to send to the remote. It returns an error
     if the configuration does not contain a tls-auth element. *)
 
 val server :
   ?really_no_authentication:bool ->
-  Config.t ->
   is_not_taken:(Ipaddr.V4.t -> bool) ->
   ?auth_user_pass:(user:string -> pass:string -> bool) ->
-  (unit -> int64) ->
-  (unit -> Ptime.t) ->
-  (int -> string) ->
+  Config.t ->
   ( server * (Ipaddr.V4.t * Ipaddr.V4.Prefix.t) * int,
     [> `Msg of string ] )
   result
-(** [server config ~is_not_taken ~auth_user_pass ts now rng] constructs a
+(** [server config ~is_not_taken ~auth_user_pass] constructs a
     [server], its [ip, netmask] and [port].  The callback [is_not_taken] is
     provided to avoid IP address collisions. The callback [auth_user_pass]
     validates username and password of each connection. It returns an error if

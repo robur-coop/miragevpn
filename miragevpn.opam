@@ -41,6 +41,8 @@ depends: [
   "duration"
   "randomconv" {>= "0.2.0"}
   "digestif" {>= "1.2.0"}
+  "mirage-ptime" {>= "5.0.0"}
+  "mirage-mtime" {>= "5.0.0"}
   # app:
   "mtime"
   "dns-client-lwt" {>= "10.0.0"}
@@ -50,8 +52,6 @@ depends: [
   # mirage:
   "dns-client-mirage" {>= "10.0.0"}
   "tcpip" {>= "9.0.0"}
-  "mirage-ptime" {>= "5.0.0"}
-  "mirage-mtime" {>= "5.0.0"}
   "mirage-sleep" {>= "4.0.0"}
   "cstruct" {>= "6.0.0"}
   "happy-eyeballs-mirage" {>= "2.0.0"}
