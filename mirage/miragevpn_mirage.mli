@@ -5,12 +5,7 @@
      - established / connected -> Miragevpn.established <ip> session
     - established ++ read on connection -> handle + forward/write to destination
 *)
-module Server
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6) : sig
+module Server (S : Tcpip.Stack.V4V6) : sig
   type t
 
   val connect :
@@ -23,12 +18,7 @@ module Server
   val write : t -> Ipaddr.V4.t -> Cstruct.t -> unit Lwt.t
 end
 
-module Client_router
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6) : sig
+module Client_router (S : Tcpip.Stack.V4V6) : sig
   type t
 
   val mtu : t -> int
@@ -44,12 +34,7 @@ module Client_router
   val write : t -> Cstruct.t -> bool Lwt.t
 end
 
-module Client_stack
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6) : sig
+module Client_stack (S : Tcpip.Stack.V4V6) : sig
   include Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t
 
   val connect :

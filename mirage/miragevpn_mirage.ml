@@ -43,13 +43,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 (* NB for the internal/VPN thingy, a stack is needed that is not backed by an
    ethernet interface or similar, but only virtual (i.e. using 10.8.0.1,
    send/recv operations local only) *)
-module Server
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6) =
-struct
+module Server (S : Tcpip.Stack.V4V6) = struct
   module TCP = S.TCP
 
   type t = {
@@ -60,7 +54,7 @@ struct
     payloadv4_from_tunnel : Ipv4_packet.t -> Cstruct.t -> unit Lwt.t;
   }
 
-  let now () = Ptime.v (P.now_d_ps ())
+  let now () = Mirage_ptime.now ()
   let pp_dst ppf (dst, port) = Fmt.pf ppf "%a:%u" Ipaddr.pp dst port
 
   let write t dst cs =
@@ -305,14 +299,14 @@ struct
       server.connections (Lwt.return [])
     >>= fun to_remove ->
     List.iter (Hashtbl.remove server.connections) to_remove;
-    T.sleep_ns (Duration.of_sec 1) >>= fun () -> timer server ()
+    Mirage_sleep.ns (Duration.of_sec 1) >>= fun () -> timer server ()
 
   let connect ?really_no_authentication ?payloadv4_from_tunnel config stack =
     let connections = Hashtbl.create 7 in
     let is_not_taken ip = not (Hashtbl.mem connections ip) in
     match
       Miragevpn.server ?really_no_authentication config ~is_not_taken
-        M.elapsed_ns now R.generate
+        Mirage_mtime.elapsed_ns now Mirage_crypto_rng.generate
     with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "server construction failed %s" msg);
@@ -338,15 +332,9 @@ struct
         server
 end
 
-module Client_router
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6) =
-struct
-  module H = Happy_eyeballs_mirage.Make (T) (M) (S)
-  module DNS = Dns_client_mirage.Make (R) (T) (M) (P) (S) (H)
+module Client_router (S : Tcpip.Stack.V4V6) = struct
+  module H = Happy_eyeballs_mirage.Make (S)
+  module DNS = Dns_client_mirage.Make (S) (H)
   module TCP = S.TCP
   module UDP = S.UDP
 
@@ -366,7 +354,7 @@ struct
     mutable mtu : int;
   }
 
-  let now () = Ptime.v (P.now_d_ps ())
+  let now () = Mirage_ptime.now ()
   let get_ip t = Ipaddr.V4.Prefix.address t.ip_config.Miragevpn.cidr
   let configured_ips t = [ t.ip_config.Miragevpn.cidr ]
   let mtu t = t.mtu
@@ -495,7 +483,7 @@ struct
         Lwt_switch.turn_off conn.est_switch >>= fun () ->
         conn.est_switch <- Lwt_switch.create ();
         (* TODO we may wish to filter certain ports (< 1024) *)
-        let our_port = Randomconv.int16 R.generate in
+        let our_port = Randomconv.int16 Mirage_crypto_rng.generate in
         let peer = (our_port, ip, port) in
         conn.peer <- Some (`Udp (S.udp s, peer));
         S.UDP.listen (S.udp s) ~port:our_port
@@ -561,7 +549,7 @@ struct
         event s conn
 
   let connect config s =
-    match Miragevpn.client config M.elapsed_ns now R.generate with
+    match Miragevpn.client config Mirage_mtime.elapsed_ns now Mirage_crypto_rng.generate with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "client construction failed %s" msg);
         Lwt.return (Error (`Msg msg))
@@ -582,7 +570,7 @@ struct
         (* handle initial action *)
         Lwt.async (fun () -> event s conn);
         let rec tick () =
-          T.sleep_ns (Duration.of_sec 1) >>= fun () ->
+          Mirage_sleep.ns (Duration.of_sec 1) >>= fun () ->
           Lwt_mvar.put event_mvar `Tick >>= fun () -> tick ()
         in
         Lwt.async tick;
@@ -613,14 +601,8 @@ struct
         Ok t
 end
 
-module Client_stack
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6) =
-struct
-  module O = Client_router (R) (M) (P) (T) (S)
+module Client_stack (S : Tcpip.Stack.V4V6) = struct
+  module O = Client_router (S)
 
   type t = { ovpn : O.t; mutable frags : Fragments.Cache.t }
 
@@ -708,7 +690,7 @@ struct
           (* need to ensure that our v4 payload is 8byte-bounded *)
           let ip_payload_len' = ip_payload_len - (ip_payload_len mod 8) in
           let hdr =
-            { hdr with id = Randomconv.int16 R.generate; off = 0x2000 }
+            { hdr with id = Randomconv.int16 Mirage_crypto_rng.generate; off = 0x2000 }
           in
           let pay, rest = Cstruct.split payload ip_payload_len' in
           let first = encode hdr pay in
@@ -735,7 +717,7 @@ struct
             m "received IPv4 frame: %a (payload %d bytes)" Ipv4_packet.pp packet
               (Cstruct.length payload));
         let f', r =
-          Fragments.process t.frags (M.elapsed_ns ()) packet payload
+          Fragments.process t.frags (Mirage_mtime.elapsed_ns ()) packet payload
         in
         t.frags <- f';
         match r with
