@@ -52,12 +52,12 @@ end
 
 let setup_random_number_generator = function
   | None ->
-      Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna);
+      Mirage_crypto_rng_unix.use_default ();
       Mirage_crypto_rng.default_generator ()
   | Some (_, time) ->
       let time () = Int64.of_float (Ptime.to_float_s (time ())) in
-      let g = Mirage_crypto_rng.Fortuna.create ~time () in
-      Mirage_crypto_rng_unix.initialize ~g (module Mirage_crypto_rng.Fortuna);
+      let g = Mirage_crypto_rng.create ~time (module Mirage_crypto_rng.Fortuna) in
+      Mirage_crypto_rng.set_default_generator g;
       Mirage_crypto_rng.default_generator ()
 
 let timer_for_random_number_generator =

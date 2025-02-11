@@ -4,7 +4,7 @@ let cipher_to_string = function
   | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305"
   | `AES_256_CBC -> "AES-256-CBC"
 
-let () = Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
+let () = Mirage_crypto_rng_unix.use_default ()
 let now = Ptime_clock.now
 let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
 

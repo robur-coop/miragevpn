@@ -339,7 +339,7 @@ let parse_config filename =
   | Error _ as e -> e
 
 let jump _ filename test =
-  Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
+  Mirage_crypto_rng_unix.use_default ();
   Lwt_main.run
     (let* config = parse_config filename in
      match config with

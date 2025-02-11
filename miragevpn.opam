@@ -32,8 +32,8 @@ depends: [
   "decompress" { >= "1.5.3" }
   "logs"
   "lwt" {>= "5.7.0"}
-  "mirage-crypto" {>= "1.0.0"}
-  "mirage-crypto-rng" {>= "1.0.0"}
+  "mirage-crypto" {>= "1.2.0"}
+  "mirage-crypto-rng" {>= "1.2.0"}
   "ptime"
   "tls" {>= "1.0.0"}
   "dns-client" {>= "9.0.0"}
@@ -42,7 +42,6 @@ depends: [
   "randomconv" {>= "0.2.0"}
   "digestif" {>= "1.2.0"}
   # app:
-  "mirage-crypto-rng-lwt" {>= "1.0.0"}
   "mtime"
   "dns-client-lwt" {>= "9.0.0"}
   "tuntap" {>= "1.8.1"}
