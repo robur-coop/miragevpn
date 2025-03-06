@@ -8,15 +8,8 @@
 
 open Lwt.Infix
 
-module Main
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
-    (S : Tcpip.Stack.V4V6)
-    (FS : Mirage_kv.RO) =
-struct
-  module O = Miragevpn_mirage.Client_stack (R) (M) (P) (T) (S)
+module Main (S : Tcpip.Stack.V4V6) (FS : Mirage_kv.RO) = struct
+  module O = Miragevpn_mirage.Client_stack (S)
   module I = Icmpv4.Make (O)
 
   let read_config data =
@@ -39,7 +32,7 @@ struct
               Ipaddr.V4.pp src Ipaddr.V4.pp dst (Cstruct.length buf));
         Lwt.return_unit
 
-  let start _ _ _ _ s data =
+  let start s data =
     (let open Lwt_result.Infix in
      read_config data >>= fun config ->
      O.connect config s >>= fun (t, reader) ->
