@@ -28,10 +28,6 @@ module K = struct
 end
 
 module Main
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
     (N : Mirage_net.S)
     (E : Ethernet.S)
     (A : Arp.S)
@@ -133,7 +129,7 @@ struct
 
   (* construct a stack and divert packets to NAT that are not the listening port *)
   module Ipv4 = struct
-    module I = Static_ipv4.Make (R) (M) (E) (A)
+    module I = Static_ipv4.Make (E) (A)
 
     type t = I.t * Mirage_nat_lru.t * Miragevpn.Config.t
     type error = I.error
@@ -209,12 +205,12 @@ struct
 
   module IPV4V6 = Tcpip_stack_direct.IPV4V6(Ipv4)(IPV6)
   module ICMP = Icmpv4.Make(Ipv4)
-  module UDP = Udp.Make(IPV4V6)(R)
-  module TCP = Tcp.Flow.Make(IPV4V6)(T)(M)(R)
+  module UDP = Udp.Make(IPV4V6)
+  module TCP = Tcp.Flow.Make(IPV4V6)
 
-  module S = Tcpip_stack_direct.MakeV4V6(T)(R)(N)(E)(A)(IPV4V6)(ICMP)(UDP)(TCP)
+  module S = Tcpip_stack_direct.MakeV4V6(N)(E)(A)(IPV4V6)(ICMP)(UDP)(TCP)
 
-  module O = Miragevpn_mirage.Server (R) (M) (P) (T) (S)
+  module O = Miragevpn_mirage.Server (S)
 
   let strip_0_suffix cfg =
     let rec find0 idx =
@@ -247,7 +243,7 @@ struct
 
   let find_free_port config protocol =
     let rec free () =
-      let port = Randomconv.int16 R.generate in
+      let port = Randomconv.int16 Mirage_crypto_rng.generate in
       if is_listening_port_proto config protocol port then free ()
       else
          Some port
@@ -307,7 +303,7 @@ begin
     | Error e -> Logs.warn (fun m -> m "error %a when sending data received over tunnel"
                                S.IP.pp_error e)
 
-  let start _ _ _ _ net eth arp ipv6 block =
+  let start net eth arp ipv6 block =
     read_config block >>= function
     | Error (`Msg msg) ->
         Logs.err (fun m -> m "error while reading config %s" msg);

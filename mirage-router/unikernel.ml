@@ -46,10 +46,6 @@ module K = struct
 end
 
 module Main
-    (R : Mirage_crypto_rng_mirage.S)
-    (M : Mirage_clock.MCLOCK)
-    (P : Mirage_clock.PCLOCK)
-    (T : Mirage_time.S)
     (S : Tcpip.Stack.V4V6)
     (N : Mirage_net.S)
     (E : Ethernet.S)
@@ -57,7 +53,7 @@ module Main
     (I : Tcpip.Ip.S with type ipaddr = Ipaddr.V4.t and type prefix = Ipaddr.V4.Prefix.t)
     (B : Mirage_block.S) =
 struct
-  module O = Miragevpn_mirage.Client_router (R) (M) (P) (T) (S)
+  module O = Miragevpn_mirage.Client_router (S)
 
   let strip_0_suffix cfg =
     let rec find0 idx =
@@ -272,7 +268,7 @@ struct
       in
       match
         Mirage_nat_lru.add table packet public_ip
-          (fun () -> Some (Randomconv.int16 R.generate)) `NAT
+          (fun () -> Some (Randomconv.int16 Mirage_crypto_rng.generate)) `NAT
       with
       | Error e ->
         Logs.debug (fun m ->
@@ -346,7 +342,7 @@ struct
 
   let push_packet_over_tunnel t private_ip ip_hdr payload =
     let c, pkt =
-      Fragments.process t.private_fragments (M.elapsed_ns ()) ip_hdr payload
+      Fragments.process t.private_fragments (Mirage_mtime.elapsed_ns ()) ip_hdr payload
     in
     t.private_fragments <- c;
     match pkt with
@@ -397,7 +393,7 @@ struct
   (* packets received over the tunnel *)
   let rec ovpn_recv t private_ip =
     O.read t.ovpn >>= fun datas ->
-    let ts = M.elapsed_ns () in
+    let ts = Mirage_mtime.elapsed_ns () in
     Lwt_list.fold_left_s
       (fun c data ->
         match Ipv4_packet.Unmarshal.of_cstruct data with
@@ -484,7 +480,7 @@ struct
     t.ovpn_fragments <- frags;
     ovpn_recv t private_ip
 
-  let start _ _ _ _ s net eth arp ip block =
+  let start s net eth arp ip block =
     (* TODO maybe rename private to local? *)
     (let open Lwt_result.Infix in
      read_config block >>= fun config ->
