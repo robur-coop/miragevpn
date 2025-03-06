@@ -394,7 +394,8 @@ let transition_to_established t =
   | state ->
       Error
         (`Msg
-          (Fmt.str "couldn't transition to established, state %a" pp_state state))
+           (Fmt.str "couldn't transition to established, state %a" pp_state
+              state))
 
 type server = {
   server_config : Config.t;

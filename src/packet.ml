@@ -217,7 +217,10 @@ let split_hmac hmac_len op key buf =
   *)
   (* below we modify the contents of buf, so we need to copy here *)
   let hmac = String.sub buf 8 hmac_len in
-  let to_cut = hmac_len - 1 (* - 1 (for key/op) *) in
+  let to_cut =
+    hmac_len - 1
+    (* - 1 (for key/op) *)
+  in
   let b =
     Bytes.unsafe_of_string (String.sub buf to_cut (String.length buf - to_cut))
   in
@@ -532,7 +535,10 @@ let maybe_string prefix buf off = function
 
 let decode_tls_data ?(with_premaster = false) buf =
   let open Result.Syntax in
-  let pre_master_start = 5 (* 4 (zero) + 1 (key_method) *) in
+  let pre_master_start =
+    5
+    (* 4 (zero) + 1 (key_method) *)
+  in
   let pre_master_len = if with_premaster then 48 else 0 in
   let random_len = 32 in
   let opt_start =

@@ -460,9 +460,9 @@ let jump _ filename pkcs12 =
   Printexc.record_backtrace true;
   Mirage_crypto_rng_unix.use_default ();
   Lwt_main.run
-    (parse_config filename >>= function
-     | Error (`Msg s) -> failwith ("config parser: " ^ s)
-     | Ok config -> establish_tunnel config pkcs12)
+    ( parse_config filename >>= function
+      | Error (`Msg s) -> failwith ("config parser: " ^ s)
+      | Ok config -> establish_tunnel config pkcs12 )
 
 open Cmdliner
 

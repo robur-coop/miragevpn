@@ -303,9 +303,7 @@ module Server (S : Tcpip.Stack.V4V6) = struct
   let connect ?really_no_authentication ?payloadv4_from_tunnel config stack =
     let connections = Hashtbl.create 7 in
     let is_not_taken ip = not (Hashtbl.mem connections ip) in
-    match
-      Miragevpn.server ?really_no_authentication ~is_not_taken config
-    with
+    match Miragevpn.server ?really_no_authentication ~is_not_taken config with
     | Error (`Msg msg) ->
         Log.err (fun m -> m "server construction failed %s" msg);
         exit 64
@@ -687,7 +685,11 @@ module Client_stack (S : Tcpip.Stack.V4V6) = struct
           (* need to ensure that our v4 payload is 8byte-bounded *)
           let ip_payload_len' = ip_payload_len - (ip_payload_len mod 8) in
           let hdr =
-            { hdr with id = Randomconv.int16 Mirage_crypto_rng.generate; off = 0x2000 }
+            {
+              hdr with
+              id = Randomconv.int16 Mirage_crypto_rng.generate;
+              off = 0x2000;
+            }
           in
           let pay, rest = Cstruct.split payload ip_payload_len' in
           let first = encode hdr pay in

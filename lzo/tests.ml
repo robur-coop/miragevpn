@@ -82,12 +82,14 @@ module Lzo_tests = struct
         (* Copy_literal (147, Trailing_no_extra)
            length = 5 + 0
            d = 4
-        *) ^ "\194"
+        *)
+        ^ "\194"
          (* read byte
             distance: ((194<<3)=1552) + 4 + 1 = 1557
             Copy_block (l=5, distance=1557, state=3=Trailing_three)
             -> Distance is invalid because dictionary is empty
-         *) ^ "\239\194\144S\131\218\252\210\029\2372\224cR\225r,"
+         *)
+         ^ "\239\194\144S\131\218\252\210\029\2372\224cR\225r,"
          ^ "\028\243\159\139m\004\018\254\152\016\207\176>\194\r\245#"
          ^ "\189\128\n\179]\007\251\162O\247\134\1655\173\006\019\216"
          ^ "\024W\182\219\245u\145%O\026\193"))

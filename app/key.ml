@@ -56,7 +56,9 @@ let setup_random_number_generator = function
       Mirage_crypto_rng.default_generator ()
   | Some (_, time) ->
       let time () = Int64.of_float (Ptime.to_float_s (time ())) in
-      let g = Mirage_crypto_rng.create ~time (module Mirage_crypto_rng.Fortuna) in
+      let g =
+        Mirage_crypto_rng.create ~time (module Mirage_crypto_rng.Fortuna)
+      in
       Mirage_crypto_rng.set_default_generator g;
       Mirage_crypto_rng.default_generator ()
 

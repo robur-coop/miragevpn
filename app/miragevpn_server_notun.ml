@@ -296,7 +296,9 @@ let connect config test =
   let open Lwt.Infix in
   let connections = Hashtbl.create 7 in
   let is_not_taken ip = not (Hashtbl.mem connections ip) in
-  match Miragevpn.server ~really_no_authentication:true ~is_not_taken config with
+  match
+    Miragevpn.server ~really_no_authentication:true ~is_not_taken config
+  with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "server construction failed %s" msg);
       assert false
