@@ -58,7 +58,7 @@ let monitoring =
     | _ -> assert false
   in
   impl
-    ~packages:[ package "mirage-monitoring" ]
+    ~packages:[ package ~min:"0.0.6" "mirage-monitoring" ]
     ~runtime_args:[ name ; monitor ]
     ~connect "Mirage_monitoring.Make"
     (stackv4v6 @-> job)
