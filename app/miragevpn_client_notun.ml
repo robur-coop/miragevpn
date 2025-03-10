@@ -314,10 +314,7 @@ and connecting_action test tick client actions =
       assert false
 
 let establish_tunnel config pkcs12_password test =
-  let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
-  and now = Ptime_clock.now
-  and rng = Mirage_crypto_rng.generate in
-  match Miragevpn.client ?pkcs12_password config ts now rng with
+  match Miragevpn.client ?pkcs12_password config with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "client construction failed: %s" msg);
       exit 3
@@ -338,7 +335,7 @@ let parse_config filename =
   | Error _ as e -> e
 
 let jump _ filename pkcs12 test =
-  Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
+  Mirage_crypto_rng_unix.use_default ();
   Lwt_main.run
     (let* config = parse_config filename in
      match config with

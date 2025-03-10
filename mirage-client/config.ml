@@ -1,4 +1,4 @@
-(* mirage >= 4.7.0 & < 4.9.0 *)
+(* mirage >= 4.9.0 & < 4.10.0 *)
 
 open Mirage
 
@@ -15,13 +15,8 @@ let miragevpn_handler =
     ]
   in
   main ~packages "Unikernel.Main"
-    (random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> kv_ro @-> job)
+    (stackv4v6 @-> kv_ro @-> job)
 
 let () =
   register "ovpn-client"
-    [
-      miragevpn_handler $ default_random $ default_monotonic_clock
-      $ default_posix_clock $ default_time
-      $ generic_stackv4v6 default_network
-      $ data;
-    ]
+    [ miragevpn_handler $ generic_stackv4v6 default_network $ data ]

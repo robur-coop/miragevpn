@@ -29,7 +29,7 @@
   ipaddr
   ipaddr.unix
   dns-client-lwt
-  mirage-crypto-rng-lwt
+  mirage-crypto-rng.unix
   mtime.clock.os
   tuntap))
 
@@ -47,7 +47,7 @@
   ipaddr
   ipaddr.unix
   dns-client-lwt
-  mirage-crypto-rng-lwt
+  mirage-crypto-rng.unix
   mtime.clock.os
   tcpip
   tcpip.icmpv4
@@ -87,7 +87,7 @@
   ipaddr
   ipaddr.unix
   dns-client-lwt
-  mirage-crypto-rng-lwt
+  mirage-crypto-rng.unix
   mtime.clock.os
   tcpip
   tcpip.icmpv4

@@ -296,12 +296,8 @@ let connect config test =
   let open Lwt.Infix in
   let connections = Hashtbl.create 7 in
   let is_not_taken ip = not (Hashtbl.mem connections ip) in
-  let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
-  and now = Ptime_clock.now
-  and rng = Mirage_crypto_rng.generate in
   match
-    Miragevpn.server ~really_no_authentication:true config ~is_not_taken ts now
-      rng
+    Miragevpn.server ~really_no_authentication:true ~is_not_taken config
   with
   | Error (`Msg msg) ->
       Logs.err (fun m -> m "server construction failed %s" msg);
@@ -339,7 +335,7 @@ let parse_config filename =
   | Error _ as e -> e
 
 let jump _ filename test =
-  Mirage_crypto_rng_lwt.initialize (module Mirage_crypto_rng.Fortuna);
+  Mirage_crypto_rng_unix.use_default ();
   Lwt_main.run
     (let* config = parse_config filename in
      match config with

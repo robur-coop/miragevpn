@@ -32,28 +32,29 @@ depends: [
   "decompress" { >= "1.5.3" }
   "logs"
   "lwt" {>= "5.7.0"}
-  "mirage-crypto" {>= "1.0.0"}
-  "mirage-crypto-rng" {>= "1.0.0"}
+  "mirage-crypto" {>= "1.2.0"}
+  "mirage-crypto-rng" {>= "1.2.0"}
   "ptime"
   "tls" {>= "1.0.0"}
-  "dns-client" {>= "9.0.0"}
+  "dns-client" {>= "10.0.0"}
   "x509" {>= "1.0.0"}
   "duration"
   "randomconv" {>= "0.2.0"}
   "digestif" {>= "1.2.0"}
+  "mirage-ptime" {>= "5.0.0"}
+  "mirage-mtime" {>= "5.0.0"}
   # app:
-  "mirage-crypto-rng-lwt" {>= "1.0.0"}
   "mtime"
-  "dns-client-lwt" {>= "9.0.0"}
+  "dns-client-lwt" {>= "10.0.0"}
   "tuntap" {>= "1.8.1"}
   "base64" {>= "3.0.0"}
   "hxd"
   # mirage:
-  "dns-client-mirage" {>= "9.0.0"}
-  "tcpip" {>= "8.1.0"}
-  "mirage-crypto-rng-mirage" {>= "1.0.0"}
-  "mirage-clock" {>= "3.0.0"}
+  "dns-client-mirage" {>= "10.0.0"}
+  "tcpip" {>= "9.0.0"}
+  "mirage-sleep" {>= "4.0.0"}
   "cstruct" {>= "6.0.0"}
+  "happy-eyeballs-mirage" {>= "2.0.0"}
   # tooling:
   "cmdliner" { >= "1.1.0" }
   "hxd"

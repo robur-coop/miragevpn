@@ -1,4 +1,4 @@
-(* mirage >= 4.8.0 & < 4.9.0 *)
+(* mirage >= 4.9.0 & < 4.10.0 *)
 
 open Mirage
 
@@ -16,7 +16,7 @@ let miragevpn_handler =
     ]
   in
   main ~packages "Unikernel.Main"
-    (random @-> mclock @-> pclock @-> time @-> network @-> ethernet @-> arpv4 @-> ipv6 @-> block @-> job)
+    (network @-> ethernet @-> arpv4 @-> ipv6 @-> block @-> job)
 
 let block =
   Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file "disk.img"))
@@ -26,9 +26,4 @@ let arp = arp eth
 let ipv6 = create_ipv6 default_network eth
 let () =
   register "ovpn-server"
-    [
-      miragevpn_handler $ default_random $ default_monotonic_clock
-      $ default_posix_clock $ default_time
-      $ default_network $ eth $ arp $ ipv6
-      $ block;
-    ]
+    [ miragevpn_handler $ default_network $ eth $ arp $ ipv6 $ block ]

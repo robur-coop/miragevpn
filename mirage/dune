@@ -11,8 +11,10 @@
   tcpip.tcp
   tcpip.udp
   tcpip.ipv4
-  mirage-crypto-rng-mirage
-  mirage-clock
+  mirage-ptime
+  mirage-mtime
+  mirage-sleep
+  mirage-crypto-rng
   dns-client
   dns-client-mirage)
  (wrapped false))

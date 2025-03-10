@@ -4,9 +4,7 @@ let cipher_to_string = function
   | `CHACHA20_POLY1305 -> "CHACHA20-POLY1305"
   | `AES_256_CBC -> "AES-256-CBC"
 
-let () = Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
-let now = Ptime_clock.now
-let ts () = Mtime.Span.to_uint64_ns (Mtime_clock.elapsed ())
+let () = Mirage_crypto_rng_unix.use_default ()
 
 let tls_auth =
   ( None,
@@ -46,7 +44,7 @@ let ca, cert =
            ] )
     |> add Ext_key_usage (true, [ `Server_auth ])
   in
-  let valid_from = now () in
+  let valid_from = Ptime_clock.now () in
   let valid_until =
     Ptime.add_span valid_from (Ptime.Span.of_int_s 60) |> Option.get
   in
@@ -114,9 +112,7 @@ let established cipher =
                              _application,
                              None ) =
     let pre_connect =
-      match
-        Miragevpn.client minimal_config ts now Mirage_crypto_rng.generate
-      with
+      match Miragevpn.client minimal_config with
       | Ok (s, _) -> s
       | Error (`Msg e) -> Format.ksprintf failwith "Client config error: %s" e
     in
@@ -126,8 +122,8 @@ let established cipher =
   let initial_server =
     let is_not_taken _ = true in
     match
-      Miragevpn.server ~really_no_authentication:true minimal_server_config
-        ~is_not_taken ts now Mirage_crypto_rng.generate
+      Miragevpn.server ~really_no_authentication:true ~is_not_taken
+        minimal_server_config
     with
     | Ok (s, _, _) -> s
     | Error (`Msg e) -> Format.ksprintf failwith "Server config error: %s" e

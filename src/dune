@@ -9,6 +9,7 @@
   ptime
   decompress.lzo
   mirage-crypto
+  mirage-crypto-rng
   tls
   x509
   duration
@@ -19,5 +20,7 @@
   gmap
   randomconv
   base64
-  digestif)
+  digestif
+  mirage-mtime
+  mirage-ptime)
  (wrapped true))
