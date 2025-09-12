@@ -187,8 +187,8 @@ module Conf_map = struct
     | Auth_user_pass : (string * string) k
     | Auth_user_pass_verify : (string * [ `Via_env | `Via_file ]) k
     | Ca : X509.Certificate.t list k
-    | Cipher
-        : [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
+    | Cipher :
+        [ `AES_256_CBC | `AES_128_GCM | `AES_256_GCM | `CHACHA20_POLY1305 ] k
     | Client_to_client : flag k
     | Comp_lzo : flag k
     | Connect_retry : (int * int) k
@@ -220,21 +220,21 @@ module Conf_map = struct
     | Port : int k
     | Pull : flag k
     | Push : string list k
-    | Proto
-        : ([ `Ipv6 | `Ipv4 ] option
-          * [ `Udp | `Tcp of [ `Server | `Client ] option ])
-          k
+    | Proto :
+        ([ `Ipv6 | `Ipv4 ] option
+        * [ `Udp | `Tcp of [ `Server | `Client ] option ])
+        k
       (* see socket.c:static const struct proto_names proto_names[] *)
     | Proto_force : [ `Udp | `Tcp ] k
     | Protocol_flags : Protocol_flag.t list k
     | Redirect_gateway : redirect_gateway_flag list k
-    | Remote
-        : ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
-           | `Ip of Ipaddr.t ]
-          * int option
-          * [ `Udp | `Tcp ] option)
-          list
-          k
+    | Remote :
+        ([ `Domain of [ `host ] Domain_name.t * [ `Ipv4 | `Ipv6 | `Any ]
+         | `Ip of Ipaddr.t ]
+        * int option
+        * [ `Udp | `Tcp ] option)
+        list
+        k
     | Remote_cert_tls : [ `Server | `Client ] k
     | Remote_random : flag k
     | Renegotiate_bytes : int k
@@ -242,27 +242,25 @@ module Conf_map = struct
     | Renegotiate_seconds : int k
     | Replay_window : (int * int) k
     | Resolv_retry : [ `Infinite | `Seconds of int ] k
-    | Route
-        : ([ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
-          * Ipaddr.V4.t option
-          * [ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
-            option
-          * int option)
-          list
-          k
+    | Route :
+        ([ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
+        * Ipaddr.V4.t option
+        * [ `Ip of Ipaddr.V4.t | `Net_gateway | `Remote_host | `Vpn_gateway ]
+          option
+        * int option)
+        list
+        k
     | Route_delay : (int * int) k
     | Route_gateway : [ `Ip of Ipaddr.V4.t | `Dhcp ] k
     | Route_metric : int k
     | Route_nopull : flag k
     | Rport : int k
     | Script_security : int k
-    | Secret
-        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
-          k
+    | Secret :
+        ([ `Incoming | `Outgoing ] option * string * string * string * string) k
     | Server : Ipaddr.V4.Prefix.t k
-    | Tls_auth
-        : ([ `Incoming | `Outgoing ] option * string * string * string * string)
-          k
+    | Tls_auth :
+        ([ `Incoming | `Outgoing ] option * string * string * string * string) k
     | Tls_cert : X509.Certificate.t k
     | Tls_mode : [ `Client | `Server ] k
     | Tls_key : X509.Private_key.t k
@@ -323,14 +321,14 @@ module Conf_map = struct
     then
       Error
         (`Msg
-          "tls-mode present, but none of tls-auth, tls-crypt, or tls-crypt-v2")
+           "tls-mode present, but none of tls-auth, tls-crypt, or tls-crypt-v2")
     else if mem Tls_auth t && mem Tls_crypt t then
       Error (`Msg "tls-auth and tls-crypt are mutually exclusive")
     else if mem Ca t && mem Peer_fingerprint t then
       Error
         (`Msg
-          "While --ca and --peer-fingerprint are not mutually exclusive the \
-           semantics are unclear to us and thus not implemented")
+           "While --ca and --peer-fingerprint are not mutually exclusive the \
+            semantics are unclear to us and thus not implemented")
     else if mem Key_derivation t then
       Error (`Msg "The --key-derivation option is reserved for push replies")
     else if mem Protocol_flags t then
@@ -1161,11 +1159,9 @@ let inline_payload element =
      <|> ( pos >>= fun i ->
            abort (Fmt.str "Data after -----END mark at byte offset %d" i) ))
   >>= (fun lst ->
-        let sz = List.fold_left ( + ) 0 (List.map String.length lst) in
-        if 256 = sz then return lst
-        else
-          abort @@ "Wrong size (" ^ string_of_int sz
-          ^ "); need exactly 256 bytes")
+  let sz = List.fold_left ( + ) 0 (List.map String.length lst) in
+  if 256 = sz then return lst
+  else abort @@ "Wrong size (" ^ string_of_int sz ^ "); need exactly 256 bytes")
   >>| String.concat ""
   >>| fun cs ->
   String.(sub cs 0 64, sub cs 64 64, sub cs 128 64, sub cs (128 + 64) 64)
@@ -1257,7 +1253,8 @@ let a_auth_user_pass_payload =
   (if String.equal pass "" then
      Fmt.kstr fail "auth-user-pass: password is empty, expected on second line!"
    else return ())
-  *> (* OpenVPN only looks at the first two lines and ignores the rest :/ *)
+  *>
+  (* OpenVPN only looks at the first two lines and ignores the rest :/ *)
   skip_many any_char *> pos
   >>= fun garbage_end ->
   let garbage_bytes = garbage_end - garbage_start in
@@ -1282,11 +1279,11 @@ let a_socks_proxy =
   >>= fun server ->
   a_whitespace *> a_number_range 0 65535
   >>= (fun port ->
-        a_whitespace *> a_filepath `Socks_proxy
-        >>= (function
-              | `Path (path, `Socks_proxy) -> return (server, port, `Path path)
-              | `Need_inline _ -> fail "socks-proxy not inlineable")
-        <|> return (server, port, `Path "stdin"))
+  a_whitespace *> a_filepath `Socks_proxy
+  >>= ( function
+  | `Path (path, `Socks_proxy) -> return (server, port, `Path path)
+  | `Need_inline _ -> fail "socks-proxy not inlineable" )
+  <|> return (server, port, `Path "stdin"))
   <|> return (server, 1080, `Path "stdin")
   >>| fun x -> `Socks_proxy x
 
@@ -1438,9 +1435,9 @@ let a_local =
 let a_rport = a_entry_one_number "rport" >>| fun n -> `Entry (B (Rport, n))
 
 let a_ping =
-  (a_entry_one_number "ping" >>| function
-   | 0 -> `Not_configured
-   | n -> `Seconds n)
+  ( a_entry_one_number "ping" >>| function
+    | 0 -> `Not_configured
+    | n -> `Seconds n )
   >>| fun setting -> `Entry (B (Ping_interval, setting))
 
 let a_ping_restart =
@@ -1626,16 +1623,16 @@ let a_redirect_gateway =
 let a_remote =
   string "remote" *> a_whitespace *> a_domain_or_ip >>= fun host_or_ip ->
   ( option None (a_whitespace *> a_number >>| fun p -> Some p) >>= fun port ->
-    (option None (a_whitespace *> a_single_param >>| fun p -> Some p)
-     >>= function
-     | Some "udp" -> return (Some `Udp, `Any)
-     | Some "udp4" -> return (Some `Udp, `Ipv4)
-     | Some "udp6" -> return (Some `Udp, `Ipv6)
-     | Some "tcp" -> return (Some `Tcp, `Any)
-     | Some "tcp4" -> return (Some `Tcp, `Ipv4)
-     | Some "tcp6" -> return (Some `Tcp, `Ipv6)
-     | Some x -> fail (Fmt.str "remote: unknown protocol designation %S" x)
-     | None -> return (None, `Any))
+    ( option None (a_whitespace *> a_single_param >>| fun p -> Some p)
+    >>= function
+      | Some "udp" -> return (Some `Udp, `Any)
+      | Some "udp4" -> return (Some `Udp, `Ipv4)
+      | Some "udp6" -> return (Some `Udp, `Ipv6)
+      | Some "tcp" -> return (Some `Tcp, `Any)
+      | Some "tcp4" -> return (Some `Tcp, `Ipv4)
+      | Some "tcp6" -> return (Some `Tcp, `Ipv6)
+      | Some x -> fail (Fmt.str "remote: unknown protocol designation %S" x)
+      | None -> return (None, `Any) )
     >>| fun protos -> (port, protos) )
   >>= fun (port, protos) ->
   match (host_or_ip, protos) with
@@ -1702,9 +1699,9 @@ let a_route_gateway =
   string "route-gateway" *> a_whitespace
   *> choice
        [
-         (a_single_param >>= function
-          | "dhcp" -> return `Dhcp
-          | _ -> fail "not dhcp|ip");
+         ( a_single_param >>= function
+           | "dhcp" -> return `Dhcp
+           | _ -> fail "not dhcp|ip" );
          (a_ipv4_dotted_quad >>| fun x -> `Ip x);
        ]
   >>| fun x -> `Entry (B (Route_gateway, x))
@@ -1728,14 +1725,14 @@ let a_inline =
   >>| fun lines -> `Inline (tag, String.concat "" lines)
 
 let a_dhcp_option =
-  (string "dhcp-option" *> a_whitespace *> a_single_param
-   >>| String.lowercase_ascii
-   >>= function
-   | "disable-nbt" -> return @@ B (Dhcp_disable_nbt, ())
-   | "dns" -> a_whitespace *> a_ip >>| fun ip -> B (Dhcp_dns, [ ip ])
-   | "domain" -> a_whitespace *> a_domain_name >>| fun d -> B (Dhcp_domain, d)
-   | "ntp" -> a_whitespace *> a_ip >>| fun ip -> B (Dhcp_ntp, [ ip ])
-   | _ -> fail "Unrecognized dhcp-option type")
+  ( string "dhcp-option" *> a_whitespace *> a_single_param
+  >>| String.lowercase_ascii
+  >>= function
+    | "disable-nbt" -> return @@ B (Dhcp_disable_nbt, ())
+    | "dns" -> a_whitespace *> a_ip >>| fun ip -> B (Dhcp_dns, [ ip ])
+    | "domain" -> a_whitespace *> a_domain_name >>| fun d -> B (Dhcp_domain, d)
+    | "ntp" -> a_whitespace *> a_ip >>| fun ip -> B (Dhcp_ntp, [ ip ])
+    | _ -> fail "Unrecognized dhcp-option type" )
   >>| fun b -> `Entry b
 
 let a_not_implemented =
@@ -1857,9 +1854,9 @@ let parse_internal config_str : (line list, 'x) result =
      @@ fix (fun recurse ->
             a_ign_ws *> a_config_entry <* a_ign_ws
             >>= (fun entry ->
-                  commit
-                  *> (a_ign_ws *> end_of_input *> return [ entry ]
-                     <|> (List.cons entry <$> recurse)))
+            commit
+            *> (a_ign_ws *> end_of_input *> return [ entry ]
+               <|> (List.cons entry <$> recurse)))
             <|> ( available >>| min 100 >>= peek_string >>= fun context ->
                   pos >>= fun pos ->
                   fail
@@ -2189,10 +2186,11 @@ let parse_next (eff : parser_effect) initial_state : (parser_state, 'err) result
                 (fun (typs, nams, other) -> function
                   | `Dev_type typ -> (typ :: typs, nams, other)
                   | `Dev name -> (typs, name :: nams, other)
-                  | o -> (typs, nams, o :: other)
-                  (* o::other reverses the list, in order to keep
-                     Remote and other order-sensitive stanzas intact
-                     we need to List.rev the [tl] list. *))
+                  | o ->
+                      (* o::other reverses the list, in order to keep
+                       Remote and other order-sensitive stanzas intact
+                       we need to List.rev the [tl] list. *)
+                      (typs, nams, o :: other))
                 ([], [], []) (current :: tl)
             in
             let tl = List.rev tl in
