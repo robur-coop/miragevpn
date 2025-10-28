@@ -436,6 +436,44 @@ module Tls_crypt = struct
       String.sub buf clear_hdr_len (String.length buf - clear_hdr_len) )
 end
 
+module Tls_plain = struct
+  type header = {
+    local_session : int64;
+    (* uint8 array length *)
+    ack_sequence_numbers : int32 list;
+    remote_session : int64 option; (* if above is non-empty *)
+  }
+
+  let pp_header = pp_header
+
+  let encode_header buf to_encode hdr =
+    let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+
+
+  let encode proto
+      (key, (p : [< `Ack of header | `Control of operation * _ ])) =
+    let hdr = header p in
+    let len =
+      let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+      (* 1 is op_key, + 8 if remote session id is present *)
+      protocol_len proto + 1 + hdr_len 0 + id_arr_len
+      + (if id_arr_len = 0 then 0 else 8)
+      + match p with
+      | `Ack _ -> 0
+      | `Control (_, (_, _, payload)) ->
+        (* 4 is sequence number *)
+        4 + String.length payload
+    in
+    let buf = Bytes.create len in
+    set_protocol buf proto;
+    let op = op_key (operation p) key in
+    Bytes.set_uint8 buf (protocol_len proto) op;
+    let to_encode = protocol_len proto + 1 in
+    match p with
+    | `Ack ack -> ignore (encode_header buf to_encode ack)
+    | `Control (_, control) -> encode_control buf to_encode control
+end
+
 type ack = [ `Ack of header ]
 
 (* the int32 in the middle is the sequence number *)

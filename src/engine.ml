@@ -82,6 +82,7 @@ let encrypt_and_out protocol { my; _ } key
 
 let wrap_and_out protocol control_crypto key p =
   match control_crypto with
+  | `Tls_plain -> 
   | `Tls_auth tls_auth -> hmac_and_out protocol tls_auth key p
   | `Tls_crypt (tls_crypt, _wkc_opt) -> encrypt_and_out protocol tls_crypt key p
 
