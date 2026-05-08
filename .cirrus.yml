@@ -1,9 +1,9 @@
 freebsd_instance:
-  image_family: freebsd-14-2
+  image_family: freebsd-14-3
 
 freebsd_client_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
-  ocaml_script: opam init -a --comp=4.14.2
+  ocaml_script: opam init -a --comp=4.14.3
   mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>=4.9.0"
   configure_script: eval `opam env` && cd mirage-client && mirage configure -t hvt
   depend_script: eval `opam env` && cd mirage-client && gmake depend
@@ -13,9 +13,9 @@ freebsd_client_task:
 
 freebsd_router_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
-  ocaml_script: opam init -a --comp=4.14.2
+  ocaml_script: opam init -a --comp=4.14.3
   mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>=4.10.0"
-  configure_script: eval `opam env` && cd mirage-router && mirage configure -t hvt --enable-monitoring
+  configure_script: eval `opam env` && cd mirage-router && mirage configure -t hvt --enable-monitoring --utcp --management-utcp
   depend_script: eval `opam env` && cd mirage-router && gmake depend
   build_script: eval `opam env` && cd mirage-router && gmake build
   router_artifacts:
@@ -23,7 +23,7 @@ freebsd_router_task:
 
 freebsd_server_task:
   pkg_install_script: pkg install -y ocaml-opam gmake bash
-  ocaml_script: opam init -a --comp=4.14.2
+  ocaml_script: opam init -a --comp=4.14.3
   mirage_script: eval `opam env` && opam install --confirm-level=unsafe-yes "mirage>=4.9.0"
   configure_script: eval `opam env` && cd mirage-server && mirage configure -t hvt
   depend_script: eval `opam env` && cd mirage-server && gmake depend
