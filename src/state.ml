@@ -179,7 +179,7 @@ type session = {
 }
 
 let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
-    ?(protocol = `Tcp) () =
+    ~protocol () =
   {
     my_session_id;
     my_replay_id = 1l;
@@ -343,6 +343,7 @@ let control_mtu config control_crypto session =
     | `Tls_crypt _ ->
         (* AES_CTR and SHA256 *)
         Digestif.SHA256.digest_size
+    | `Tls -> 0 - 8 (* no timestamp and replay_id (replay_packet_id_packet) *)
   in
   let pre = 1 (* key / op *) + if session.protocol = `Tcp then 2 else 0 in
   let hdr = Packet.hdr_len mac_len in

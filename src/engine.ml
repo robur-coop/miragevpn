@@ -82,7 +82,7 @@ let encrypt_and_out protocol { my; _ } key
 
 let wrap_and_out protocol control_crypto key p =
   match control_crypto with
-  | `Tls_plain -> 
+  | `Tls -> Packet.Tls_plain.encode protocol (key, p)
   | `Tls_auth tls_auth -> hmac_and_out protocol tls_auth key p
   | `Tls_crypt (tls_crypt, _wkc_opt) -> encrypt_and_out protocol tls_crypt key p
 
@@ -176,7 +176,12 @@ let client ?pkcs12_password config =
     let compress =
       match Config.find Comp_lzo config with None -> false | Some () -> true
     in
-    let session = init_session ~my_session_id:0L ~compress ()
+    let protocol =
+      match Config.find Proto config with
+      | None | Some (_, `Udp) -> `Udp
+      | Some (_, `Tcp _) -> `Tcp
+    in
+    let session = init_session ~protocol ~my_session_id:0L ~compress ()
     and channel = new_channel 0 current_ts in
     {
       config;
@@ -999,7 +1004,7 @@ let incoming_control auth_user_pass is_not_taken config state session channel
       incoming_control_server auth_user_pass is_not_taken config session channel
         key op data
 
-let expected_packet session transport data =
+let expected_packet control_crypto session transport data =
   let open Result.Syntax in
   (* expects monotonic packet + sequence number, session ids matching *)
   let hdr = Packet.header data and sn = Packet.sequence_number data in
@@ -1022,9 +1027,12 @@ let expected_packet session transport data =
   (* TODO deal with it, properly: packets may be lost (e.g. udp)
      both from their side, and acks from our side *)
   let* () =
-    guard
-      (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id <= 0)
-      (`Non_monotonic_replay_id (session.their_replay_id, hdr.Packet.replay_id))
+    if control_crypto = `Tls then
+      Ok ()
+    else
+      guard
+        (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id <= 0)
+        (`Non_monotonic_replay_id (session.their_replay_id, hdr.Packet.replay_id))
   in
   Log.debug (fun m ->
       m "received %a" Fmt.(option ~none:(any "no") (fun ppf -> pf ppf "%lu")) sn);
@@ -1608,7 +1616,7 @@ let wrap_control state control_crypto needs_wkc key transport outs =
   and my_mtu = control_mtu state.config control_crypto state.session in
   let session, transport, maybe_wkc, outs =
     match control_crypto with
-    | `Tls_auth _ -> (state.session, transport, None, outs)
+    | `Tls | `Tls_auth _ -> (state.session, transport, None, outs)
     | `Tls_crypt (tls_crypt, _wkc) ->
         maybe_add_wkc now my_mtu state.session tls_crypt needs_wkc key transport
           outs
@@ -1707,6 +1715,9 @@ let received_data state ch set_ch payload =
 let validate_control state control_crypto op key payload =
   let open Result.Syntax in
   match control_crypto with
+  | `Tls ->
+      let+ p = Packet.Tls_plain.decode_ack_or_control op payload in
+      (p, None)
   | `Tls_auth { hmac_algorithm; their_hmac; _ } ->
       let module H = (val Digestif.module_of_hash' hmac_algorithm) in
       let hmac, tbs = Packet.split_hmac H.digest_size op key payload in
@@ -1805,7 +1816,7 @@ let incoming state control_crypto buf =
                   (validate_control state control_crypto op key received)
               in
               let* session, transport =
-                ignore_udp_error (expected_packet state.session ch.transport p)
+                ignore_udp_error (expected_packet control_crypto state.session ch.transport p)
               in
               let state = { state with session }
               and ch = { ch with transport } in
@@ -2149,7 +2160,7 @@ let handle_client t control_crypto s ev =
                 let session = { session with my_replay_id = 0x0f000001l } in
                 init_channel ~payload:wkc Packet.Hard_reset_client_v3 session
                   keyid now ts
-            | `Tls_crypt (_, None) | `Tls_auth _ ->
+            | `Tls_crypt (_, None) | `Tls_auth _ | `Tls ->
                 init_channel Packet.Hard_reset_client_v2 session keyid now ts
           in
           let state = Client (Handshaking (idx, ts)) in

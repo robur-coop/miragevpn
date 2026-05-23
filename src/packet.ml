@@ -437,26 +437,36 @@ module Tls_crypt = struct
 end
 
 module Tls_plain = struct
-  type header = {
-    local_session : int64;
-    (* uint8 array length *)
-    ack_sequence_numbers : int32 list;
-    remote_session : int64 option; (* if above is non-empty *)
-  }
-
-  let pp_header = pp_header
-
-  let encode_header buf to_encode hdr =
+  let encode_header buf off hdr =
     let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+    let rsid = if id_arr_len = 0 then 0 else 8 in
+    Bytes.set_int64_be buf off hdr.local_session;
+    Bytes.set_uint8 buf
+      (off + 8)
+      (List.length hdr.ack_sequence_numbers);
+    List.iteri
+      (fun i v -> Bytes.set_int32_be buf (off + 9 + (i * id_len)) v)
+      hdr.ack_sequence_numbers;
+    (match hdr.remote_session with
+     | None -> ()
+     | Some v ->
+       assert (rsid <> 0);
+       Bytes.set_int64_be buf (off + 9 + id_arr_len) v);
+    9 + rsid + id_arr_len
 
+  let encode_control buf off (header, sequence_number, payload) =
+    let len = encode_header buf off header in
+    Bytes.set_int32_be buf (off + len) sequence_number;
+    Logs.app (fun m -> m "off %u header length is %u, sequence %lX payload len %u (starting at %u)"
+                 off len sequence_number (String.length payload) (off + len + 4));
+    Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
-  let encode proto
-      (key, (p : [< `Ack of header | `Control of operation * _ ])) =
+  let encode proto (key, (p : [< `Ack of header | `Control of operation * _ ])) =
     let hdr = header p in
     let len =
       let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
       (* 1 is op_key, + 8 if remote session id is present *)
-      protocol_len proto + 1 + hdr_len 0 + id_arr_len
+      protocol_len proto + 1 (* op *) + session_id_len + 1 (* id_arr size *) + id_arr_len
       + (if id_arr_len = 0 then 0 else 8)
       + match p with
       | `Ack _ -> 0
@@ -469,9 +479,70 @@ module Tls_plain = struct
     let op = op_key (operation p) key in
     Bytes.set_uint8 buf (protocol_len proto) op;
     let to_encode = protocol_len proto + 1 in
-    match p with
-    | `Ack ack -> ignore (encode_header buf to_encode ack)
-    | `Control (_, control) -> encode_control buf to_encode control
+    let () =
+      match p with
+      | `Ack ack -> ignore (encode_header buf to_encode ack)
+      | `Control (_, control) -> encode_control buf to_encode control
+    in
+    Logs.app (fun m -> m "encoded %u bytes" (Bytes.length buf));
+    Bytes.unsafe_to_string buf
+
+  let decode_header buf =
+    let open Result.Syntax in
+    let hdr_off = session_id_len + 1 (* ack length *) in
+    Logs.app (fun m -> m "decoding header should %u is %u" hdr_off (String.length buf));
+    let* () = guard (String.length buf >= hdr_off) `Partial in
+    let local_session = String.get_int64_be buf 0
+    and arr_len = String.get_uint8 buf 8 in
+    let rs = if arr_len = 0 then 0 else 8 in
+    Logs.app (fun m -> m "decoding header should %u is %u" (hdr_off + id_len + (id_len * arr_len) + rs) (String.length buf));
+    let+ () =
+      guard (String.length buf >= hdr_off + (id_len * arr_len) + rs) `Partial
+    in
+    let ack_sequence_number idx =
+      String.get_int32_be buf (hdr_off + (id_len * idx))
+    in
+    let ack_sequence_numbers = List.init arr_len ack_sequence_number in
+    let remote_session =
+      if arr_len > 0 then
+        Some (String.get_int64_be buf (hdr_off + (id_len * arr_len)))
+      else None
+    in
+    ( { local_session; replay_id = 0l; timestamp = 0l; ack_sequence_numbers; remote_session },
+      hdr_off + (id_len * arr_len) + rs )
+
+  let decode_ack buf =
+    let open Result.Syntax in
+    Logs.app (fun m -> m "decoding ack len %u" (String.length buf));
+    let+ hdr, off = decode_header buf in
+    Logs.app (fun m -> m "decoded ack off %u" off);
+    if off <> String.length buf then
+      Log.debug (fun m ->
+          m "decode_ack: %d extra bytes at end of message"
+            (String.length buf - off))
+      [@coverage off];
+    hdr
+
+  let decode_control buf =
+    let open Result.Syntax in
+    Logs.app (fun m -> m "decoding control len %u" (String.length buf));
+    let* header, off = decode_header buf in
+    Logs.app (fun m -> m "decoded control off %u" off);
+    let+ () = guard (String.length buf >= off + 4) `Partial in
+    let sequence_number = String.get_int32_be buf off
+    and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
+    (header, sequence_number, payload)
+
+  let decode_ack_or_control op buf =
+    Logs.app (fun m -> m "decoding ack or control %u" (String.length buf));
+    let open Result.Syntax in
+    match op with
+    | Ack ->
+        let+ ack = decode_ack buf in
+        `Ack ack
+    | _ ->
+        let+ control = decode_control buf in
+        `Control (op, control)
 end
 
 type ack = [ `Ack of header ]
