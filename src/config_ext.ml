@@ -102,7 +102,7 @@ let control_crypto config =
       tls_crypt_v2_client config,
       secret config )
   with
-  | Error e, Error _, Error _, Error _ -> Error e
+  | Error _, Error _, Error _, Error _ -> Ok `Tls
   | Error _, Error _, Error _, Ok (my_key, my_hmac, their_key, their_hmac) ->
       (* in static key mode, only CBC is allowed *)
       assert (Config.get Cipher config = `AES_256_CBC);

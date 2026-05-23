@@ -231,11 +231,13 @@ type tls_crypt = { my : Tls_crypt.Key.t; their : Tls_crypt.Key.t }
 
 type control_tls =
   [ `Tls_auth of tls_auth
-  | `Tls_crypt of tls_crypt * Tls_crypt.Wrapped_key.t option ]
+  | `Tls_crypt of tls_crypt * Tls_crypt.Wrapped_key.t option
+  | `Tls ]
 
 type control_crypto = [ control_tls | `Static of keys ]
 
 let[@coverage off] pp_control_crypto ppf = function
+  | `Tls -> Fmt.string ppf "tls"
   | `Tls_auth _ -> Fmt.string ppf "tls-auth"
   | `Tls_crypt (_, None) -> Fmt.string ppf "tls-crypt"
   | `Tls_crypt (_, Some _) -> Fmt.string ppf "tls-crypt-v2"

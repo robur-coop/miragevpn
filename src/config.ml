@@ -313,15 +313,6 @@ module Conf_map = struct
       if get Cipher t <> `AES_256_CBC then
         Error (`Msg "only AES-256-CBC supported in static key mode")
       else Ok ()
-    else if
-      mem Tls_mode t
-      && not
-           (mem Tls_auth t || mem Tls_crypt t || mem Tls_crypt_v2_server t
-          || mem Tls_crypt_v2_client t)
-    then
-      Error
-        (`Msg
-           "tls-mode present, but none of tls-auth, tls-crypt, or tls-crypt-v2")
     else if mem Tls_auth t && mem Tls_crypt t then
       Error (`Msg "tls-auth and tls-crypt are mutually exclusive")
     else if mem Ca t && mem Peer_fingerprint t then
@@ -377,13 +368,7 @@ module Conf_map = struct
        let* () =
          match find Tls_mode t with
          | None | Some `Client -> Error "config must specify 'tls-server'"
-         | Some `Server ->
-             if
-               not
-                 (mem Tls_auth t || mem Tls_crypt t || mem Tls_crypt_v2_server t)
-             then
-               Error "config must specify tls-auth or tls-crypt or tls-crypt-v2"
-             else Ok ()
+         | Some `Server -> Ok ()
        in
        let* _ = cert_key_or_pkcs12 t in
        let* () =
