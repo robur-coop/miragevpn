@@ -126,7 +126,9 @@ let control_crypto config =
 
 let ifconfig config =
   let address, netmask = Config.get Ifconfig config in
-  Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address
+  match Ipaddr.V4.Prefix.of_netmask ~netmask ~address with
+  | Ok cidr -> cidr
+  | Error _ -> Ipaddr.V4.Prefix.make 32 address
 
 let vpn_gateway config =
   match Config.find Dev config with
@@ -134,10 +136,13 @@ let vpn_gateway config =
       (* Must be tun *)
       assert false
   | Some (`Tun, _) ->
-      if Config.mem Secret config then snd (Config.get Ifconfig config)
+      if Config.mem Secret config then
+        snd (Config.get Ifconfig config)
       else
-        let cidr = ifconfig config in
-        Ipaddr.V4.Prefix.first cidr
+        let address, netmask = Config.get Ifconfig config in
+        match Ipaddr.V4.Prefix.of_netmask ~netmask ~address with
+        | Ok cidr -> Ipaddr.V4.Prefix.first cidr
+        | Error _ -> netmask
 
 let route_gateway config =
   match Config.find Route_gateway config with
