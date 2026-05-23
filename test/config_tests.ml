@@ -615,7 +615,7 @@ let tls_home_no_auth_conf =
   let open Miragevpn.Config in
   minimal_config |> remove Auth_user_pass
   |> add Dev (`Tun, None)
-  |> add Remote [ (`Ip (Ipaddr.of_string_exn "1.2.3.4"), None, None) ]
+  |> add Remote [ (`Ip (Ipaddr.of_string_exn "127.0.0.1"), None, None) ]
   |> add Ifconfig
        (Ipaddr.V4.of_string_exn "10.1.0.2", Ipaddr.V4.of_string_exn "10.1.0.1")
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
