@@ -613,7 +613,7 @@ let tls_home_conf_with_cipher =
 
 let tls_home_no_auth_conf =
   let open Miragevpn.Config in
-  minimal_config |> remove Auth_user_pass
+  minimal_config |> remove Auth_user_pass |> remove Cipher
   |> add Dev (`Tun, None)
   |> add Remote [ (`Ip (Ipaddr.of_string_exn "127.0.0.1"), None, None) ]
   |> add Ifconfig
@@ -632,7 +632,8 @@ let tls_office_conf =
   |> add Ping_timeout (`Restart 120)
   |> add Transition_window 3600
   |> add Renegotiate_seconds 3600
-  |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
+  |> add Data_ciphers [ `CHACHA20_POLY1305 ]
+  |> add Cipher `CHACHA20_POLY1305
   |> add Tls_mode `Server
   |> add Dev (`Tun, None)
   |> add Ifconfig
