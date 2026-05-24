@@ -782,8 +782,7 @@ let incoming_control_client config session channel op data =
                   { channel with channel_st },
                   tls_out )
           | None ->
-              let pull = Config.mem Pull config in
-              if pull then
+              if Config.mem Pull config then
                 let channel_st =
                   Push_request_sent (tls', my_key_material, tls_data)
                 in
@@ -892,7 +891,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   let cipher = Config.get Cipher config
   and hmac_algorithm = Config.get Auth config
   and tls_ekm = tls_ekm tls' config in
-  let keys = kdf ~tls_ekm ~peer_id:"\xff\xff\xff" session cipher hmac_algorithm key tls_data in
+  let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
   let channel_st = Established (tls', keys) in
   let ip_config = { cidr; gateway = server_ip } in
   let config' =
