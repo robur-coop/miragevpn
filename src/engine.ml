@@ -247,7 +247,7 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     `RSA_WITH_AES_256_GCM_SHA384 (* cipher, does not matter for TLS 1.0 *) len
     secret label seed
 
-let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
+let derive_keys ~tls_ekm ~peer_id session (my_key_material : State.my_key_material)
     (their_key_material : Packet.tls_data) =
   (* are we the server? *)
   let server = my_key_material.pre_master = "" in
@@ -284,7 +284,7 @@ let derive_keys ~tls_ekm session (my_key_material : State.my_key_material)
         prf ~label:"OpenVPN key expansion" ~secret:master_key
           ~client_random:client_random' ~server_random:server_random' ~sids
           length,
-        "\xff\xff\xff" (* no exporter key material, defaulting to "vpn" in p2p mode *)
+        peer_id
     | Some tls ->
         Log.debug (fun m -> m "Using new TLS-EKM style key derivation");
         let epoch = Result.get_ok (Tls.Engine.epoch tls) in
@@ -343,7 +343,7 @@ let maybe_kex_client config tls =
     let peer_info =
       let iv_proto =
         Packet.Iv_proto.(
-          Peer_id :: Tls_key_export :: Use_cc_exit_notify
+          Peer_id :: Tls_key_export :: Ncp_p2p :: Use_cc_exit_notify
           :: (if pull then [ Request_push ] else []))
       in
       Option.map
@@ -362,10 +362,10 @@ let maybe_kex_client config tls =
     let client_state = TLS_established (tls', my_key_material) in
     (client_state, Some payload)
 
-let kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+let kdf ~tls_ekm ~peer_id session cipher hmac_algorithm my_key_material
     their_key_material =
   let server, keys, peer_id =
-    derive_keys ~tls_ekm session my_key_material their_key_material
+    derive_keys ~tls_ekm ~peer_id session my_key_material their_key_material
   in
   let maybe_swap (a, b, c, d) = if server then (c, d, a, b) else (a, b, c, d) in
   let extract klen hlen =
@@ -560,7 +560,7 @@ let kex_server config auth_user_pass session (my_key_material : my_key_material)
           and hmac_algorithm = Config.get Auth config
           and tls_ekm = tls_ekm tls' config in
           let keys_ctx =
-            kdf ~tls_ekm session cipher hmac_algorithm my_key_material
+            kdf ~tls_ekm ~peer_id:"" session cipher hmac_algorithm my_key_material
               their_tls_data
           in
           Ok
@@ -697,16 +697,63 @@ let incoming_control_client config session channel op data =
           Ok (None, config, { channel with channel_st }, tls_out)
       | Some d -> (
           let* tls_data = Packet.decode_tls_data d in
-          let config =
-            let merged =
-              Config.client_merge_server_config config tls_data.Packet.options
+          let config, peer_id =
+            let merge_server_cfg () =
+              let merged =
+                Config.client_merge_server_config config tls_data.Packet.options
+              in
+              Result.iter_error
+                (fun (`Msg msg) ->
+                   Log.err (fun m ->
+                       m "server options (%S) failure: %s" tls_data.options msg))
+                merged;
+              Result.value ~default:config merged
             in
-            Result.iter_error
-              (fun (`Msg msg) ->
-                Log.err (fun m ->
-                    m "server options (%S) failure: %s" tls_data.options msg))
-              merged;
-            Result.value ~default:config merged
+            match tls_data.peer_info with
+            | None -> merge_server_cfg (), "\xff\xff\xff"
+            | Some data ->
+              let find_cipher data = match List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") data with
+                | None -> None
+                | Some data ->
+                  let vals = String.concat "=" (List.tl (String.split_on_char '=' data)) in
+                  Some (List.filter_map (fun cipher ->
+                      match Config.aead_cipher_of_string cipher with
+                      | Some x -> Some x
+                      | None when String.uppercase_ascii cipher = "AES-256-CBC" -> Some `AES_256_CBC
+                      | None -> None)
+                      (String.split_on_char ':' vals))
+              in
+              match List.find_opt (String.starts_with ~prefix:"IV_PROTO=") data with
+              | None -> merge_server_cfg (), "\xff\xff\xff"
+              | Some x ->
+                let v = String.concat "=" (List.tl (String.split_on_char '=' x)) in
+                let i = int_of_string v in
+                if Packet.Iv_proto.(contains Ncp_p2p i) then
+                  let peer_id =
+                    if Packet.Iv_proto.(contains Peer_id i) then
+                      "vpn"
+                    else
+                      "\xff\xff\xff"
+                  in
+                  let config =
+                    if Packet.Iv_proto.(contains Tls_key_export i) then
+                      Config.add Key_derivation `Tls_ekm config
+                    else
+                      config
+                  in
+                  let config =
+                    if Packet.Iv_proto.(contains Ncp_p2p i) then
+                      match find_cipher data with
+                      | None | Some [] -> config
+                      | Some (c :: _) -> Config.add Cipher c config
+                    else
+                      config
+                  in
+                  config, peer_id
+                else begin
+                  Logs.warn (fun m -> m "no NCP_P2P IV_PROTO");
+                  merge_server_cfg (), "\xff\xff\xff"
+                end
           in
           (* ok, two options:
              - initial handshake done, we need push request / reply
@@ -720,8 +767,8 @@ let incoming_control_client config session channel op data =
               and hmac_algorithm = Config.get Auth config
               and tls_ekm = tls_ekm tls' config in
               let keys =
-                kdf ~tls_ekm session cipher hmac_algorithm my_key_material
-                  tls_data
+                kdf ~tls_ekm ~peer_id session cipher hmac_algorithm
+                  my_key_material tls_data
               in
               let channel_st = Established (tls', keys) in
               Ok
@@ -760,7 +807,7 @@ let incoming_control_client config session channel op data =
       let cipher = Config.get Cipher config'
       and hmac_algorithm = Config.get Auth config'
       and tls_ekm = tls_ekm tls config' in
-      let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
+      let keys = kdf ~tls_ekm ~peer_id:"\xff\xff\xff" (* TODO *) session cipher hmac_algorithm key tls_data in
       let keys = match Config.find Peer_id config' with
         | None -> keys
         | Some peer_id -> { keys with peer_id }
@@ -842,7 +889,7 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
   let cipher = Config.get Cipher config
   and hmac_algorithm = Config.get Auth config
   and tls_ekm = tls_ekm tls' config in
-  let keys = kdf ~tls_ekm session cipher hmac_algorithm key tls_data in
+  let keys = kdf ~tls_ekm ~peer_id:"\xff\xff\xff" session cipher hmac_algorithm key tls_data in
   let channel_st = Established (tls', keys) in
   let ip_config = { cidr; gateway = server_ip } in
   let config' =

@@ -727,12 +727,13 @@ let push_reply = "PUSH_REPLY"
 let auth_failed = "AUTH_FAILED\x00"
 
 module Iv_proto = struct
-  type t = Peer_id | Request_push | Tls_key_export | Use_cc_exit_notify
+  type t = Peer_id | Request_push | Tls_key_export | Ncp_p2p | Use_cc_exit_notify
 
   let bit = function
     | Peer_id -> 1 (* also known as IV_PROTO_DATA_V2 *)
     | Request_push -> 2
     | Tls_key_export -> 3
+    | Ncp_p2p -> 5
     | Use_cc_exit_notify -> 7
 
   let byte xs = List.fold_left (fun b x -> b lor (1 lsl bit x)) 0 xs
