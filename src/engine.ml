@@ -343,10 +343,12 @@ let maybe_kex_client config tls =
       Some (maybe_iv_ncp_2 @ [ "IV_PLAT=mirage"; "IV_CIPHERS=" ^ ciphers ])
     in
     let peer_info =
+      let ncp_p2p = Config.mem Ifconfig config in
       let iv_proto =
         Packet.Iv_proto.(
-          Peer_id :: Tls_key_export :: Ncp_p2p :: Use_cc_exit_notify
-          :: (if pull then [ Request_push ] else []))
+          Tls_key_export :: Use_cc_exit_notify
+          :: (if ncp_p2p then [ Peer_id ; Ncp_p2p ] else []) @
+          (if pull then [ Request_push ] else []))
       in
       Option.map
         (fun pi ->
