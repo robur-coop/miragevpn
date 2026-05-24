@@ -116,7 +116,7 @@ let control_crypto config =
               their_hmac;
             }
         in
-        { State.my_replay_id = 1l; their_replay_id = 1l; keys }
+        { State.my_replay_id = 1l; their_replay_id = 1l; keys; peer_id = "\xff\xff\xff" }
       in
       Ok (`Static keys)
   | Error _, Ok tls_crypt, _, _ -> Ok (`Tls_crypt (tls_crypt, None))

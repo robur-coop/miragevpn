@@ -52,15 +52,17 @@ type keys = {
   my_replay_id : int32;
   their_replay_id : int32;
   keys : key_variant;
+  peer_id : string; (* length 3 *)
 }
 
 let[@coverage off] pp_keys ppf t =
-  Fmt.pf ppf "%s keys: my id %lu, their id %lu"
+  Fmt.pf ppf "%s keys: my id %lu, their id %lu peer %s"
     (match t.keys with
     | AES_CBC _ -> "AES-CBC"
     | AES_GCM _ -> "AES-GCM"
     | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
     t.my_replay_id t.their_replay_id
+    (Ohex.encode t.peer_id)
 
 type channel_state =
   | Expect_reset

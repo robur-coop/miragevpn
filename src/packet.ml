@@ -26,6 +26,7 @@ type operation =
   | Hard_reset_server_v2
   | Hard_reset_client_v3
   | Control_wkc
+  | Data_v2
 
 let operation_to_int = function
   | Soft_reset_v2 -> 3
@@ -34,6 +35,7 @@ let operation_to_int = function
   | Data_v1 -> 6
   | Hard_reset_client_v2 -> 7
   | Hard_reset_server_v2 -> 8
+  | Data_v2 -> 9
   | Hard_reset_client_v3 -> 10
   | Control_wkc -> 11
 
@@ -44,6 +46,7 @@ let int_to_operation = function
   | 6 -> Ok Data_v1
   | 7 -> Ok Hard_reset_client_v2
   | 8 -> Ok Hard_reset_server_v2
+  | 9 -> Ok Data_v2
   | 10 -> Ok Hard_reset_client_v3
   | 11 -> Ok Control_wkc
   | i -> Error (`Unknown_operation i)
@@ -57,6 +60,7 @@ let[@coverage off] pp_operation ppf op =
     | Data_v1 -> "data v1"
     | Hard_reset_client_v2 -> "hard reset client v2"
     | Hard_reset_server_v2 -> "hard reset server v2"
+    | Data_v2 -> "data v2"
     | Hard_reset_client_v3 -> "hard reset client v3"
     | Control_wkc -> "control wkc")
 
@@ -267,10 +271,14 @@ let encode proto hmac_len
   in
   (buf, feeder)
 
-let encode_data buf proto key =
+let encode_data buf peer_id proto key =
   set_protocol buf proto;
-  let op = op_key Data_v1 key in
-  Bytes.set_uint8 buf (protocol_len proto) op
+  let op = Option.fold ~none:Data_v1 ~some:(fun _ -> Data_v2) peer_id in
+  let op = op_key op key in
+  Bytes.set_uint8 buf (protocol_len proto) op;
+  match peer_id with
+  | None -> ()
+  | Some x -> Bytes.blit_string x 0 buf 1 (String.length x)
 
 module Tls_crypt = struct
   type cleartext_header = {
@@ -719,9 +727,10 @@ let push_reply = "PUSH_REPLY"
 let auth_failed = "AUTH_FAILED\x00"
 
 module Iv_proto = struct
-  type t = Request_push | Tls_key_export | Use_cc_exit_notify
+  type t = Peer_id | Request_push | Tls_key_export | Use_cc_exit_notify
 
   let bit = function
+    | Peer_id -> 1 (* also known as IV_PROTO_DATA_V2 *)
     | Request_push -> 2
     | Tls_key_export -> 3
     | Use_cc_exit_notify -> 7
