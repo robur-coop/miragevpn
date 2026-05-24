@@ -205,8 +205,6 @@ module Conf_map = struct
     | Ifconfig : (Ipaddr.V4.t * Ipaddr.V4.t) k
     | Ifconfig_nowarn : flag k
     | Key_derivation : [ `Tls_ekm ] k
-    | Key_method : int k
-    | Keysize : int k
     | Link_mtu : int k
     | Local : Ipaddr.t k
     | Lport : int k
@@ -325,10 +323,6 @@ module Conf_map = struct
             semantics are unclear to us and thus not implemented")
     else if mem Key_derivation t then
       Error (`Msg "The --key-derivation option is reserved for push replies")
-    else if mem Key_method t then
-      Error (`Msg "The --key-method option is reserved for push replies")
-    else if mem Keysize t then
-      Error (`Msg "The --keysize option is reserved for push replies")
     else if mem Protocol_flags t then
       Error (`Msg "The --protocol-flags option is reserved for push replies")
     else if mem Peer_id t then
@@ -615,8 +609,6 @@ module Conf_map = struct
         p () "ifconfig %a %a" Ipaddr.V4.pp local Ipaddr.V4.pp remote
     | Ifconfig_nowarn, () -> p () "ifconfig-nowarn"
     | Key_derivation, `Tls_ekm -> p () "key-derivation tls-ekm"
-    | Key_method, x -> p () "key-method %d" x
-    | Keysize, x -> p () "keysize %d" x
     | Link_mtu, i -> p () "link-mtu %d" i
     | Local, ip -> p () "local %a" Ipaddr.pp ip
     | Lport, port -> p () "lport %d" port
@@ -1490,14 +1482,6 @@ let a_key_derivation =
   string "key-derivation" *> a_whitespace *> string "tls-ekm" >>| fun _ ->
   `Entry (B (Key_derivation, `Tls_ekm))
 
-let a_key_method =
-  string "key-method" *> a_whitespace *> a_number >>| fun x ->
-  `Entry (B (Key_method, x))
-
-let a_keysize =
-  string "keysize" *> a_whitespace *> a_number >>| fun x ->
-  `Entry (B (Keysize, x))
-
 let a_entry_two_numbers name =
   a_entry_one_number name >>= fun x ->
   a_whitespace *> a_number >>| fun y -> (x, y)
@@ -1783,6 +1767,8 @@ let a_not_implemented =
       string "user";
       string "group";
       string "nobind";
+      string "key-method";
+      string "keysize";
       (* TODO: *)
       string "redirect-gateway";
       string "block-outside-dns";
@@ -1835,8 +1821,6 @@ let a_config_entry : line A.t =
          a_auth_user_pass_verify;
          a_auth_user_pass;
          a_key_derivation;
-         a_key_method;
-         a_keysize;
          a_link_mtu;
          a_tun_mtu;
          a_cipher;
@@ -2342,7 +2326,6 @@ let merge_push_reply client (push_config : string) =
     | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
     | Key_derivation, _ -> true
-    | Keysize, _ -> true
     | Peer_id, _ -> true
     | Protocol_flags, _ -> true
     | Redirect_gateway, _ -> not (Conf_map.mem Route_nopull client)
@@ -2468,8 +2451,6 @@ let client_merge_server_config client server_str =
     | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
     | Key_derivation, _ -> true
-    | Key_method, _ -> true
-    | Keysize, _ -> true
     | Link_mtu, _ -> true
     | Peer_id, _ -> true
     | Proto, _ -> true
