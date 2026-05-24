@@ -632,8 +632,7 @@ let tls_office_conf =
   |> add Ping_timeout (`Restart 120)
   |> add Transition_window 3600
   |> add Renegotiate_seconds 3600
-  |> add Data_ciphers [ `CHACHA20_POLY1305 ]
-  |> add Cipher `CHACHA20_POLY1305
+  |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
   |> add Tls_mode `Server
   |> add Dev (`Tun, None)
   |> add Ifconfig
