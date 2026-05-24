@@ -1097,7 +1097,7 @@ let a_peer_id =
   if n >= 0 && n <= 0xffffff then
     let binary = Bytes.create 3 in
     Bytes.set_uint8 binary 0 (n lsr 16);
-    Bytes.set_uint16_be binary 2 (n land 0xffff);
+    Bytes.set_uint16_be binary 1 (n land 0xffff);
     return (`Entry (B (Peer_id, Bytes.unsafe_to_string binary)))
   else
     fail "number too big"
