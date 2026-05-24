@@ -62,6 +62,8 @@ module Config : sig
             fied as a DNS or /etc/hosts file resolvable name.*)
     | Ifconfig_nowarn : flag k
     | Key_derivation : [ `Tls_ekm ] k
+    | Key_method : int k
+    | Keysize : int k
     | Link_mtu : int k
         (** MTU of the network interface used to receive/transmit encrypted
             packets, e.g. the network interface that connects OpenVPN client and
@@ -71,6 +73,7 @@ module Config : sig
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
+    | Peer_id : string k
     | Peer_fingerprint : string list k
     | Persist_key : flag k
     | Persist_tun : flag k
