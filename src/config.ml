@@ -949,17 +949,29 @@ let a_proto =
   *> choice
        [
          string "tcp6-client" *> return (Some `Ipv6, `Tcp (Some `Client));
+         string "TCPv6_CLIENT" *> return (Some `Ipv6, `Tcp (Some `Client));
          string "tcp6-server" *> return (Some `Ipv6, `Tcp (Some `Server));
+         string "TCPv6_SERVER" *> return (Some `Ipv6, `Tcp (Some `Server));
          string "tcp6" *> return (Some `Ipv6, `Tcp None);
+         string "TCPv6" *> return (Some `Ipv6, `Tcp None);
          string "tcp4-client" *> return (Some `Ipv4, `Tcp (Some `Client));
+         string "TCPv4_CLIENT" *> return (Some `Ipv4, `Tcp (Some `Client));
          string "tcp4-server" *> return (Some `Ipv4, `Tcp (Some `Server));
+         string "TCPv4_SERVER" *> return (Some `Ipv4, `Tcp (Some `Server));
          string "tcp-client" *> return (None, `Tcp (Some `Client));
+         string "TCP_CLIENT" *> return (None, `Tcp (Some `Client));
          string "tcp-server" *> return (None, `Tcp (Some `Server));
+         string "TCP_SERVER" *> return (None, `Tcp (Some `Server));
          string "tcp4" *> return (Some `Ipv4, `Tcp None);
+         string "TCPv4" *> return (Some `Ipv4, `Tcp None);
          string "tcp" *> return (None, `Tcp None);
+         string "TCP" *> return (None, `Tcp None);
          string "udp6" *> return (Some `Ipv6, `Udp);
+         string "UDPv6" *> return (Some `Ipv6, `Udp);
          string "udp4" *> return (Some `Ipv4, `Udp);
+         string "UDPv4" *> return (Some `Ipv4, `Udp);
          string "udp" *> return (None, `Udp);
+         string "UDP" *> return (None, `Udp);
        ]
   >>| fun prot -> `Entry (B (Proto, prot))
 
