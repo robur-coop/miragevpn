@@ -1966,8 +1966,8 @@ let incoming state control_crypto buf =
                       in
                       Ok (set_ch state ch, out, payloads, act)
                   | Some (`Established ip_config) ->
-                      let state = { state with channel = ch } in
                       let+ state, mtu = transition_to_established state in
+                      let state = { state with channel = ch } in
                       let est =
                         Option.map
                           (fun mtu -> `Established (ip_config, mtu, config))
