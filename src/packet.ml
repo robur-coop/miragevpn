@@ -465,8 +465,6 @@ module Tls_plain = struct
   let encode_control buf off (header, sequence_number, payload) =
     let len = encode_header buf off header in
     Bytes.set_int32_be buf (off + len) sequence_number;
-    Logs.app (fun m -> m "off %u header length is %u, sequence %lX payload len %u (starting at %u)"
-                 off len sequence_number (String.length payload) (off + len + 4));
     Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
   let encode proto (key, (p : [< `Ack of header | `Control of operation * _ ])) =
@@ -492,18 +490,15 @@ module Tls_plain = struct
       | `Ack ack -> ignore (encode_header buf to_encode ack)
       | `Control (_, control) -> encode_control buf to_encode control
     in
-    Logs.app (fun m -> m "encoded %u bytes" (Bytes.length buf));
     Bytes.unsafe_to_string buf
 
   let decode_header buf =
     let open Result.Syntax in
     let hdr_off = session_id_len + 1 (* ack length *) in
-    Logs.app (fun m -> m "decoding header should %u is %u" hdr_off (String.length buf));
     let* () = guard (String.length buf >= hdr_off) `Partial in
     let local_session = String.get_int64_be buf 0
     and arr_len = String.get_uint8 buf 8 in
     let rs = if arr_len = 0 then 0 else 8 in
-    Logs.app (fun m -> m "decoding header should %u is %u" (hdr_off + id_len + (id_len * arr_len) + rs) (String.length buf));
     let+ () =
       guard (String.length buf >= hdr_off + (id_len * arr_len) + rs) `Partial
     in
@@ -521,9 +516,7 @@ module Tls_plain = struct
 
   let decode_ack buf =
     let open Result.Syntax in
-    Logs.app (fun m -> m "decoding ack len %u" (String.length buf));
     let+ hdr, off = decode_header buf in
-    Logs.app (fun m -> m "decoded ack off %u" off);
     if off <> String.length buf then
       Log.debug (fun m ->
           m "decode_ack: %d extra bytes at end of message"
@@ -533,16 +526,13 @@ module Tls_plain = struct
 
   let decode_control buf =
     let open Result.Syntax in
-    Logs.app (fun m -> m "decoding control len %u" (String.length buf));
     let* header, off = decode_header buf in
-    Logs.app (fun m -> m "decoded control off %u" off);
     let+ () = guard (String.length buf >= off + 4) `Partial in
     let sequence_number = String.get_int32_be buf off
     and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
     (header, sequence_number, payload)
 
   let decode_ack_or_control op buf =
-    Logs.app (fun m -> m "decoding ack or control %u" (String.length buf));
     let open Result.Syntax in
     match op with
     | Ack ->
