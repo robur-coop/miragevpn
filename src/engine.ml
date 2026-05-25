@@ -1872,7 +1872,7 @@ let incoming state control_crypto buf =
         let state = { state with linger } in
         let* state, out, payloads, act_opt =
           match (find_channel state key op, op) with
-          | None, Data_v1 ->
+          | None, (Data_v1 | Data_v2) ->
               Log.warn (fun m -> m "ignoring packet with stale or bad key id");
               Ok (state, out, payloads, act_opt)
           | None, _control -> ignore_udp_error (Error (`No_channel key))
