@@ -372,9 +372,9 @@ testpass
      sample >>| fun sample ->
      Miragevpn.remotes sample
      |> List.map (function
-          | `Ip ip, port, _ ->
-              "ip:" ^ Ipaddr.to_string ip ^ ":" ^ string_of_int port
-          | `Domain _, _, _ -> failwith ""));
+       | `Ip ip, port, _ ->
+           "ip:" ^ Ipaddr.to_string ip ^ ":" ^ string_of_int port
+       | `Domain _, _, _ -> failwith ""));
   Alcotest.(check @@ result string reject)
     "serialized version stays correct"
     (Ok "remote 10.0.42.5\nremote 10.0.42.3 1194\nremote 10.0.42.4")
@@ -625,9 +625,7 @@ let tls_home_no_auth_conf =
 
 let tls_office_conf =
   let open Miragevpn.Config in
-  empty
-  |> add Auth `SHA1
-  |> add Handshake_window 60
+  empty |> add Auth `SHA1 |> add Handshake_window 60
   |> add Ping_interval `Not_configured
   |> add Ping_timeout (`Restart 120)
   |> add Transition_window 3600
@@ -640,7 +638,8 @@ let tls_office_conf =
   |> add_b (a_ca_payload (string_of_file "ca.crt"))
   |> add_b (a_cert_payload (string_of_file "client.crt"))
   |> add_b (a_key_payload (string_of_file "client.key"))
-  |> add Verb 3 |> add Proto (None, `Tcp (Some `Server))
+  |> add Verb 3
+  |> add Proto (None, `Tcp (Some `Server))
 
 let ipredator_conf =
   let ca =

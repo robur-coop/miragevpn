@@ -699,21 +699,21 @@ module Conf_map = struct
     | Route, routes ->
         routes
         |> List.iter (fun (network, netmask, gateway, metric) ->
-               let[@coverage off] pp_addr ppf v =
-                 Fmt.pf ppf "%s"
-                   (match v with
-                   | `Ip ip -> Ipaddr.V4.to_string ip
-                   | `Net_gateway -> "net_gateway"
-                   | `Remote_host -> "remote_host"
-                   | `Vpn_gateway -> "vpn_gateway")
-               in
-               p () "route %a%a%a%a" pp_addr network
-                 Fmt.(option (append (any " ") Ipaddr.V4.pp))
-                 netmask
-                 Fmt.(option (append (any " ") pp_addr))
-                 gateway
-                 Fmt.(option (append (any " ") int))
-                 metric)
+            let[@coverage off] pp_addr ppf v =
+              Fmt.pf ppf "%s"
+                (match v with
+                | `Ip ip -> Ipaddr.V4.to_string ip
+                | `Net_gateway -> "net_gateway"
+                | `Remote_host -> "remote_host"
+                | `Vpn_gateway -> "vpn_gateway")
+            in
+            p () "route %a%a%a%a" pp_addr network
+              Fmt.(option (append (any " ") Ipaddr.V4.pp))
+              netmask
+              Fmt.(option (append (any " ") pp_addr))
+              gateway
+              Fmt.(option (append (any " ") int))
+              metric)
     | Route_delay, (n, w) -> p () "route-delay %d %d" n w
     | Route_gateway, `Dhcp -> p () "route-gateway dhcp"
     | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.V4.pp ip
@@ -1090,17 +1090,17 @@ let a_peer_fingerprint =
        ~failure_msg:"bad fingerprint"
 
 let a_peer_id =
-  string "peer-id" *> a_whitespace *> commit *>
-  take_while (function '0' .. '9' -> true | _ -> false) <*
-  (end_of_line <|> fail "Invalid decimal character") >>= fun d ->
+  string "peer-id" *> a_whitespace *> commit
+  *> take_while (function '0' .. '9' -> true | _ -> false)
+  <* (end_of_line <|> fail "Invalid decimal character")
+  >>= fun d ->
   let n = int_of_string d in
-  if n >= 0 && n <= 0xffffff then
+  if n >= 0 && n <= 0xffffff then (
     let binary = Bytes.create 3 in
     Bytes.set_uint8 binary 0 (n lsr 16);
     Bytes.set_uint16_be binary 1 (n land 0xffff);
-    return (`Entry (B (Peer_id, Bytes.unsafe_to_string binary)))
-  else
-    fail "number too big"
+    return (`Entry (B (Peer_id, Bytes.unsafe_to_string binary))))
+  else fail "number too big"
 
 let a_key_direction_option =
   choice
@@ -1577,8 +1577,8 @@ let aead_cipher ~ctx c =
 let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
   (match String.uppercase_ascii v with
-  | "AES-256-CBC" -> return `AES_256_CBC
-  | c -> aead_cipher ~ctx:"cipher" c)
+    | "AES-256-CBC" -> return `AES_256_CBC
+    | c -> aead_cipher ~ctx:"cipher" c)
   >>| fun v -> `Entry (B (Cipher, v))
 
 let a_data_ciphers =
@@ -1596,14 +1596,14 @@ let a_data_ciphers =
 let a_auth =
   string "auth" *> a_whitespace *> a_single_param >>= fun h ->
   (match String.uppercase_ascii h with
-  | "[NULL-DIGEST]" -> return `MD5 (* fake *)
-  | "MD5" -> return `MD5
-  | "SHA1" -> return `SHA1
-  | "SHA224" -> return `SHA224
-  | "SHA256" -> return `SHA256
-  | "SHA384" -> return `SHA384
-  | "SHA512" -> return `SHA512
-  | _ -> Fmt.kstr fail "Unknown message digest algorithm %S" h)
+    | "[NULL-DIGEST]" -> return `MD5 (* fake *)
+    | "MD5" -> return `MD5
+    | "SHA1" -> return `SHA1
+    | "SHA224" -> return `SHA224
+    | "SHA256" -> return `SHA256
+    | "SHA384" -> return `SHA384
+    | "SHA512" -> return `SHA512
+    | _ -> Fmt.kstr fail "Unknown message digest algorithm %S" h)
   >>| fun h -> `Entry (B (Auth, h))
 
 let a_replay_window =
@@ -1870,16 +1870,15 @@ let parse_internal config_str : (line list, 'x) result =
   config_str
   |> parse_string ~consume:Consume.All
      @@ fix (fun recurse ->
-            a_ign_ws *> a_config_entry <* a_ign_ws
-            >>= (fun entry ->
-            commit
-            *> (a_ign_ws *> end_of_input *> return [ entry ]
-               <|> (List.cons entry <$> recurse)))
-            <|> ( available >>| min 100 >>= peek_string >>= fun context ->
-                  pos >>= fun pos ->
-                  fail
-                    (Printf.sprintf "Error at byte offset %d: %S" pos context)
-                ))
+         a_ign_ws *> a_config_entry <* a_ign_ws
+         >>= (fun entry ->
+         commit
+         *> (a_ign_ws *> end_of_input *> return [ entry ]
+            <|> (List.cons entry <$> recurse)))
+         <|> ( available >>| min 100 >>= peek_string >>= fun context ->
+               pos >>= fun pos ->
+               fail (Printf.sprintf "Error at byte offset %d: %S" pos context)
+             ))
 
 type parser_partial_state = block list * non_block list * Conf_map.t
 
@@ -2306,7 +2305,7 @@ let merge_push_reply client (push_config : string) =
     String.split_on_char ',' push_config
     |> String.concat "\n"
     |> parse ~string_of_file:(fun _ ->
-           Result.error_msgf "string of file is not available")
+        Result.error_msgf "string of file is not available")
   in
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
@@ -2427,10 +2426,9 @@ let client_merge_server_config client server_str =
   let open Result.Syntax in
   let* server_config =
     String.split_on_char ',' server_str
-    |> List.tl (* drop initial V4 *)
-    |> String.concat "\n"
+    |> List.tl (* drop initial V4 *) |> String.concat "\n"
     |> parse ~string_of_file:(fun _ ->
-           Result.error_msgf "string of file is not available")
+        Result.error_msgf "string of file is not available")
   in
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
@@ -2476,8 +2474,8 @@ let client_merge_server_config client server_str =
         | Some ciphers when List.mem c ciphers -> Some c
         | _ ->
             invalid_arg
-            @@ Fmt.str "server config: won't accept cipher %s" (cipher_to_string c)
-        )
+            @@ Fmt.str "server config: won't accept cipher %s"
+                 (cipher_to_string c))
     (* TODO | Route, Some a, _ -> a*)
     (* try to merge: *)
     | _, (Some a as some_a), Some b -> (

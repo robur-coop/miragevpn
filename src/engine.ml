@@ -247,7 +247,8 @@ let prf ?sids ~label ~secret ~client_random ~server_random len =
     `RSA_WITH_AES_256_GCM_SHA384 (* cipher, does not matter for TLS 1.0 *) len
     secret label seed
 
-let derive_keys ~tls_ekm ?peer_id session (my_key_material : State.my_key_material)
+let derive_keys ~tls_ekm ?peer_id session
+    (my_key_material : State.my_key_material)
     (their_key_material : Packet.tls_data) =
   (* are we the server? *)
   let server = my_key_material.pre_master = "" in
@@ -281,17 +282,19 @@ let derive_keys ~tls_ekm ?peer_id session (my_key_material : State.my_key_materi
           prf ~label:"OpenVPN master secret" ~secret:pre_master ~client_random
             ~server_random 48
         in
-        prf ~label:"OpenVPN key expansion" ~secret:master_key
-          ~client_random:client_random' ~server_random:server_random' ~sids
-          length,
-        peer_id
+        ( prf ~label:"OpenVPN key expansion" ~secret:master_key
+            ~client_random:client_random' ~server_random:server_random' ~sids
+            length,
+          peer_id )
     | Some tls ->
         Log.debug (fun m -> m "Using new TLS-EKM style key derivation");
         let epoch = Result.get_ok (Tls.Engine.epoch tls) in
-        Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-datakeys" length,
-        Option.map
-          (fun _ -> Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-p2p-peerid" 3)
-          peer_id
+        ( Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-datakeys" length,
+          Option.map
+            (fun _ ->
+              Tls.Engine.export_key_material epoch "EXPORTER-OpenVPN-p2p-peerid"
+                3)
+            peer_id )
   in
   (server, keys, peer_id)
 
@@ -349,7 +352,7 @@ let maybe_kex_client config tls =
         (* TODO: Peer_id and its confusion *)
         Packet.Iv_proto.(
           Tls_key_export :: Use_cc_exit_notify
-          :: (if pull then [ Request_push ] else [ Peer_id ; Ncp_p2p ]))
+          :: (if pull then [ Request_push ] else [ Peer_id; Ncp_p2p ]))
       in
       Option.map
         (fun pi ->
@@ -709,57 +712,70 @@ let incoming_control_client config session channel op data =
               in
               Result.iter_error
                 (fun (`Msg msg) ->
-                   Log.err (fun m ->
-                       m "server options (%S) failure: %s" tls_data.options msg))
+                  Log.err (fun m ->
+                      m "server options (%S) failure: %s" tls_data.options msg))
                 merged;
               let cfg = Result.value ~default:config merged in
-              cfg, Config.find Peer_id cfg
+              (cfg, Config.find Peer_id cfg)
             in
             match tls_data.peer_info with
             | None -> merge_server_cfg ()
-            | Some data ->
-              let find_cipher data = match List.find_opt (String.starts_with ~prefix:"IV_CIPHERS=") data with
-                | None -> None
-                | Some data ->
-                  let vals = String.concat "=" (List.tl (String.split_on_char '=' data)) in
-                  Some (List.filter_map (fun cipher ->
-                      match Config.aead_cipher_of_string cipher with
-                      | Some x -> Some x
-                      | None when String.uppercase_ascii cipher = "AES-256-CBC" -> Some `AES_256_CBC
-                      | None -> None)
-                      (String.split_on_char ':' vals))
-              in
-              match List.find_opt (String.starts_with ~prefix:"IV_PROTO=") data with
-              | None -> merge_server_cfg ()
-              | Some x ->
-                let v = String.concat "=" (List.tl (String.split_on_char '=' x)) in
-                let i = int_of_string v in
-                if Packet.Iv_proto.(contains Ncp_p2p i) then
-                  let peer_id =
-                    if Packet.Iv_proto.(contains Peer_id i) then
-                      Some "vpn"
-                    else
-                      None
-                  in
-                  let config =
-                    if Packet.Iv_proto.(contains Tls_key_export i) then
-                      Config.add Key_derivation `Tls_ekm config
-                    else
-                      config
-                  in
-                  let config =
+            | Some data -> (
+                let find_cipher data =
+                  match
+                    List.find_opt
+                      (String.starts_with ~prefix:"IV_CIPHERS=")
+                      data
+                  with
+                  | None -> None
+                  | Some data ->
+                      let vals =
+                        String.concat "="
+                          (List.tl (String.split_on_char '=' data))
+                      in
+                      Some
+                        (List.filter_map
+                           (fun cipher ->
+                             match Config.aead_cipher_of_string cipher with
+                             | Some x -> Some x
+                             | None
+                               when String.uppercase_ascii cipher
+                                    = "AES-256-CBC" ->
+                                 Some `AES_256_CBC
+                             | None -> None)
+                           (String.split_on_char ':' vals))
+                in
+                match
+                  List.find_opt (String.starts_with ~prefix:"IV_PROTO=") data
+                with
+                | None -> merge_server_cfg ()
+                | Some x ->
+                    let v =
+                      String.concat "=" (List.tl (String.split_on_char '=' x))
+                    in
+                    let i = int_of_string v in
                     if Packet.Iv_proto.(contains Ncp_p2p i) then
-                      match find_cipher data with
-                      | None | Some [] -> config
-                      | Some (c :: _) -> Config.add Cipher c config
-                    else
-                      config
-                  in
-                  config, peer_id
-                else begin
-                  Logs.warn (fun m -> m "no NCP_P2P IV_PROTO");
-                  merge_server_cfg ()
-                end
+                      let peer_id =
+                        if Packet.Iv_proto.(contains Peer_id i) then Some "vpn"
+                        else None
+                      in
+                      let config =
+                        if Packet.Iv_proto.(contains Tls_key_export i) then
+                          Config.add Key_derivation `Tls_ekm config
+                        else config
+                      in
+                      let config =
+                        if Packet.Iv_proto.(contains Ncp_p2p i) then
+                          match find_cipher data with
+                          | None | Some [] -> config
+                          | Some (c :: _) -> Config.add Cipher c config
+                        else config
+                      in
+                      (config, peer_id)
+                    else begin
+                      Logs.warn (fun m -> m "no NCP_P2P IV_PROTO");
+                      merge_server_cfg ()
+                    end)
           in
           (* ok, two options:
              - initial handshake done, we need push request / reply
@@ -812,9 +828,10 @@ let incoming_control_client config session channel op data =
       let cipher = Config.get Cipher config'
       and hmac_algorithm = Config.get Auth config'
       and tls_ekm = tls_ekm tls config'
-      and peer_id = Config.find Peer_id config'
+      and peer_id = Config.find Peer_id config' in
+      let keys =
+        kdf ~tls_ekm ?peer_id session cipher hmac_algorithm key tls_data
       in
-      let keys = kdf ~tls_ekm ?peer_id session cipher hmac_algorithm key tls_data in
       let channel_st = Established (tls', keys) in
       Log.info (fun m -> m "channel %d is established now!!!" channel.keyid);
       let ip_config = Config_ext.ip_from_config config' in
@@ -882,8 +899,8 @@ let server_send_push_reply config is_not_taken tls session key tls_data =
        else [])
     @ (Config.find Protocol_flags config
       |> Option.map (fun flags ->
-             Fmt.str "%a" (Config.pp_b ~sep)
-               (Config.Conf_map.B (Protocol_flags, flags)))
+          Fmt.str "%a" (Config.pp_b ~sep)
+            (Config.Conf_map.B (Protocol_flags, flags)))
       |> Option.to_list)
     @ Option.value ~default:[] (Config.find Push config)
   in
@@ -1083,11 +1100,11 @@ let expected_packet control_crypto session transport data =
   (* TODO deal with it, properly: packets may be lost (e.g. udp)
      both from their side, and acks from our side *)
   let* () =
-    if control_crypto = `Tls then
-      Ok ()
+    if control_crypto = `Tls then Ok ()
     else
       guard
-        (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id <= 0)
+        (Int32.unsigned_compare session.their_replay_id hdr.Packet.replay_id
+        <= 0)
         (`Non_monotonic_replay_id (session.their_replay_id, hdr.Packet.replay_id))
   in
   Log.debug (fun m ->
@@ -1154,8 +1171,8 @@ let[@coverage off] pp_error ppf = function
         expected received
   | `Bad_mac (state, computed, received, data) ->
       Fmt.pf ppf "bad mac: computed %s received %s data %a@ (state %a)"
-        (Ohex.encode computed) (Ohex.encode received)
-        (Ohex.pp_hexdump ()) data pp state
+        (Ohex.encode computed) (Ohex.encode received) (Ohex.pp_hexdump ()) data
+        pp state
   | `No_transition (channel, op, data) ->
       Fmt.pf ppf "no transition found for typ %a (channel %a)@.data %a"
         Packet.pp_operation op pp_channel channel (Ohex.pp_hexdump ()) data
@@ -1176,7 +1193,8 @@ let unpad block_size cs off =
   if len >= 0 && amount <= block_size then Ok (String.sub cs off len)
   else Error (`Msg "bad padding")
 
-let out ?add_timestamp ?(adata_pre = "") prefix_len (ctx : keys) hmac_algorithm compress data =
+let out ?add_timestamp ?(adata_pre = "") prefix_len (ctx : keys) hmac_algorithm
+    compress data =
   (* - compression only if configured (0xfa for uncompressed)
      the ~add_timestamp argument is only used in static key mode
   *)
@@ -1210,8 +1228,8 @@ let out ?add_timestamp ?(adata_pre = "") prefix_len (ctx : keys) hmac_algorithm 
     set_replay_id b prefix_len;
     let tag_off = prefix_len + String.length replay_id in
     let adata = adata_pre ^ replay_id in
-    authenticate_encrypt_into ~key:my_key ~nonce ~adata data
-      ~src_off:0 b ~dst_off:(tag_off + tag_size) ~tag_off (String.length data);
+    authenticate_encrypt_into ~key:my_key ~nonce ~adata data ~src_off:0 b
+      ~dst_off:(tag_off + tag_size) ~tag_off (String.length data);
     b
   in
   ( { ctx with my_replay_id = Int32.succ ctx.my_replay_id },
@@ -1276,14 +1294,15 @@ let data_out ?add_timestamp (ctx : keys) hmac_algorithm compress protocol key
     match peer_id with
     | None -> ""
     | Some x ->
-      let buf = Bytes.create 1 in
-      let op = Packet.op_key Data_v2 key in
-      Bytes.set_uint8 buf 0 op;
-      Bytes.unsafe_to_string buf ^ x
+        let buf = Bytes.create 1 in
+        let op = Packet.op_key Data_v2 key in
+        Bytes.set_uint8 buf 0 op;
+        Bytes.unsafe_to_string buf ^ x
   in
   let prefix_len =
-    Option.fold ~none:0 ~some:(fun _ -> 3) peer_id +
-    Packet.protocol_len protocol + 1
+    Option.fold ~none:0 ~some:(fun _ -> 3) peer_id
+    + Packet.protocol_len protocol
+    + 1
   in
   let ctx, out =
     out ?add_timestamp ~adata_pre prefix_len ctx hmac_algorithm compress data
@@ -1438,15 +1457,13 @@ let timer state =
   let s''' = maybe_drop_lame_duck s'' in
   (s''', out @ out')
 
-let incoming_data ?key_op ?(add_timestamp = false) err (ctx : keys) hmac_algorithm
-    compress data =
+let incoming_data ?key_op ?(add_timestamp = false) err (ctx : keys)
+    hmac_algorithm compress data =
   let open Result.Syntax in
   let* data =
     let split_aead tag_len =
       let peer_id_len = Option.fold ~none:0 ~some:(fun _ -> 3) key_op in
-      let prefix_len =
-        peer_id_len + Packet.id_len + tag_len
-      in
+      let prefix_len = peer_id_len + Packet.id_len + tag_len in
       let* () =
         guard
           (String.length data >= prefix_len)
@@ -1455,18 +1472,18 @@ let incoming_data ?key_op ?(add_timestamp = false) err (ctx : keys) hmac_algorit
       let peer_id, replay_id, adata =
         match key_op with
         | None ->
-          let replay = String.sub data 0 Packet.id_len in
-          None, replay, replay
+            let replay = String.sub data 0 Packet.id_len in
+            (None, replay, replay)
         | Some (key, op) ->
-          let peer_id = String.sub data 0 3 in
-          let replay = String.sub data 3 Packet.id_len in
-          let pre =
-            let b = Bytes.create 1 in
-            let op = Packet.op_key op key in
-            Bytes.set_uint8 b 0 op;
-            Bytes.unsafe_to_string b
-          in
-          Some peer_id, replay, pre ^ peer_id ^ replay
+            let peer_id = String.sub data 0 3 in
+            let replay = String.sub data 3 Packet.id_len in
+            let pre =
+              let b = Bytes.create 1 in
+              let op = Packet.op_key op key in
+              Bytes.set_uint8 b 0 op;
+              Bytes.unsafe_to_string b
+            in
+            (Some peer_id, replay, pre ^ peer_id ^ replay)
       in
       let tag_off = peer_id_len + Packet.id_len in
       Ok (peer_id, replay_id, adata, tag_off, tag_off + tag_len)
@@ -1789,7 +1806,8 @@ let received_data ?key_op state ch set_ch payload =
       let hmac_algorithm = Config.get Auth state.config in
       let bad_mac computed rcv = `Bad_mac (state, computed, rcv, payload) in
       let+ payload =
-        incoming_data ?key_op bad_mac keys hmac_algorithm state.session.compress payload
+        incoming_data ?key_op bad_mac keys hmac_algorithm state.session.compress
+          payload
       in
       (set_ch state ch, payload)
 
@@ -1894,7 +1912,8 @@ let incoming state control_crypto buf =
                     Packet.pp_operation op);
               Log.debug (fun m -> m "%a" (Ohex.pp_hexdump ()) received);
               let+ state, payload =
-                ignore_udp_error (received_data ~key_op:(key, op) state ch set_ch received)
+                ignore_udp_error
+                  (received_data ~key_op:(key, op) state ch set_ch received)
               in
               let payloads =
                 Option.fold payload ~none:payloads ~some:(fun p ->
@@ -1910,7 +1929,8 @@ let incoming state control_crypto buf =
                   (validate_control state control_crypto op key received)
               in
               let* session, transport =
-                ignore_udp_error (expected_packet control_crypto state.session ch.transport p)
+                ignore_udp_error
+                  (expected_packet control_crypto state.session ch.transport p)
               in
               let state = { state with session }
               and ch = { ch with transport } in

@@ -55,8 +55,7 @@ type keys = {
   peer_id : string option; (* length 3 *)
 }
 
-let decode_peer_id x =
-  (String.get_uint8 x 0) lsl 16 + String.get_uint16_be x 2
+let decode_peer_id x = (String.get_uint8 x 0 lsl 16) + String.get_uint16_be x 2
 
 let[@coverage off] pp_keys ppf t =
   Fmt.pf ppf "%s keys: my id %lu, their id %lu peer %a"
@@ -65,7 +64,8 @@ let[@coverage off] pp_keys ppf t =
     | AES_GCM _ -> "AES-GCM"
     | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
     t.my_replay_id t.their_replay_id
-    Fmt.(option ~none:(any "none") int) (Option.map decode_peer_id t.peer_id)
+    Fmt.(option ~none:(any "none") int)
+    (Option.map decode_peer_id t.peer_id)
 
 type channel_state =
   | Expect_reset

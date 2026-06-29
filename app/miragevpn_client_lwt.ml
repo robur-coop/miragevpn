@@ -321,11 +321,11 @@ let rec event conn =
   | Ok (t', outs, payloads, action) ->
       conn.o_client <- t';
       (match outs with
-      | [] -> Lwt.return_unit
-      | _ -> (
-          transmit outs conn.peer >>= function
-          | true -> Lwt.return_unit
-          | false -> Lwt_mvar.put conn.event_mvar `Connection_failed))
+        | [] -> Lwt.return_unit
+        | _ -> (
+            transmit outs conn.peer >>= function
+            | true -> Lwt.return_unit
+            | false -> Lwt_mvar.put conn.event_mvar `Connection_failed))
       >>= fun () ->
       Option.iter
         (fun a ->
@@ -333,8 +333,8 @@ let rec event conn =
           Lwt.async (fun () -> handle_action conn a))
         action;
       (match payloads with
-      | [] -> Lwt.return_unit
-      | _ -> Lwt_mvar.put conn.data_mvar payloads)
+        | [] -> Lwt.return_unit
+        | _ -> Lwt_mvar.put conn.data_mvar payloads)
       >>= fun () -> event conn
 
 let send_recv conn config ip_config _mtu routes =

@@ -135,14 +135,13 @@ let vpn_gateway config =
   | None | Some (`Tap, _) ->
       (* Must be tun *)
       assert false
-  | Some (`Tun, _) ->
-      if Config.mem Secret config then
-        snd (Config.get Ifconfig config)
+  | Some (`Tun, _) -> (
+      if Config.mem Secret config then snd (Config.get Ifconfig config)
       else
         let address, netmask = Config.get Ifconfig config in
         match Ipaddr.V4.Prefix.of_netmask ~netmask ~address with
         | Ok cidr -> Ipaddr.V4.Prefix.first cidr
-        | Error _ -> netmask
+        | Error _ -> netmask)
 
 let route_gateway config =
   match Config.find Route_gateway config with
@@ -281,29 +280,27 @@ let routes ~shares_subnet ~net_gateway ~remote_host config :
   let routes =
     Config.find Route config |> Option.value ~default:[]
     |> List.filter_map (fun (network, netmask, gateway, metric) ->
-           let gateway = Option.value ~default:(`Ip route_gateway) gateway in
-           match
-             ( resolve_network_or_gateway network,
-               resolve_network_or_gateway gateway )
-           with
-           | Some network, Some gateway ->
-               let netmask =
-                 Option.value netmask ~default:Ipaddr.V4.broadcast
-               in
-               let metric = Option.value ~default:0 metric in
-               let prefix =
-                 Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address:network
-               in
-               Some (prefix, gateway, metric)
-           | None, _ ->
-               Config.Log.warn (fun m ->
-                   m "Unable to resolve network %a; omitting route"
-                     pp_network_or_gateway network);
-               None
-           | _, None ->
-               Config.Log.warn (fun m ->
-                   m "Unable to resolve gateway %a; omitting route"
-                     pp_network_or_gateway gateway);
-               None)
+        let gateway = Option.value ~default:(`Ip route_gateway) gateway in
+        match
+          ( resolve_network_or_gateway network,
+            resolve_network_or_gateway gateway )
+        with
+        | Some network, Some gateway ->
+            let netmask = Option.value netmask ~default:Ipaddr.V4.broadcast in
+            let metric = Option.value ~default:0 metric in
+            let prefix =
+              Ipaddr.V4.Prefix.of_netmask_exn ~netmask ~address:network
+            in
+            Some (prefix, gateway, metric)
+        | None, _ ->
+            Config.Log.warn (fun m ->
+                m "Unable to resolve network %a; omitting route"
+                  pp_network_or_gateway network);
+            None
+        | _, None ->
+            Config.Log.warn (fun m ->
+                m "Unable to resolve gateway %a; omitting route"
+                  pp_network_or_gateway gateway);
+            None)
   in
   routes @ default_and_remote_routes

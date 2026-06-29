@@ -449,17 +449,15 @@ module Tls_plain = struct
     let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
     let rsid = if id_arr_len = 0 then 0 else 8 in
     Bytes.set_int64_be buf off hdr.local_session;
-    Bytes.set_uint8 buf
-      (off + 8)
-      (List.length hdr.ack_sequence_numbers);
+    Bytes.set_uint8 buf (off + 8) (List.length hdr.ack_sequence_numbers);
     List.iteri
       (fun i v -> Bytes.set_int32_be buf (off + 9 + (i * id_len)) v)
       hdr.ack_sequence_numbers;
     (match hdr.remote_session with
-     | None -> ()
-     | Some v ->
-       assert (rsid <> 0);
-       Bytes.set_int64_be buf (off + 9 + id_arr_len) v);
+    | None -> ()
+    | Some v ->
+        assert (rsid <> 0);
+        Bytes.set_int64_be buf (off + 9 + id_arr_len) v);
     9 + rsid + id_arr_len
 
   let encode_control buf off (header, sequence_number, payload) =
@@ -467,18 +465,21 @@ module Tls_plain = struct
     Bytes.set_int32_be buf (off + len) sequence_number;
     Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
 
-  let encode proto (key, (p : [< `Ack of header | `Control of operation * _ ])) =
+  let encode proto (key, (p : [< `Ack of header | `Control of operation * _ ]))
+      =
     let hdr = header p in
     let len =
       let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
       (* 1 is op_key, + 8 if remote session id is present *)
-      protocol_len proto + 1 (* op *) + session_id_len + 1 (* id_arr size *) + id_arr_len
+      protocol_len proto + 1 (* op *) + session_id_len
+      + 1 (* id_arr size *) + id_arr_len
       + (if id_arr_len = 0 then 0 else 8)
-      + match p with
+      +
+      match p with
       | `Ack _ -> 0
       | `Control (_, (_, _, payload)) ->
-        (* 4 is sequence number *)
-        4 + String.length payload
+          (* 4 is sequence number *)
+          4 + String.length payload
     in
     let buf = Bytes.create len in
     set_protocol buf proto;
@@ -494,7 +495,10 @@ module Tls_plain = struct
 
   let decode_header buf =
     let open Result.Syntax in
-    let hdr_off = session_id_len + 1 (* ack length *) in
+    let hdr_off =
+      session_id_len + 1
+      (* ack length *)
+    in
     let* () = guard (String.length buf >= hdr_off) `Partial in
     let local_session = String.get_int64_be buf 0
     and arr_len = String.get_uint8 buf 8 in
@@ -511,7 +515,13 @@ module Tls_plain = struct
         Some (String.get_int64_be buf (hdr_off + (id_len * arr_len)))
       else None
     in
-    ( { local_session; replay_id = 0l; timestamp = 0l; ack_sequence_numbers; remote_session },
+    ( {
+        local_session;
+        replay_id = 0l;
+        timestamp = 0l;
+        ack_sequence_numbers;
+        remote_session;
+      },
       hdr_off + (id_len * arr_len) + rs )
 
   let decode_ack buf =
@@ -717,7 +727,12 @@ let push_reply = "PUSH_REPLY"
 let auth_failed = "AUTH_FAILED\x00"
 
 module Iv_proto = struct
-  type t = Peer_id | Request_push | Tls_key_export | Ncp_p2p | Use_cc_exit_notify
+  type t =
+    | Peer_id
+    | Request_push
+    | Tls_key_export
+    | Ncp_p2p
+    | Use_cc_exit_notify
 
   let bit = function
     | Peer_id -> 1 (* also known as IV_PROTO_DATA_V2 *)
