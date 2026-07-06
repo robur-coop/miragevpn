@@ -71,6 +71,7 @@ module Config : sig
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
+    | Peer_id : string k
     | Peer_fingerprint : string list k
     | Persist_key : flag k
     | Persist_tun : flag k

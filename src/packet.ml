@@ -26,6 +26,7 @@ type operation =
   | Hard_reset_server_v2
   | Hard_reset_client_v3
   | Control_wkc
+  | Data_v2
 
 let operation_to_int = function
   | Soft_reset_v2 -> 3
@@ -34,6 +35,7 @@ let operation_to_int = function
   | Data_v1 -> 6
   | Hard_reset_client_v2 -> 7
   | Hard_reset_server_v2 -> 8
+  | Data_v2 -> 9
   | Hard_reset_client_v3 -> 10
   | Control_wkc -> 11
 
@@ -44,6 +46,7 @@ let int_to_operation = function
   | 6 -> Ok Data_v1
   | 7 -> Ok Hard_reset_client_v2
   | 8 -> Ok Hard_reset_server_v2
+  | 9 -> Ok Data_v2
   | 10 -> Ok Hard_reset_client_v3
   | 11 -> Ok Control_wkc
   | i -> Error (`Unknown_operation i)
@@ -57,6 +60,7 @@ let[@coverage off] pp_operation ppf op =
     | Data_v1 -> "data v1"
     | Hard_reset_client_v2 -> "hard reset client v2"
     | Hard_reset_server_v2 -> "hard reset server v2"
+    | Data_v2 -> "data v2"
     | Hard_reset_client_v3 -> "hard reset client v3"
     | Control_wkc -> "control wkc")
 
@@ -267,10 +271,14 @@ let encode proto hmac_len
   in
   (buf, feeder)
 
-let encode_data buf proto key =
+let encode_data buf peer_id proto key =
   set_protocol buf proto;
-  let op = op_key Data_v1 key in
-  Bytes.set_uint8 buf (protocol_len proto) op
+  let op = Option.fold ~none:Data_v1 ~some:(fun _ -> Data_v2) peer_id in
+  let op = op_key op key in
+  Bytes.set_uint8 buf (protocol_len proto) op;
+  match peer_id with
+  | None -> ()
+  | Some x -> Bytes.blit_string x 0 buf 1 (String.length x)
 
 module Tls_crypt = struct
   type cleartext_header = {
@@ -434,6 +442,115 @@ module Tls_crypt = struct
     and hmac = String.sub buf 16 hmac_len in
     ( { local_session; replay_id; timestamp; hmac },
       String.sub buf clear_hdr_len (String.length buf - clear_hdr_len) )
+end
+
+module Tls_plain = struct
+  let encode_header buf off hdr =
+    let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+    let rsid = if id_arr_len = 0 then 0 else 8 in
+    Bytes.set_int64_be buf off hdr.local_session;
+    Bytes.set_uint8 buf (off + 8) (List.length hdr.ack_sequence_numbers);
+    List.iteri
+      (fun i v -> Bytes.set_int32_be buf (off + 9 + (i * id_len)) v)
+      hdr.ack_sequence_numbers;
+    (match hdr.remote_session with
+    | None -> ()
+    | Some v ->
+        assert (rsid <> 0);
+        Bytes.set_int64_be buf (off + 9 + id_arr_len) v);
+    9 + rsid + id_arr_len
+
+  let encode_control buf off (header, sequence_number, payload) =
+    let len = encode_header buf off header in
+    Bytes.set_int32_be buf (off + len) sequence_number;
+    Bytes.blit_string payload 0 buf (off + len + 4) (String.length payload)
+
+  let encode proto (key, (p : [< `Ack of header | `Control of operation * _ ]))
+      =
+    let hdr = header p in
+    let len =
+      let id_arr_len = id_len * List.length hdr.ack_sequence_numbers in
+      (* 1 is op_key, + 8 if remote session id is present *)
+      protocol_len proto + 1 (* op *) + session_id_len
+      + 1 (* id_arr size *) + id_arr_len
+      + (if id_arr_len = 0 then 0 else 8)
+      +
+      match p with
+      | `Ack _ -> 0
+      | `Control (_, (_, _, payload)) ->
+          (* 4 is sequence number *)
+          4 + String.length payload
+    in
+    let buf = Bytes.create len in
+    set_protocol buf proto;
+    let op = op_key (operation p) key in
+    Bytes.set_uint8 buf (protocol_len proto) op;
+    let to_encode = protocol_len proto + 1 in
+    let () =
+      match p with
+      | `Ack ack -> ignore (encode_header buf to_encode ack)
+      | `Control (_, control) -> encode_control buf to_encode control
+    in
+    Bytes.unsafe_to_string buf
+
+  let decode_header buf =
+    let open Result.Syntax in
+    let hdr_off =
+      session_id_len + 1
+      (* ack length *)
+    in
+    let* () = guard (String.length buf >= hdr_off) `Partial in
+    let local_session = String.get_int64_be buf 0
+    and arr_len = String.get_uint8 buf 8 in
+    let rs = if arr_len = 0 then 0 else 8 in
+    let+ () =
+      guard (String.length buf >= hdr_off + (id_len * arr_len) + rs) `Partial
+    in
+    let ack_sequence_number idx =
+      String.get_int32_be buf (hdr_off + (id_len * idx))
+    in
+    let ack_sequence_numbers = List.init arr_len ack_sequence_number in
+    let remote_session =
+      if arr_len > 0 then
+        Some (String.get_int64_be buf (hdr_off + (id_len * arr_len)))
+      else None
+    in
+    ( {
+        local_session;
+        replay_id = 0l;
+        timestamp = 0l;
+        ack_sequence_numbers;
+        remote_session;
+      },
+      hdr_off + (id_len * arr_len) + rs )
+
+  let decode_ack buf =
+    let open Result.Syntax in
+    let+ hdr, off = decode_header buf in
+    if off <> String.length buf then
+      Log.debug (fun m ->
+          m "decode_ack: %d extra bytes at end of message"
+            (String.length buf - off))
+      [@coverage off];
+    hdr
+
+  let decode_control buf =
+    let open Result.Syntax in
+    let* header, off = decode_header buf in
+    let+ () = guard (String.length buf >= off + 4) `Partial in
+    let sequence_number = String.get_int32_be buf off
+    and payload = String.sub buf (off + 4) (String.length buf - off - 4) in
+    (header, sequence_number, payload)
+
+  let decode_ack_or_control op buf =
+    let open Result.Syntax in
+    match op with
+    | Ack ->
+        let+ ack = decode_ack buf in
+        `Ack ack
+    | _ ->
+        let+ control = decode_control buf in
+        `Control (op, control)
 end
 
 type ack = [ `Ack of header ]
@@ -610,11 +727,18 @@ let push_reply = "PUSH_REPLY"
 let auth_failed = "AUTH_FAILED\x00"
 
 module Iv_proto = struct
-  type t = Request_push | Tls_key_export | Use_cc_exit_notify
+  type t =
+    | Peer_id
+    | Request_push
+    | Tls_key_export
+    | Ncp_p2p
+    | Use_cc_exit_notify
 
   let bit = function
+    | Peer_id -> 1 (* also known as IV_PROTO_DATA_V2 *)
     | Request_push -> 2
     | Tls_key_export -> 3
+    | Ncp_p2p -> 5
     | Use_cc_exit_notify -> 7
 
   let byte xs = List.fold_left (fun b x -> b lor (1 lsl bit x)) 0 xs

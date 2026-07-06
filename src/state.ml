@@ -52,15 +52,20 @@ type keys = {
   my_replay_id : int32;
   their_replay_id : int32;
   keys : key_variant;
+  peer_id : string option; (* length 3 *)
 }
 
+let decode_peer_id x = (String.get_uint8 x 0 lsl 16) + String.get_uint16_be x 2
+
 let[@coverage off] pp_keys ppf t =
-  Fmt.pf ppf "%s keys: my id %lu, their id %lu"
+  Fmt.pf ppf "%s keys: my id %lu, their id %lu peer %a"
     (match t.keys with
     | AES_CBC _ -> "AES-CBC"
     | AES_GCM _ -> "AES-GCM"
     | CHACHA20_POLY1305 _ -> "CHACHA20-POLY1305")
     t.my_replay_id t.their_replay_id
+    Fmt.(option ~none:(any "none") int)
+    (Option.map decode_peer_id t.peer_id)
 
 type channel_state =
   | Expect_reset
@@ -179,7 +184,7 @@ type session = {
 }
 
 let init_session ~my_session_id ?(their_session_id = 0L) ?(compress = false)
-    ?(protocol = `Tcp) () =
+    ~protocol () =
   {
     my_session_id;
     my_replay_id = 1l;
@@ -231,11 +236,13 @@ type tls_crypt = { my : Tls_crypt.Key.t; their : Tls_crypt.Key.t }
 
 type control_tls =
   [ `Tls_auth of tls_auth
-  | `Tls_crypt of tls_crypt * Tls_crypt.Wrapped_key.t option ]
+  | `Tls_crypt of tls_crypt * Tls_crypt.Wrapped_key.t option
+  | `Tls ]
 
 type control_crypto = [ control_tls | `Static of keys ]
 
 let[@coverage off] pp_control_crypto ppf = function
+  | `Tls -> Fmt.string ppf "tls"
   | `Tls_auth _ -> Fmt.string ppf "tls-auth"
   | `Tls_crypt (_, None) -> Fmt.string ppf "tls-crypt"
   | `Tls_crypt (_, Some _) -> Fmt.string ppf "tls-crypt-v2"
@@ -341,6 +348,7 @@ let control_mtu config control_crypto session =
     | `Tls_crypt _ ->
         (* AES_CTR and SHA256 *)
         Digestif.SHA256.digest_size
+    | `Tls -> 0 - 8 (* no timestamp and replay_id (replay_packet_id_packet) *)
   in
   let pre = 1 (* key / op *) + if session.protocol = `Tcp then 2 else 0 in
   let hdr = Packet.hdr_len mac_len in

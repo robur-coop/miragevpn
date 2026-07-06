@@ -211,6 +211,7 @@ module Conf_map = struct
     | Mssfix : int k
     | Mute_replay_warnings : flag k
     | Passtos : flag k
+    | Peer_id : string k
     | Peer_fingerprint : string list k
     | Persist_key : flag k
     | Persist_tun : flag k
@@ -313,15 +314,6 @@ module Conf_map = struct
       if get Cipher t <> `AES_256_CBC then
         Error (`Msg "only AES-256-CBC supported in static key mode")
       else Ok ()
-    else if
-      mem Tls_mode t
-      && not
-           (mem Tls_auth t || mem Tls_crypt t || mem Tls_crypt_v2_server t
-          || mem Tls_crypt_v2_client t)
-    then
-      Error
-        (`Msg
-           "tls-mode present, but none of tls-auth, tls-crypt, or tls-crypt-v2")
     else if mem Tls_auth t && mem Tls_crypt t then
       Error (`Msg "tls-auth and tls-crypt are mutually exclusive")
     else if mem Ca t && mem Peer_fingerprint t then
@@ -333,6 +325,8 @@ module Conf_map = struct
       Error (`Msg "The --key-derivation option is reserved for push replies")
     else if mem Protocol_flags t then
       Error (`Msg "The --protocol-flags option is reserved for push replies")
+    else if mem Peer_id t then
+      Error (`Msg "The --peer-id option is reserved for push replies")
     else if mem Port t && (mem Lport t || mem Rport t) then
       Error (`Msg "Both --port and (--lport or --rport) is present")
     else Ok ()
@@ -377,13 +371,7 @@ module Conf_map = struct
        let* () =
          match find Tls_mode t with
          | None | Some `Client -> Error "config must specify 'tls-server'"
-         | Some `Server ->
-             if
-               not
-                 (mem Tls_auth t || mem Tls_crypt t || mem Tls_crypt_v2_server t)
-             then
-               Error "config must specify tls-auth or tls-crypt or tls-crypt-v2"
-             else Ok ()
+         | Some `Server -> Ok ()
        in
        let* _ = cert_key_or_pkcs12 t in
        let* () =
@@ -638,6 +626,7 @@ module Conf_map = struct
            </peer-fingerprint>"
           Fmt.(list ~sep:(any "\n") pp_fingerprint)
           fps
+    | Peer_id, id -> p () "peer-id %s" (Ohex.encode id)
     | Persist_key, () -> p () "persist-key"
     | Persist_tun, () -> p () "persist-tun"
     | Pkcs12, p12 ->
@@ -710,21 +699,21 @@ module Conf_map = struct
     | Route, routes ->
         routes
         |> List.iter (fun (network, netmask, gateway, metric) ->
-               let[@coverage off] pp_addr ppf v =
-                 Fmt.pf ppf "%s"
-                   (match v with
-                   | `Ip ip -> Ipaddr.V4.to_string ip
-                   | `Net_gateway -> "net_gateway"
-                   | `Remote_host -> "remote_host"
-                   | `Vpn_gateway -> "vpn_gateway")
-               in
-               p () "route %a%a%a%a" pp_addr network
-                 Fmt.(option (append (any " ") Ipaddr.V4.pp))
-                 netmask
-                 Fmt.(option (append (any " ") pp_addr))
-                 gateway
-                 Fmt.(option (append (any " ") int))
-                 metric)
+            let[@coverage off] pp_addr ppf v =
+              Fmt.pf ppf "%s"
+                (match v with
+                | `Ip ip -> Ipaddr.V4.to_string ip
+                | `Net_gateway -> "net_gateway"
+                | `Remote_host -> "remote_host"
+                | `Vpn_gateway -> "vpn_gateway")
+            in
+            p () "route %a%a%a%a" pp_addr network
+              Fmt.(option (append (any " ") Ipaddr.V4.pp))
+              netmask
+              Fmt.(option (append (any " ") pp_addr))
+              gateway
+              Fmt.(option (append (any " ") int))
+              metric)
     | Route_delay, (n, w) -> p () "route-delay %d %d" n w
     | Route_gateway, `Dhcp -> p () "route-gateway dhcp"
     | Route_gateway, `Ip ip -> p () "route-gateway %a" Ipaddr.V4.pp ip
@@ -964,17 +953,29 @@ let a_proto =
   *> choice
        [
          string "tcp6-client" *> return (Some `Ipv6, `Tcp (Some `Client));
+         string "TCPv6_CLIENT" *> return (Some `Ipv6, `Tcp (Some `Client));
          string "tcp6-server" *> return (Some `Ipv6, `Tcp (Some `Server));
+         string "TCPv6_SERVER" *> return (Some `Ipv6, `Tcp (Some `Server));
          string "tcp6" *> return (Some `Ipv6, `Tcp None);
+         string "TCPv6" *> return (Some `Ipv6, `Tcp None);
          string "tcp4-client" *> return (Some `Ipv4, `Tcp (Some `Client));
+         string "TCPv4_CLIENT" *> return (Some `Ipv4, `Tcp (Some `Client));
          string "tcp4-server" *> return (Some `Ipv4, `Tcp (Some `Server));
+         string "TCPv4_SERVER" *> return (Some `Ipv4, `Tcp (Some `Server));
          string "tcp-client" *> return (None, `Tcp (Some `Client));
+         string "TCP_CLIENT" *> return (None, `Tcp (Some `Client));
          string "tcp-server" *> return (None, `Tcp (Some `Server));
+         string "TCP_SERVER" *> return (None, `Tcp (Some `Server));
          string "tcp4" *> return (Some `Ipv4, `Tcp None);
+         string "TCPv4" *> return (Some `Ipv4, `Tcp None);
          string "tcp" *> return (None, `Tcp None);
+         string "TCP" *> return (None, `Tcp None);
          string "udp6" *> return (Some `Ipv6, `Udp);
+         string "UDPv6" *> return (Some `Ipv6, `Udp);
          string "udp4" *> return (Some `Ipv4, `Udp);
+         string "UDPv4" *> return (Some `Ipv4, `Udp);
          string "udp" *> return (None, `Udp);
+         string "UDP" *> return (None, `Udp);
        ]
   >>| fun prot -> `Entry (B (Proto, prot))
 
@@ -1087,6 +1088,19 @@ let a_peer_fingerprint =
            `Entry (B (Peer_fingerprint, [ fp ])) );
        ]
        ~failure_msg:"bad fingerprint"
+
+let a_peer_id =
+  string "peer-id" *> a_whitespace *> commit
+  *> take_while (function '0' .. '9' -> true | _ -> false)
+  <* (end_of_line <|> fail "Invalid decimal character")
+  >>= fun d ->
+  let n = int_of_string d in
+  if n >= 0 && n <= 0xffffff then (
+    let binary = Bytes.create 3 in
+    Bytes.set_uint8 binary 0 (n lsr 16);
+    Bytes.set_uint16_be binary 1 (n land 0xffff);
+    return (`Entry (B (Peer_id, Bytes.unsafe_to_string binary))))
+  else fail "number too big"
 
 let a_key_direction_option =
   choice
@@ -1563,8 +1577,8 @@ let aead_cipher ~ctx c =
 let a_cipher =
   string "cipher" *> a_whitespace *> a_single_param >>= fun v ->
   (match String.uppercase_ascii v with
-  | "AES-256-CBC" -> return `AES_256_CBC
-  | c -> aead_cipher ~ctx:"cipher" c)
+    | "AES-256-CBC" -> return `AES_256_CBC
+    | c -> aead_cipher ~ctx:"cipher" c)
   >>| fun v -> `Entry (B (Cipher, v))
 
 let a_data_ciphers =
@@ -1582,13 +1596,14 @@ let a_data_ciphers =
 let a_auth =
   string "auth" *> a_whitespace *> a_single_param >>= fun h ->
   (match String.uppercase_ascii h with
-  | "MD5" -> return `MD5
-  | "SHA1" -> return `SHA1
-  | "SHA224" -> return `SHA224
-  | "SHA256" -> return `SHA256
-  | "SHA384" -> return `SHA384
-  | "SHA512" -> return `SHA512
-  | _ -> Fmt.kstr fail "Unknown message digest algorithm %S" h)
+    | "[NULL-DIGEST]" -> return `MD5 (* fake *)
+    | "MD5" -> return `MD5
+    | "SHA1" -> return `SHA1
+    | "SHA224" -> return `SHA224
+    | "SHA256" -> return `SHA256
+    | "SHA384" -> return `SHA384
+    | "SHA512" -> return `SHA512
+    | _ -> Fmt.kstr fail "Unknown message digest algorithm %S" h)
   >>| fun h -> `Entry (B (Auth, h))
 
 let a_replay_window =
@@ -1752,6 +1767,8 @@ let a_not_implemented =
       string "user";
       string "group";
       string "nobind";
+      string "key-method";
+      string "keysize";
       (* TODO: *)
       string "redirect-gateway";
       string "block-outside-dns";
@@ -1823,6 +1840,7 @@ let a_config_entry : line A.t =
          a_rport;
          a_pkcs12;
          a_peer_fingerprint;
+         a_peer_id;
          a_push;
          a_flag;
          a_ca;
@@ -1852,16 +1870,15 @@ let parse_internal config_str : (line list, 'x) result =
   config_str
   |> parse_string ~consume:Consume.All
      @@ fix (fun recurse ->
-            a_ign_ws *> a_config_entry <* a_ign_ws
-            >>= (fun entry ->
-            commit
-            *> (a_ign_ws *> end_of_input *> return [ entry ]
-               <|> (List.cons entry <$> recurse)))
-            <|> ( available >>| min 100 >>= peek_string >>= fun context ->
-                  pos >>= fun pos ->
-                  fail
-                    (Printf.sprintf "Error at byte offset %d: %S" pos context)
-                ))
+         a_ign_ws *> a_config_entry <* a_ign_ws
+         >>= (fun entry ->
+         commit
+         *> (a_ign_ws *> end_of_input *> return [ entry ]
+            <|> (List.cons entry <$> recurse)))
+         <|> ( available >>| min 100 >>= peek_string >>= fun context ->
+               pos >>= fun pos ->
+               fail (Printf.sprintf "Error at byte offset %d: %S" pos context)
+             ))
 
 type parser_partial_state = block list * non_block list * Conf_map.t
 
@@ -2288,11 +2305,11 @@ let merge_push_reply client (push_config : string) =
     String.split_on_char ',' push_config
     |> String.concat "\n"
     |> parse ~string_of_file:(fun _ ->
-           Result.error_msgf "string of file is not available")
+        Result.error_msgf "string of file is not available")
   in
   let will_accept (type a) (k : a key) (v : a) =
     match (k, v) with
-    (* whitelist keys we are willing to accept from server: *)
+    (* allow keys we are willing to accept from server: *)
     | Dhcp_disable_nbt, _ -> not (Conf_map.mem Route_nopull client)
     | Dhcp_domain, _ -> not (Conf_map.mem Route_nopull client)
     | Mssfix, _ -> true
@@ -2308,6 +2325,7 @@ let merge_push_reply client (push_config : string) =
     | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
     | Ifconfig, _ -> true
     | Key_derivation, _ -> true
+    | Peer_id, _ -> true
     | Protocol_flags, _ -> true
     | Redirect_gateway, _ -> not (Conf_map.mem Route_nopull client)
     | Route, _ -> not (Conf_map.mem Route_nopull client)
@@ -2405,17 +2423,82 @@ let server_generate_connect_options config =
     (dev_type_to_string config)
 
 let client_merge_server_config client server_str =
-  (* TODO: Mutate client config,
-     for instance choosing [tun-mtu = min (server,client)].
-  *)
-  Log.warn (fun m ->
-      m "Config.client_merge_server_config @[<v>is not implemented@ %S@]"
-        server_str);
-  Ok client
-(* String.split_on_char ',' server_str
-   |> String.concat "\n"
-   |> parse ~string_of_file:(fun fn ->
-        Result.error_msgf "Server requested client to read %S" fn)
-    >>= valid_server_options ~client >>| fun () -> client*)
+  let open Result.Syntax in
+  let* server_config =
+    String.split_on_char ',' server_str
+    |> List.tl (* drop initial V4 *) |> String.concat "\n"
+    |> parse ~string_of_file:(fun _ ->
+        Result.error_msgf "string of file is not available")
+  in
+  let will_accept (type a) (k : a key) (v : a) =
+    match (k, v) with
+    (* allow keys we are willing to accept from server: *)
+    | Auth, _ -> true
+    | Dhcp_disable_nbt, _ -> not (Conf_map.mem Route_nopull client)
+    | Dhcp_domain, _ -> not (Conf_map.mem Route_nopull client)
+    | Mssfix, _ -> true
+    | Tls_mode, `Server -> true
+    | Tun_mtu, _ -> true
+    | Topology, _ -> true
+    | Renegotiate_seconds, n when n > 0 -> true
+    | Ping_interval, `Seconds n when n >= 0 -> true
+    | Ping_timeout, `Restart n when n >= 0 -> true
+    (* TODO | Redirect_gateway, _ -> true *)
+    (* TODO should verify IPs: *)
+    | Dhcp_dns, _ -> not (Conf_map.mem Route_nopull client)
+    | Dhcp_ntp, _ -> not (Conf_map.mem Route_nopull client)
+    | Ifconfig, _ -> true
+    | Key_derivation, _ -> true
+    | Link_mtu, _ -> true
+    | Peer_id, _ -> true
+    | Proto, _ -> true
+    | Protocol_flags, _ -> true
+    | Redirect_gateway, _ -> not (Conf_map.mem Route_nopull client)
+    | Route, _ -> not (Conf_map.mem Route_nopull client)
+    | Route_gateway, _ -> not (Conf_map.mem Route_nopull client)
+    | _ -> false
+  in
+  let f (type a) (k : a key) (a : a option) (b : a option) =
+    match (k, (a : a option), (b : a option)) with
+    (* server didn't touch this key: *)
+    | _, (Some _ as a), None -> a
+    | _, None, None -> None
+    (* Client overrides list completely if set: *)
+    (* TODO all keys with type 'a list k should probably be listed here,
+       can we ensure that statically? *)
+    | Dhcp_dns, (Some _ as a), Some _ -> a
+    | Dhcp_ntp, (Some _ as a), Some _ -> a
+    | Cipher, Some my, Some c when c = my -> Some c
+    | Cipher, _, Some (#aead_cipher as c) -> (
+        match find Data_ciphers client with
+        | Some ciphers when List.mem c ciphers -> Some c
+        | _ ->
+            invalid_arg
+            @@ Fmt.str "server config: won't accept cipher %s"
+                 (cipher_to_string c))
+    (* TODO | Route, Some a, _ -> a*)
+    (* try to merge: *)
+    | _, (Some a as some_a), Some b -> (
+        match (a, b) with
+        (* they're equal, use client version: *)
+        | _ when eq.f k a b -> some_a
+        | _ when not (will_accept k b) ->
+            invalid_arg
+            @@ Fmt.str "server-config: won't accept %a" pp (singleton k b)
+        (* at this point we need to merge them*)
+        | a, b -> (
+            match resolve_conflict (singleton k a) k b with
+            | Ok (Some (_, merged)) -> Some merged
+            (* client takes precedence if merging fails: *)
+            | _ -> some_a))
+    (* try to use server value: *)
+    | _, None, Some v ->
+        if will_accept k v then b (* <-- use server version *)
+        else
+          invalid_arg
+          @@ Fmt.str "server pushed disallowed: %a" pp (singleton k v)
+  in
+  try Ok (merge { f } client server_config)
+  with Invalid_argument msg -> Error (`Msg msg)
 
 include Conf_map

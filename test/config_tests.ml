@@ -372,9 +372,9 @@ testpass
      sample >>| fun sample ->
      Miragevpn.remotes sample
      |> List.map (function
-          | `Ip ip, port, _ ->
-              "ip:" ^ Ipaddr.to_string ip ^ ":" ^ string_of_int port
-          | `Domain _, _, _ -> failwith ""));
+       | `Ip ip, port, _ ->
+           "ip:" ^ Ipaddr.to_string ip ^ ":" ^ string_of_int port
+       | `Domain _, _, _ -> failwith ""));
   Alcotest.(check @@ result string reject)
     "serialized version stays correct"
     (Ok "remote 10.0.42.5\nremote 10.0.42.3 1194\nremote 10.0.42.4")
@@ -610,6 +610,36 @@ let tls_home_conf_with_cipher =
   tls_home_conf
   |> add Tls_cipher [ `ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 ]
   |> add Tls_ciphersuite [ `CHACHA20_POLY1305_SHA256 ]
+
+let tls_home_no_auth_conf =
+  let open Miragevpn.Config in
+  minimal_config |> remove Auth_user_pass |> remove Cipher
+  |> add Dev (`Tun, None)
+  |> add Remote [ (`Ip (Ipaddr.of_string_exn "127.0.0.1"), None, None) ]
+  |> add Ifconfig
+       (Ipaddr.V4.of_string_exn "10.1.0.2", Ipaddr.V4.of_string_exn "10.1.0.1")
+  |> add_b (a_ca_payload (string_of_file "ca.crt"))
+  |> add_b (a_cert_payload (string_of_file "client.crt"))
+  |> add_b (a_key_payload (string_of_file "client.key"))
+  |> add Verb 3
+
+let tls_office_conf =
+  let open Miragevpn.Config in
+  empty |> add Auth `SHA1 |> add Handshake_window 60
+  |> add Ping_interval `Not_configured
+  |> add Ping_timeout (`Restart 120)
+  |> add Transition_window 3600
+  |> add Renegotiate_seconds 3600
+  |> add Data_ciphers [ `AES_128_GCM; `AES_256_GCM; `CHACHA20_POLY1305 ]
+  |> add Tls_mode `Server
+  |> add Dev (`Tun, None)
+  |> add Ifconfig
+       (Ipaddr.V4.of_string_exn "10.1.0.1", Ipaddr.V4.of_string_exn "10.1.0.2")
+  |> add_b (a_ca_payload (string_of_file "ca.crt"))
+  |> add_b (a_cert_payload (string_of_file "client.crt"))
+  |> add_b (a_key_payload (string_of_file "client.key"))
+  |> add Verb 3
+  |> add Proto (None, `Tcp (Some `Server))
 
 let ipredator_conf =
   let ca =
@@ -866,9 +896,16 @@ let tests =
       `Quick,
       parse_client_configuration ~config:tls_home_conf_with_cipher
         "tls-home-with-cipher.conf" );
+    ( "parsing 'tls-home-no-auth'",
+      `Quick,
+      parse_client_configuration ~config:tls_home_no_auth_conf
+        "tls-home-no-auth.conf" );
     ( "parsing 'minimal-server'",
       `Quick,
       parse_server_configuration "minimal-server.conf" );
+    ( "parsing 'tls-office'",
+      `Quick,
+      parse_server_configuration ~config:tls_office_conf "tls-office.conf" );
     ("parsing 'server'", `Quick, parse_server_configuration "server.conf");
     ( "parsing 'server-tcp'",
       `Quick,

@@ -249,13 +249,13 @@ let callback t fd =
     (* Do not handle payloads from client that have not yet been
        assigned an ip address *)
     (match ip with
-    | None ->
-        if payloads <> [] then
-          Logs.warn (fun m ->
-              m "%a ignoring %u premature payloads" pp_dst dst
-                (List.length payloads));
-        Lwt.return_unit
-    | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
+      | None ->
+          if payloads <> [] then
+            Logs.warn (fun m ->
+                m "%a ignoring %u premature payloads" pp_dst dst
+                  (List.length payloads));
+          Lwt.return_unit
+      | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
     >>= fun () ->
     Lwt_list.fold_left_s
       (fun r o ->

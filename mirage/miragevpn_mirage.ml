@@ -227,13 +227,13 @@ module Server (S : Tcpip.Stack.V4V6) = struct
       (* Do not handle payloads from client that have not yet been
          assigned an ip address *)
       (match ip with
-      | None ->
-          if payloads <> [] then
-            Logs.warn (fun m ->
-                m "%a ignoring %u premature payloads" pp_dst dst
-                  (List.length payloads));
-          Lwt.return_unit
-      | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
+        | None ->
+            if payloads <> [] then
+              Logs.warn (fun m ->
+                  m "%a ignoring %u premature payloads" pp_dst dst
+                    (List.length payloads));
+            Lwt.return_unit
+        | Some ip -> Lwt_list.iter_p (handle_payload t dst ip) payloads)
       >>= fun () ->
       TCP.writev flow (List.map Cstruct.of_string out) >>= function
       | Error e ->
@@ -526,15 +526,16 @@ module Client_router (S : Tcpip.Stack.V4V6) = struct
     | Ok (t', outs, payloads, action) ->
         conn.o_client <- t';
         (match payloads with
-        | [] -> Lwt.return_unit
-        | _ -> Lwt_mvar.put conn.data_mvar (List.map Cstruct.of_string payloads))
+          | [] -> Lwt.return_unit
+          | _ ->
+              Lwt_mvar.put conn.data_mvar (List.map Cstruct.of_string payloads))
         >>= fun () ->
         (match outs with
-        | [] -> Lwt.return_unit
-        | _ -> (
-            transmit conn.peer outs >>= function
-            | true -> Lwt.return_unit
-            | false -> Lwt_mvar.put conn.event_mvar `Connection_failed))
+          | [] -> Lwt.return_unit
+          | _ -> (
+              transmit conn.peer outs >>= function
+              | true -> Lwt.return_unit
+              | false -> Lwt_mvar.put conn.event_mvar `Connection_failed))
         >>= fun () ->
         Option.iter
           (fun a ->
