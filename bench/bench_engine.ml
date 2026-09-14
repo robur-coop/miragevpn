@@ -19,7 +19,8 @@ let ca, cert =
   let subject =
     [
       X509.Distinguished_name.(
-        Relative_distinguished_name.singleton (CN "Miragevpn snakeoil"));
+        Relative_distinguished_name.singleton
+          (CN (Common_name.v "Miragevpn snakeoil")));
     ]
   in
   let digest = `SHA256 in

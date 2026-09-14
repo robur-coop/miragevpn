@@ -37,7 +37,7 @@ depends: [
   "ptime"
   "tls" {>= "1.0.0"}
   "dns-client" {>= "10.0.0"}
-  "x509" {>= "1.0.0"}
+  "x509" {>= "1.2.0"}
   "duration"
   "randomconv" {>= "0.2.0"}
   "digestif" {>= "1.2.0"}

@@ -518,7 +518,7 @@ module Conf_map = struct
            X509.(Distinguished_name.common_name (Certificate.subject cert))
          with
         | None -> "NO common name"
-        | Some x -> x)
+        | Some x -> X509.Distinguished_name.Common_name.to_string x)
         Fmt.(pair ~sep:(any " -> ") Ptime.(pp_human ()) Ptime.(pp_human ()))
         (X509.Certificate.validity cert)
         X509.Host.Set.pp
